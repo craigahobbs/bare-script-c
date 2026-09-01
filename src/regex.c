@@ -1552,7 +1552,25 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         /*
          * RX_LOOKBEHIND - try every start position whose distance from "pos" is a possible
          * sub-pattern match length, requiring the sub-pattern to end exactly at "pos"
+         *
+         * A lookbehind whose body is one code point - "(?<!\\)", "(?<=a)", "(?<![A-Za-z])" -
+         * is a single membership test, the form markdown span matching uses on every candidate.
          */
+        const RxNode *atom = node->u.look.sub;
+        if (atom->kind == RX_ALT && atom->u.alt.count == 1 && atom->next == NULL) {
+            atom = atom->u.alt.branches[0];
+        }
+        if (node->u.look.minLength == 1 && node->u.look.maxLength == 1 && atom != NULL &&
+            rxIsSimple(atom)) {
+            bool matched = pos >= 1 && rxMatchOne(state, atom, pos - 1);
+            if (node->u.look.negate) {
+                result = !matched && rxMatchNode(state, node->next, cont, pos);
+            } else {
+                result = matched && rxMatchNode(state, node->next, cont, pos);
+            }
+            break;
+        }
+
         size_t mark = state->trailCount;
         size_t minLength = node->u.look.minLength;
         size_t maxLength = node->u.look.maxLength > pos ? pos : node->u.look.maxLength;

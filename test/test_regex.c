@@ -116,6 +116,12 @@ TEST(regex_dot_and_classes)
     /* Unicode literals and classes */
     ASSERT_VALUE_STRING(bsTestMatch("\xc3\xa9+", "a\xc3\xa9\xc3\xa9z", 0), "\xc3\xa9\xc3\xa9");
     ASSERT_VALUE_STRING(bsTestMatch("[\xc3\xa9-\xc3\xaa]+", "a\xc3\xa9z", 0), "\xc3\xa9");
+
+    /* Code points of 256 or more go through the class's range walk, not the ASCII bitmap */
+    ASSERT_VALUE_STRING(bsTestMatch("\\s", "\xe2\x80\xa8", 0), "\xe2\x80\xa8"); /* U+2028 */
+    ASSERT_VALUE_STRING(bsTestMatch("[\\u2600]", "x\xe2\x98\x80y", 0), "\xe2\x98\x80");
+    ASSERT_VALUE_STRING(bsTestMatch("[^\\u2600]", "\xe2\x98\x80" "a", 0), "a");
+    ASSERT_VALUE_STRING(bsTestMatch("[^\\s]", "\xe2\x98\x80", 0), "\xe2\x98\x80");
 }
 
 
@@ -231,6 +237,8 @@ TEST(regex_lookaround)
     ASSERT_VALUE_STRING(bsTestMatch("(?<=a)b", "xb", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch("(?<!a)b", "xb", 0), "b");
     ASSERT_VALUE_STRING(bsTestMatch("(?<!a)b", "ab", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<!ab)c", "xc", 0), "c");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<!ab)c", "abc", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch("(?<=ab+)c", "abbbc", 0), "c");
     ASSERT_VALUE_STRING(bsTestMatch("(?<=^)a", "ab", 0), "a");
     ASSERT_VALUE_STRING(bsTestMatch("(?<=a|xy)b", "xyb", 0), "b");
