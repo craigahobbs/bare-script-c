@@ -101,6 +101,15 @@ void bsErrorSet(BSOptions *options, const char *format, ...);
 void bsErrorSetStatement(BSOptions *options, const BSScript *script, const BSStatement *statement,
                          const char *format, ...);
 
+/*
+ * Set the pending library function error, which does not halt the script
+ *
+ * A library function that fails for a reason its argument model cannot express - an unparseable
+ * JSON string, an invalid regular expression - reports it here and returns its documented error
+ * value. The expression evaluator logs it with the call site's location in debug mode.
+ */
+void bsFunctionError(BSOptions *options, const char *format, ...);
+
 /* Get the pending runtime error message, or NULL if there is none */
 const char *bsErrorGet(const BSOptions *options);
 

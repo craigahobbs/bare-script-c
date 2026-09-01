@@ -182,7 +182,7 @@ TEST(bare_files)
     /* A missing file */
     const char *argvMissing[] = {"bare", "no-such-file-xyz.bare"};
     ASSERT_INT_EQ(bsTestMain(2, argvMissing), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "failed to load") != NULL);
+    ASSERT_TRUE(strstr(bsTestMainText(), "Failed to load") != NULL);
 
     /* A file with a syntax error */
     const char *badPath = bsTestTempFile("bad.bare", "a = 1 +\n");
@@ -198,7 +198,7 @@ TEST(bare_files)
     /* A bare "-" is a file name */
     const char *argvDash[] = {"bare", "-"};
     ASSERT_INT_EQ(bsTestMain(2, argvDash), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "failed to load") != NULL);
+    ASSERT_TRUE(strstr(bsTestMainText(), "Failed to load") != NULL);
 }
 
 
@@ -325,5 +325,56 @@ TEST(bare_static_analysis)
     ASSERT_INT_EQ(bsTestMain(6, argvTwo), 1);
     ASSERT_TRUE(strstr(bsTestMainText(), "<string2>") != NULL);
 
+    bsAssign(&bsTestMainOutput, bsNull());
+}
+
+
+TEST(bare_markdownup)
+{
+    /* MarkdownUp text output wraps the scripts in the markdownUp.bare include */
+    const char *argvMarkdown[] = {"bare", "-m", "-c", "markdownPrint('# Heading')"};
+    ASSERT_INT_EQ(bsTestMain(4, argvMarkdown), 0);
+    ASSERT_STR_EQ(bsTestMainText(), "# Heading\n");
+
+    const char *argvMarkdownLong[] = {"bare", "--markdown", "-c", "markdownPrint('text')"};
+    ASSERT_INT_EQ(bsTestMain(4, argvMarkdownLong), 0);
+    ASSERT_STR_EQ(bsTestMainText(), "text\n");
+
+    /* MarkdownUp HTML output brackets the scripts with the document begin and end */
+    const char *argvHTML[] = {"bare", "-l", "-c", "markdownPrint('# Heading')"};
+    ASSERT_INT_EQ(bsTestMain(4, argvHTML), 0);
+    ASSERT_TRUE(strstr(bsTestMainText(), "<!DOCTYPE html>") != NULL);
+    ASSERT_TRUE(strstr(bsTestMainText(), "</html>") != NULL);
+
+    const char *argvHTMLLong[] = {"bare", "--html", "-c", "markdownPrint('x')"};
+    ASSERT_INT_EQ(bsTestMain(4, argvHTMLLong), 0);
+    ASSERT_TRUE(strstr(bsTestMainText(), "<!DOCTYPE html>") != NULL);
+
+    /* The MarkdownUp modes set the unittest report globals */
+    const char *argvReport[] = {"bare", "-m", "-c", "systemLog(jsonStringify(vUnittestReport))"};
+    ASSERT_INT_EQ(bsTestMain(4, argvReport), 0);
+    ASSERT_TRUE(strstr(bsTestMainText(), "true") != NULL);
+
+    const char *argvDisabled[] = {"bare", "-m", "-x", "-c",
+                                  "systemLog(jsonStringify(vUnittestDisabled))"};
+    ASSERT_INT_EQ(bsTestMain(5, argvDisabled), 0);
+    ASSERT_TRUE(strstr(bsTestMainText(), "true") != NULL);
+
+    /* Only the user's own scripts are named, timed, and analyzed */
+    const char *argvNamed[] = {"bare", "-m", "-s", "-c", "return 1", "-c", "return 2"};
+    ASSERT_INT_EQ(bsTestMain(7, argvNamed), 0);
+    ASSERT_TRUE(strstr(bsTestMainText(), "\"<string>\" ... OK") != NULL);
+    ASSERT_TRUE(strstr(bsTestMainText(), "\"<string2>\" ... OK") != NULL);
+    ASSERT_NULL(strstr(bsTestMainText(), "markdownUp.bare"));
+
+    bsAssign(&bsTestMainOutput, bsNull());
+}
+
+
+TEST(bare_status_code_sticky)
+{
+    /* A later zero result does not clear an earlier non-zero status code */
+    const char *argv[] = {"bare", "-x", "-c", "return 3", "-c", "return 0"};
+    ASSERT_INT_EQ(bsTestMain(6, argv), 3);
     bsAssign(&bsTestMainOutput, bsNull());
 }

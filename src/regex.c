@@ -100,11 +100,29 @@ struct RxNode {
 };
 
 
+/*
+ * The set of code points a match can begin with
+ *
+ * A search skips any position whose code point cannot begin a match, which turns the scan for a
+ * pattern like the markdown span alternation - thirteen alternatives, each starting with one of a
+ * handful of punctuation characters - from a full match attempt per position into a table lookup.
+ * The set is only used when it is exact: a pattern that can match the empty string, or that can
+ * begin with anything, disables it.
+ */
+typedef struct RxFirstSet {
+    bool codes[256];
+    bool high;   /* a match can begin with a code point of 256 or more */
+    bool any;    /* a match can begin with anything, so the set is not usable */
+} RxFirstSet;
+
+
 struct BSRegex {
     int32_t refcount;
     BSValue pattern;
     unsigned flags;
     bool anchored; /* every alternative begins with "^", so only the start position can match */
+    bool firstUsable;
+    RxFirstSet first;
     RxNode *root;
     size_t groupCount;
     BSValue groupNames[BS_REGEX_GROUPS_MAX];
@@ -773,6 +791,96 @@ static void rxNodeLength(const RxNode *node, size_t *minLength, size_t *maxLengt
 }
 
 
+/* Add a code point, and its other case when matching case-insensitively, to a first set */
+static void rxFirstAddCode(RxFirstSet *set, unsigned flags, uint32_t code)
+{
+    if (code >= 256) {
+        set->high = true;
+        return;
+    }
+    set->codes[code] = true;
+    if ((flags & BS_REGEX_IGNORECASE) != 0) {
+        uint32_t other = rxSwapCase(code);
+        if (other < 256) {
+            set->codes[other] = true;
+        }
+    }
+}
+
+
+/*
+ * Add the code points that can begin a match of a node chain to "set". Returns true if the chain
+ * can match the empty string, in which case the set does not constrain the match position.
+ */
+static bool rxFirstSet(const RxNode *node, unsigned flags, RxFirstSet *set)
+{
+    for (; node != NULL; node = node->next) {
+        switch (node->kind) {
+        case RX_CHAR:
+            rxFirstAddCode(set, flags, node->u.ch);
+            return false;
+
+        case RX_CLASS:
+            /* A negated or predefined class can match code points a table cannot enumerate */
+            if (node->u.cls.negate || node->u.cls.classes != 0) {
+                set->any = true;
+                return false;
+            }
+            for (size_t ix = 0; ix < node->u.cls.rangeCount; ix++) {
+                uint32_t low = node->u.cls.ranges[ix * 2];
+                uint32_t high = node->u.cls.ranges[ix * 2 + 1];
+                if (high >= 256) {
+                    set->high = true;
+                    high = 255;
+                }
+                for (uint32_t code = low; code <= high && code < 256; code++) {
+                    rxFirstAddCode(set, flags, code);
+                }
+            }
+            return false;
+
+        case RX_ALT: {
+            bool nullable = false;
+            for (size_t ix = 0; ix < node->u.alt.count; ix++) {
+                nullable = rxFirstSet(node->u.alt.branches[ix], flags, set) || nullable;
+            }
+            if (!nullable) {
+                return false;
+            }
+            break;
+        }
+
+        case RX_GROUP:
+            if (!rxFirstSet(node->u.group.sub, flags, set)) {
+                return false;
+            }
+            break;
+
+        case RX_REPEAT:
+            if (!rxFirstSet(node->u.repeat.sub, flags, set) && node->u.repeat.min > 0) {
+                return false;
+            }
+            break;
+
+        case RX_BOL:
+        case RX_EOL:
+        case RX_WORD_BOUNDARY:
+        case RX_NOT_WORD_BOUNDARY:
+        case RX_LOOKAHEAD:
+        case RX_LOOKBEHIND:
+            /* Zero-width - the match still begins at whatever follows */
+            break;
+
+        default:
+            /* RX_ANY, RX_BACKREF, and RX_GROUP_END - not worth enumerating */
+            set->any = true;
+            return false;
+        }
+    }
+    return true;
+}
+
+
 static void bsRegexFree(BSRegex *regex)
 {
     for (size_t ix = 0; ix < regex->nodeCount; ix++) {
@@ -800,6 +908,8 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, cons
     regex->pattern = bsStringNewSize(pattern, patternSize);
     regex->flags = flags;
     regex->anchored = false;
+    regex->firstUsable = false;
+    memset(&regex->first, 0, sizeof(regex->first));
     regex->root = NULL;
     regex->groupCount = 1;
     regex->nodes = NULL;
@@ -838,6 +948,11 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, cons
                     break;
                 }
             }
+        }
+
+        /* Compute the set of code points a match can begin with, for the search scan */
+        if (!regex->anchored) {
+            regex->firstUsable = !rxFirstSet(regex->root, flags, &regex->first) && !regex->first.any;
         }
 
         /* Bound each lookbehind's scan by its sub-pattern's match length */
@@ -1388,6 +1503,19 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     size_t matchedBytes = compiled->groupCount * sizeof(bool);
     size_t last = compiled->anchored ? start : subject->length;
     for (size_t pos = start; pos <= last; pos++) {
+        /* Skip positions whose code point cannot begin a match */
+        if (compiled->firstUsable) {
+            while (pos < subject->length) {
+                uint32_t code = subject->codes[pos];
+                if (code >= 256 ? compiled->first.high : compiled->first.codes[code]) {
+                    break;
+                }
+                pos++;
+            }
+            if (pos >= subject->length) {
+                break;
+            }
+        }
         memset(match->groups, 0, groupBytes);
         memset(match->matched, 0, matchedBytes);
         match->begin = 0;

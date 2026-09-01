@@ -89,7 +89,8 @@ help:
 	@echo "  test          build and run the unit tests"
 	@echo "  cover         run the unit tests and report coverage (fails under 100%)"
 	@echo "                VERBOSE=1 lists each uncovered line"
-	@echo "  test-include  run the BareScript language test suite with the built CLI"
+	@echo "  test-include  run the BareScript include library test suite"
+	@echo "  test-language run this project's own BareScript language tests"
 	@echo "  perf          run the performance suite"
 	@echo "  release       profile-guided optimization build in build/release"
 	@echo "  includes      regenerate the bundled include library source"
@@ -260,26 +261,86 @@ COVER_GCOV := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/coverage/%.c.gcov,$(LIB_SRC
 
 
 #
-# BareScript language test suite
+# The BareScript include library test suite
+#
+# The same three runs the JavaScript and Python implementations make, over the same test scripts,
+# so the reports are directly comparable.
 #
 
-.PHONY: test-include
-test-include: compile
+INCLUDE_TEST_DIR := $(INCLUDE_LIB_DIR)/test
+
+.PHONY: test-include test-include-lint test-include-markdownup test-include-run
+test-include: test-include-lint test-include-markdownup test-include-run
+test-include-lint test-include-markdownup test-include-run: compile
+
+test-include-lint:
+	$(CLI_BIN) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
+	$(CLI_BIN) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
+
+test-include-markdownup:
+	$(CLI_BIN) -d -v vUnittestReport true \
+	    $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
+
+test-include-run:
+	$(CLI_BIN) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
+
+
+#
+# The BareScript language test suite
+#
+
+.PHONY: test-language
+test-language: compile
 	$(CLI_BIN) $(if $(DEBUG),-d )$(TEST_DIR)/include/runTests.bare
 
 
 #
 # Performance
 #
+# The same suite the JavaScript and Python implementations run, reported the same way, so the
+# results are directly comparable. Timings are written to a temporary CSV and moved into place on
+# success, so build/perf.csv is always a complete, valid CSV.
+#
 
-PERF_RUNS ?= 3
+PERF_BARE_JS_DIR := ../bare-script
+PERF_BARE_PY_DIR := ../bare-script-py
+PERF_CSV := $(BUILD_DIR)/perf.csv
+PERF_CSV_TMP := $(BUILD_DIR)/perf-$$PPID.csv
+PERF_MERGE := 1
+PERF_REPORT := 1
+PERF_RUNS := 2
+PERF_NATIVE := $(BUILD_DIR)/perf-native
 
 .PHONY: perf
-perf: compile
-	@echo "language,test,runs,timeMs"
-	@set -e; for X in $$(seq 1 $(PERF_RUNS)); do \
-	    $(CLI_BIN) $(PERF_DIR)/test.bare -v vLanguage "'BareScript (C)'"$(if $(TEST), -v vTest "'$(TEST)'"); \
+perf: compile $(PERF_NATIVE)
+	mkdir -p $(dir $(PERF_CSV_TMP))
+	echo "language,test,runs,timeMs" > $(PERF_CSV_TMP)
+	set -e; for X in $$(seq 1 $(PERF_RUNS)); do \
+	    echo "Run $$X of $(PERF_RUNS) - BareScript (C)"; \
+	    $(CLI_BIN) $(PERF_DIR)/test.bare -v vLanguage "'BareScript (C)'"$(if $(TEST), -v vTest "'$(TEST)'") \
+	        >> $(PERF_CSV_TMP); \
+	    echo "Run $$X of $(PERF_RUNS) - C"; \
+	    $(PERF_NATIVE) "C"$(if $(TEST), "$(TEST)") >> $(PERF_CSV_TMP); \
 	done
+ifneq '$(PERF_MERGE)' ''
+ifneq '$(wildcard $(PERF_BARE_JS_DIR))' ''
+	$(MAKE) -C $(PERF_BARE_JS_DIR) perf PERF_RUNS=$(PERF_RUNS) TEST=$(TEST) PERF_MERGE= PERF_REPORT=
+	tail -n +2 $(PERF_BARE_JS_DIR)/$(PERF_CSV) >> $(PERF_CSV_TMP)
+endif
+ifneq '$(wildcard $(PERF_BARE_PY_DIR))' ''
+	$(MAKE) -C $(PERF_BARE_PY_DIR) perf PERF_RUNS=$(PERF_RUNS) TEST=$(TEST) PERF_MERGE= PERF_REPORT=
+	tail -n +2 $(PERF_BARE_PY_DIR)/$(PERF_CSV) >> $(PERF_CSV_TMP)
+endif
+endif
+	mv $(PERF_CSV_TMP) $(PERF_CSV)
+ifneq '$(PERF_REPORT)' ''
+	$(CLI_BIN) $(CURDIR)/bin/perfReport.bare -v vCSV "'$(CURDIR)/$(PERF_CSV)'"
+endif
+
+# The native C baseline, for the tests it implements
+$(PERF_NATIVE): $(PERF_DIR)/test.c
+	@mkdir -p $(dir $@)
+	$(CC) $(BASE_CFLAGS) -O2 -o $@ $< -lm
 
 
 #

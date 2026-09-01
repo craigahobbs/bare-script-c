@@ -761,3 +761,18 @@ TEST(runtime_include_bundled_model)
     ASSERT_VALUE(bsTestExecute("include <source.bare>\nreturn sourceGlobal"), "\"parsed\"");
     bsSystemIncludeClear();
 }
+
+
+TEST(runtime_function_error)
+{
+    /* The first function error wins, as the first runtime error does */
+    BSOptions *options = bsOptionsNew();
+    bsFunctionError(options, "first %d", 1);
+    bsFunctionError(options, "second %d", 2);
+    ASSERT_VALUE_STRING(bsRetain(options->argsError), "first 1");
+    bsOptionsFree(options);
+
+    /* A NULL options is a no-op */
+    bsFunctionError(NULL, "ignored");
+    ASSERT_TRUE(true);
+}

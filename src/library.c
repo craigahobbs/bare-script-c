@@ -744,9 +744,25 @@ static BSValue bsFnJSONParse(const BSValue *args, size_t argCount, BSOptions *op
         return bsNull();
     }
     const char *error = NULL;
-    BSValue result = bsJSONDecode(bsStringData(values[0]), bsStringSize(values[0]), &error);
+    size_t errorOffset = 0;
+    BSValue result = bsJSONDecodeEx(bsStringData(values[0]), bsStringSize(values[0]), &error,
+                                    &errorOffset);
     if (error != NULL) {
-        return bsArgFail(options, "string", values[0], bsNull());
+        /* Report the decoder's error and its position, as the reference implementations do */
+        const char *text = bsStringData(values[0]);
+        size_t line = 1;
+        size_t column = 1;
+        for (size_t ix = 0; ix < errorOffset; ix++) {
+            if (text[ix] == '\n') {
+                line++;
+                column = 1;
+            } else {
+                column++;
+            }
+        }
+        bsFunctionError(options, "%s: line %zu column %zu (char %zu)", error, line, column,
+                        errorOffset);
+        return bsNull();
     }
     return result;
 }
@@ -1310,8 +1326,8 @@ static BSValue bsFnRegexNew(const BSValue *args, size_t argCount, BSOptions *opt
     }
     const char *error = NULL;
     BSValue regex = bsRegexNew(bsStringData(values[0]), bsStringSize(values[0]), flags, &error);
-    if (error != NULL && options != NULL && options->debug) {
-        bsLog(options, "BareScript: Function \"regexNew\" failed with error: %s", error);
+    if (error != NULL) {
+        bsFunctionError(options, "Invalid regular expression: %s", error);
     }
     return regex;
 }

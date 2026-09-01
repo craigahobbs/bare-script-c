@@ -16,7 +16,11 @@ make compile
 ## Contents
 
 - [Build](#build)
+  - [Release Builds](#release-builds)
 - [Command-Line Interface](#command-line-interface)
+  - [System Includes](#system-includes)
+  - [MarkdownUp Output](#markdownup-output)
+  - [Static Analysis](#static-analysis)
 - [Embedding the Runtime](#embedding-the-runtime)
 - [Design](#design)
   - [The Value System](#the-value-system)
@@ -27,6 +31,7 @@ make compile
   - [JSON](#json)
   - [Regular Expressions](#regular-expressions)
 - [Testing](#testing)
+  - [The Include Library Test Suite](#the-include-library-test-suite)
 - [Performance](#performance)
 - [Compatibility](#compatibility)
 
@@ -41,7 +46,8 @@ make                # show the available targets
 make compile        # build build/libbarescript.{so,dylib}, build/libbarescript.a, and build/bare
 make test           # build and run the unit tests
 make cover          # run the unit tests and report line coverage; fails under 100%
-make test-include   # run the BareScript language test suite with the built CLI
+make test-include   # run the BareScript include library test suite
+make test-language  # run this project's own BareScript language tests
 make perf           # run the performance suite
 make release        # profile-guided optimization build in build/release
 make includes       # regenerate the bundled include library source
@@ -85,21 +91,23 @@ make test TEST=regex
 ## Command-Line Interface
 
 ```
-usage: bare [-h] [-c CODE] [-d] [-s] [-x] [-v VAR EXPR] [--version] [file ...]
+usage: bare [-h] [-c CODE] [-d] [-l | -m] [-s] [-x] [-v VAR EXPR] [--version] [file ...]
 
 The BareScript command-line interface
 
 positional arguments:
-  file           files to process
+  file            files to process
 
 options:
-  -h, --help     show this help message and exit
-  -c, --code     execute the BareScript code
-  -d, --debug    enable debug mode
-  -s, --static   perform static analysis
-  -x, --staticx  perform static analysis with execution
-  -v, --var      set a global variable to an expression value
-  --version      show the version and exit
+  -h, --help      show this help message and exit
+  -c, --code      execute the BareScript code
+  -d, --debug     enable debug mode
+  -l, --html      run with MarkdownUp HTML output
+  -m, --markdown  run with MarkdownUp text output
+  -s, --static    perform static analysis
+  -x, --staticx   perform static analysis with execution
+  -v, --var       set a global variable to an expression value
+  --version       show the version and exit
 ```
 
 Files and `-c` scripts execute in order, sharing one set of global variables. The process exit
@@ -129,6 +137,16 @@ so a script can run against an include library checkout instead of the bundled c
 
 ```sh
 BARESCRIPT_INCLUDE_PATH=/path/to/bare-script/lib/include bare script.bare
+```
+
+### MarkdownUp Output
+
+`-m` runs the script with MarkdownUp text output and `-l` with HTML output, wrapping it in the
+bundled `markdownUp.bare` include.
+
+```sh
+bare -m -c "markdownPrint('# Heading')"
+bare -l doc.bare > doc.html
 ```
 
 ### Static Analysis
@@ -353,12 +371,17 @@ The thirty scripts of the BareScript include library - `args.bare`, `markdown.ba
 `unittest.bare`, and the rest - are compiled to JSON script models and embedded in the library.
 Including one costs a JSON decode rather than a run of the parser.
 
-The models are dictionary compressed with the same scheme the JavaScript implementation uses for
-`includeSource.js`: a table of 61 phrases indexed by `[a-zA-Z0-9]`, where encoding replaces each
-phrase with `~` plus its index character and a literal `~` escapes to the one index past the last
-phrase. The phrase table itself is mined from the corpus - repeatedly taking the substring that
-saves the most bytes and removing it - so it tracks the JSON that BareScript's key-sorting
-`jsonStringify` actually emits. It compresses 1.58 MB of models to 590 KB.
+The models are dictionary compressed with the same scheme, and the same phrase table, that the
+JavaScript and Python implementations use for `includeSource.js` and `include_source.py`: 61
+phrases indexed by `[a-zA-Z0-9]`, where encoding replaces each phrase with `~` plus its index
+character and a literal `~` escapes to the one index past the last phrase. It compresses 574 KB of
+include library source to 530 KB of compressed models, and the compressed bytes are **identical**
+to the ones the JavaScript implementation embeds.
+
+That table is tuned for the key order the parser creates its model objects in, which BareScript's
+`jsonStringify` does not preserve - it sorts. So `bin/includeSource.bare` serializes the object and
+array structure itself, in `objectKeys` (insertion) order, and delegates only leaf values to
+`jsonStringify` so number formatting and string escaping stay exactly what the runtime produces.
 
 `src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
 fresh clone builds with no bootstrap. `make includes` regenerates them by running
@@ -424,7 +447,8 @@ implementations, because the parser is itself regex-driven:
 ```sh
 make test           # the C unit tests
 make cover          # the same tests with line coverage; fails under 100%
-make test-include   # the BareScript language test suite, run through the built CLI
+make test-include   # the BareScript include library test suite
+make test-language  # this project's own BareScript language tests
 ```
 
 `make cover VERBOSE=1` lists every uncovered line.
@@ -432,59 +456,78 @@ make test-include   # the BareScript language test suite, run through the built 
 The C unit tests self-register, so adding one is a single `TEST(name) { ... }` block. Coverage is
 gathered with `gcov`/`llvm-cov` and summarized by `test/coverage.awk`, which honors
 `GCOV_EXCL_LINE` and `GCOV_EXCL_START`/`GCOV_EXCL_STOP` markers - used only for out-of-memory
-aborts and platform-specific fallbacks that unit tests cannot reach.
+aborts, platform-specific fallbacks, and two checks that guard against a corrupted parser.
 
-The BareScript-level suite in `test/include` is written against a small self-contained harness so
-it runs unchanged on the JavaScript and Python implementations, which makes it a cross-runtime
-conformance check as well as a test of this one.
+### The Include Library Test Suite
 
-This implementation is additionally validated against the reference BareScript include library's
-own test suite - 1372 tests and 16,754 assertions covering the parser, runtime, library, regex
-engine, JSON, and coverage instrumentation - which passes with a report byte-identical to the
-JavaScript implementation's:
+`make test-include` runs the BareScript include library's own test suite - vendored under
+`lib/include/test` - as the JavaScript and Python implementations run it, in the same three parts:
 
-```sh
-cd /path/to/bare-script/lib/include/test
-BARESCRIPT_INCLUDE_PATH=/path/to/bare-script/lib/include \
-    /path/to/bare-script-c/build/bare -c 'include <markdownUp.bare>' \
-    -v vUnittestReport true runTests.bare
-```
+| Target                    | What it runs                                                    |
+| ------------------------- | --------------------------------------------------------------- |
+| `test-include-run`        | 1372 tests, 16,754 assertions, at 100% BareScript-level coverage |
+| `test-include-markdownup` | the 22 `markdownUp.bare` tests                                   |
+| `test-include-lint`       | static analysis of all 65 library and test scripts               |
+
+All three produce output identical to the JavaScript implementation's, so a diff against
+`bare-script` is a conformance check on the parser, the runtime, the library, the regex engine, the
+linter, and the CLI at once. The one difference is the text of two `jsonParse` debug messages,
+where the two reference implementations already differ from each other because each reports its own
+JSON decoder's error.
+
+`make test-language` runs this project's own suite, written against a small self-contained harness
+so it runs unchanged on all three implementations.
 
 
 ## Performance
 
-`make perf` runs a suite written in plain BareScript - no include library dependencies - so the
-same file runs on all three implementations. Elapsed milliseconds, lower is better:
+`make perf` runs the include library's performance suite - the same `perf/test.bare` the JavaScript
+and Python implementations run - writes `build/perf.csv`, merges in the results from
+`../bare-script` and `../bare-script-py` when they are present, and prints the same report they
+print. `perf/test.c` is the native C baseline, the counterpart of their `test.js` and `test.py`.
 
-| Test          | C (`-O2`) | C (release) |  JS |
-| ------------- | ---------:| -----------:| ---:|
-| mandelbrot    |        87 |          59 | 278 |
-| arraySort     |        18 |          14 |  27 |
-| objectTree    |        28 |          26 |  39 |
-| stringBuild   |         9 |           7 |  11 |
-| jsonRoundTrip |        16 |          14 |  18 |
-| regexMatch    |        12 |          11 |   7 |
-| functionCall  |        40 |          31 | 113 |
-| **total**     |   **210** |     **162** | **493** |
+```sh
+make perf
+make perf TEST=mandelbrot PERF_RUNS=5
+```
 
-The release build is 1.3x the default build and 3.0x the JavaScript implementation on this suite.
-The regex benchmark is the one place JavaScript wins, against V8's JIT-compiled regular expression
-engine.
+Milliseconds per 1000 runs, best of two, on one machine - lower is better:
 
-Parsing is a separate story, because the parser is an interpreted BareScript script in every
-implementation. Running the reference include library's full test suite - which parses about
-200 KB of BareScript before it runs a single test:
+| Test             | BareScript (C) | BareScript (JS) | BareScript (PyC) | BareScript (Py) |
+| ---------------- | --------------:| ---------------:| ----------------:| ---------------:|
+| mandelbrot       |    **104,000** |         306,000 |          109,000 |       3,492,000 |
+| markdownElements |          1,191 |             744 |          **672** |           5,255 |
+| markdownParse    |          5,924 |       **3,128** |            7,284 |          21,020 |
+| qrcodeMatrix     |      **7,567** |          13,033 |            9,067 |         124,567 |
+| schemaParse      |        **820** |           1,220 |            1,244 |           9,152 |
+| schemaValidate   |      **1,008** |           1,960 |            1,056 |          14,484 |
+| urlDecode        |         **47** |              92 |              133 |             692 |
+| urlEncode        |       **33.5** |              52 |               57 |             396 |
+
+The C runtime is the fastest BareScript runtime on seven of the eight tests. (`BareScript (PyC)` is
+the Python implementation running its C extension for the runtime core, so it is not a pure-Python
+baseline; `BareScript (Py)` is.) `markdownParse` is the one JavaScript wins, against V8's
+JIT-compiled regular expression engine - it is almost entirely regex work.
+
+Two other numbers are worth having. The release build is 1.3x the default build:
+
+| Test          | C (`-O2`) | C (release) |
+| ------------- | ---------:| -----------:|
+| mandelbrot    |        87 |          59 |
+| functionCall  |        40 |          31 |
+| arraySort     |        18 |          14 |
+| stringBuild   |         9 |           7 |
+
+And parsing is its own story, because the parser is an interpreted BareScript script in every
+implementation. Running the include library's full test suite, which parses about 200 KB of
+BareScript before it runs a single test:
 
 | Implementation | Time  |
 | -------------- | -----:|
+| JavaScript     | 1.47s |
 | C (release)    | 1.91s |
 | C (`-O2`)      | 2.12s |
-| JavaScript     | 1.47s |
 | Python         | 5.51s |
-
-(The Python implementation runs its own C extension for the runtime core, so its numbers are not a
-pure-Python baseline.)
-
 
 ## Compatibility
 
@@ -517,6 +560,9 @@ One capability of the reference implementations is out of scope here:
 An input nested more deeply than the evaluator's expression depth limit is reported as a parse
 error rather than crashing; the JavaScript implementation overflows its own stack on the same
 input.
+
+A failed `jsonParse` or `regexNew` reports its own decoder's or compiler's message, as both
+reference implementations do - and, like theirs, the exact wording is this implementation's own.
 
 
 ## License

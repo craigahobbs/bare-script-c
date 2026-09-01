@@ -16,26 +16,44 @@
 include <barescriptParser.bare>
 
 
-# The include model compression phrase table
+# The include model compression phrase table - statement/expression shapes, common builtins,
+# leftover JSON fragments, and parser-generated "__barescript" name prefixes. Encoding replaces
+# each phrase with "~" plus its index character, applying phrases longest-first (see the sort
+# below); a literal "~" escapes to "~" plus the index one past the last phrase. 61 phrases plus
+# that escape fill the alphanumeric index set.
 #
-# Encoding replaces each phrase with "~" plus its index character, applying phrases longest-first
-# (see the sort below); a literal "~" escapes to "~" plus the index one past the last phrase. 61
-# phrases plus that escape fill the alphanumeric index set.
-#
-# The phrases were mined from the include library's own compiled models by repeatedly taking the
-# substring that saves the most bytes and removing it, so they track the JSON that BareScript's
-# key-sorting jsonStringify actually emits - statement and expression shapes, the long generated
-# "__barescript" names, and the include library's own identifier fragments. They compress the
-# corpus to 37% of its size. Re-mine them if the include library changes substantially.
+# This is the table the JavaScript and Python implementations use, listed in their index order, so
+# all three runtimes embed byte-identical compressed models. It is tuned for the key order the
+# parser creates its model objects in, which is why includeSourceJSON below serializes in
+# insertion order rather than calling jsonStringify.
 includeSourcePhrases = [ \
-    '{"function":{"args":[{"variable"', 'HighlightCreateWordListR', '{"function":{"args":', \
-    'binary":{"left":', '","statements":[', 'barescriptParser', '"},{"string":"', '"lineNumber"', \
-    '__barescript', '{"variable":', '"lineCount":', 'ataLineChart', '{"expr":{"', '","right":', \
-    '{"number":', '{"string":', 'variable":', '{"return":', '    # The ', '":{"args":', ',"name":"', \
-    '},"op":"', '"label":', '{"jump":', 'markdown', 'tatement', 'aragraph', 'unittest', 'unary":', \
-    '"null"}', 'expr":', 'object', 'Length', 'schema', 'script', 'array', 'Index', 'Value', 'tring', \
-    'Parse', 'match', 'error', 'value', '"}},', 'Done', '}},{', '"}}}', 'tion', 's"},', '"}}]', 'e"}]', \
-    'e"},', 'Loop', 'ment', 'roup', 's"}]', 'mber', 'egex', '"lin', 'type', 'Type' \
+    '{"function":{"name":"markdownHighlightCreateWordListRegex","args":[', \
+    '{"function":{"name":"dataLineChartSvgValue","args":[', \
+    '{"function":{"name":"barescriptParserError","args":[', \
+    '{"function":{"name":"barescriptLintWarning","args":[', \
+    '{"function":{"name":"drawGetCurrentDrawing","args":[', \
+    '{"function":{"name":"stringFromCharCode","args":[', \
+    '{"function":{"name":"schemaMemberError","args":[', \
+    '{"function":{"name":"stringStartsWith","args":[', '{"function":{"name":"systemLogDebug","args":[', \
+    '{"function":{"name":"markdownEscape","args":[', '{"function":{"name":"markdownPrint","args":[', \
+    '{"function":{"name":"stringReplace","args":[', '{"function":{"name":"numberToFixed","args":[', \
+    '{"function":{"name":"jsonStringify","args":[', '{"function":{"name":"objectAssign","args":[', \
+    '{"function":{"name":"stringLength","args":[', '{"function":{"name":"arrayLength","args":[', \
+    '{"function":{"name":"arrayExtend","args":[', '{"function":{"name":"stringSlice","args":[', \
+    '{"function":{"name":"objectKeys","args":[', '{"function":{"name":"regexMatch","args":[', \
+    '{"function":{"name":"systemType","args":[', '{"function":{"name":"objectGet","args":[', \
+    '{"function":{"name":"objectSet","args":[', '{"function":{"name":"objectNew","args":[', \
+    '{"function":{"name":"objectHas","args":[', '{"function":{"name":"arrayPush","args":[', \
+    '{"function":{"name":"arrayJoin","args":[', '{"function":{"name":"arraySort","args":[', \
+    '{"function":{"name":"arrayNew","args":[', '{"function":{"name":"arrayGet","args":[', \
+    '{"function":{"name":"regexNew","args":[', '{"jump":{"label":"__barescriptContinue', \
+    '{"jump":{"label":"__barescriptDone', '{"jump":{"label":"__barescriptLoop', \
+    '{"function":{"name":"if","args":[', '{"jump":{"label":"__barescriptIf', \
+    '{"label":{"name":"__barescript', '{"expr":{"name":"__barescript', '{"variable":"__barescript', \
+    '{"function":{"name":"', '{"expr":{"name":"', '{"binary":{"op":"', '{"expr":{"expr":', \
+    '{"unary":{"op":"', '"statements":[', ',"lineNumber":', '"},{"string":"', '"lineNumber":', \
+    '{"variable":"', '"lineCount":', '{"string":"', '{"return":{', '{"number":', ',"args":[', \
+    '","expr":', ',"right":', ',"expr":', ',"left":', '"}]}}]}}', '"}]}}' \
 ]
 includeSourceIndexes = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 
@@ -51,6 +69,31 @@ includeSourceChunksPerLiteral = 38
 # Sort the phrase table longest-first, so encoding always applies the longest match
 function includeSourcePhraseCompare(phraseA, phraseB):
     return stringLength(phraseB) - stringLength(phraseA)
+endfunction
+
+
+# Serialize a value as JSON with object keys in insertion order
+#
+# jsonStringify sorts object keys, but the phrase table above is tuned for the order the parser
+# creates them in - the order JavaScript's JSON.stringify and Python's json.dumps preserve. Only
+# the object and array structure is walked here; leaf values delegate to jsonStringify, so number
+# formatting and string escaping stay exactly what the runtime produces.
+function includeSourceJSON(value):
+    valueType = systemType(value)
+    if valueType == 'object':
+        parts = []
+        for key in objectKeys(value):
+            arrayPush(parts, jsonStringify(key) + ':' + includeSourceJSON(objectGet(value, key)))
+        endfor
+        return '{' + arrayJoin(parts, ',') + '}'
+    elif valueType == 'array':
+        parts = []
+        for item in value:
+            arrayPush(parts, includeSourceJSON(item))
+        endfor
+        return '[' + arrayJoin(parts, ',') + ']'
+    endif
+    return jsonStringify(value)
 endfunction
 
 
@@ -200,7 +243,7 @@ async function main():
         objectDelete(model, 'scriptLines')
 
         # Compress the model and verify the round trip
-        modelText = jsonStringify(model)
+        modelText = includeSourceJSON(model)
         encoded = includeSourceEncode(modelText, tildeIndex)
         if includeSourceDecode(encoded, tildeIndex) != modelText:
             systemLog('error: "' + includeName + '" compressed model round-trip failure')

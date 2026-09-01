@@ -242,3 +242,23 @@ TEST(json_decode_invalid_hex)
     ASSERT_VALUE(bsTestJSON("\"\\u00FF\""), "\"\xc3\xbf\"");
     ASSERT_VALUE(bsTestJSON("\"\\u00ff\""), "\"\xc3\xbf\"");
 }
+
+
+TEST(json_decode_error_offset)
+{
+    /* The decoder reports where it detected the error */
+    const char *error = NULL;
+    size_t offset = 0;
+    bsRelease(bsJSONDecodeEx("   x", 4, &error, &offset));
+    ASSERT_STR_EQ(error, "Invalid value");
+    ASSERT_INT_EQ(offset, 3);
+
+    bsRelease(bsJSONDecodeEx("[1] x", 5, &error, &offset));
+    ASSERT_STR_EQ(error, "Unexpected trailing text");
+    ASSERT_INT_EQ(offset, 4);
+
+    /* The offset argument is optional, and is untouched on success */
+    error = NULL;
+    bsRelease(bsJSONDecodeEx("1", 1, &error, NULL));
+    ASSERT_NULL(error);
+}

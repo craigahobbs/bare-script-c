@@ -562,11 +562,22 @@ TEST(library_argument_errors)
                   "test.bare:1: BareScript: Function \"arrayGet\" failed with error: "
                   "Invalid \"array\" argument value, null\n");
 
-    /* An invalid regex compile is logged in debug mode */
+    /* An invalid regex compile is logged in debug mode, with the call site's location */
     bsTestLogClear();
     bsRelease(bsTestExecuteOptions("regexNew('(')", options));
     ASSERT_STR_EQ(bsTestLogText(),
-                  "BareScript: Function \"regexNew\" failed with error: Unmatched parenthesis\n");
+                  "test.bare:1: BareScript: Function \"regexNew\" failed with error: "
+                  "Invalid regular expression: Unmatched parenthesis\n");
+
+    /* A jsonParse failure reports the decoder's error and its position */
+    bsTestLogClear();
+    bsRelease(bsTestExecuteOptions("jsonParse('BAD')", options));
+    ASSERT_STR_EQ(bsTestLogText(),
+                  "test.bare:1: BareScript: Function \"jsonParse\" failed with error: "
+                  "Invalid value: line 1 column 1 (char 0)\n");
+    bsTestLogClear();
+    bsRelease(bsTestExecuteOptions("jsonParse('{\\n\\'a\\': }')", options));
+    ASSERT_TRUE(strstr(bsTestLogText(), "line 2 column 1") != NULL);
     bsOptionsFree(options);
 
     /* Without debug mode nothing is logged */

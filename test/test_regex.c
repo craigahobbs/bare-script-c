@@ -466,3 +466,40 @@ TEST(regex_final_coverage)
     ASSERT_VALUE_STRING(bsTestMatch("(?:ab){0}c", "c", 0), "c");
     ASSERT_VALUE_STRING(bsTestMatch("(a){0}b", "b", 0), "b");
 }
+
+
+TEST(regex_first_set)
+{
+    /* The search skips positions whose code point cannot begin a match */
+    ASSERT_VALUE_STRING(bsTestMatch("(?:abc|xyz)", "12345xyz", 0), "xyz");
+    ASSERT_VALUE_STRING(bsTestMatch("[bd]x", "aaaabx", 0), "bx");
+    ASSERT_VALUE_STRING(bsTestMatch("(a)b", "zzzab", 0), "ab");
+    ASSERT_VALUE_STRING(bsTestMatch("a*bc", "zzzbc", 0), "bc");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<!x)qr", "aaqr", 0), "qr");
+    ASSERT_VALUE_STRING(bsTestMatch("\\bqr", "aa qr", 0), "qr");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:abc|xyz)", "nothing here", 0), "null");
+
+    /* A first set that includes non-ASCII code points */
+    ASSERT_VALUE_STRING(bsTestMatch("\xc3\xa9x", "aaa\xc3\xa9x", 0), "\xc3\xa9x");
+
+    /* A first code point above the first set's table, and a class range that reaches past it */
+    ASSERT_VALUE_STRING(bsTestMatch("\xe6\xbc\xa2x", "aa\xe6\xbc\xa2x", 0), "\xe6\xbc\xa2x");
+    ASSERT_VALUE_STRING(bsTestMatch("[\xe6\xbc\xa2-\xe6\xbc\xa5]x", "aa\xe6\xbc\xa3x", 0),
+                        "\xe6\xbc\xa3x");
+    ASSERT_VALUE_STRING(bsTestMatch("[a-\xe6\xbc\xa2]y", "  \xe6\xbc\xa2y", 0), "\xe6\xbc\xa2y");
+    ASSERT_VALUE_STRING(bsTestMatch("[\xe6\xbc\xa2-\xe6\xbc\xa5]x", "aabx", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("[\xc3\xa9-\xc3\xaa]x", "aa\xc3\xaax", 0), "\xc3\xaax");
+    ASSERT_VALUE_STRING(bsTestMatch("[a-\xc3\xaa]+", "\xc3\xa9z", 0), "\xc3\xa9z");
+
+    /* Case-insensitive matching widens the first set */
+    ASSERT_VALUE_STRING(bsTestMatch("abc", "zzzABC", BS_REGEX_IGNORECASE), "ABC");
+    ASSERT_VALUE_STRING(bsTestMatch("[a-c]x", "zzzBx", BS_REGEX_IGNORECASE), "Bx");
+
+    /* Patterns the first set cannot constrain still match */
+    ASSERT_VALUE_STRING(bsTestMatch("a*", "zzz", 0), "");
+    ASSERT_VALUE_STRING(bsTestMatch(".c", "zzzac", 0), "ac");
+    ASSERT_VALUE_STRING(bsTestMatch("[^q]c", "zzzac", 0), "ac");
+    ASSERT_VALUE_STRING(bsTestMatch("\\wc", "  ac", 0), "ac");
+    ASSERT_VALUE_STRING(bsTestMatch("(a)?\\1c", "zzc", 0), "c");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:)x", "zzx", 0), "x");
+}

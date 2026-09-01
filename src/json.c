@@ -583,13 +583,16 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
 }
 
 
-BSValue bsJSONDecode(const char *text, size_t size, const char **error)
+BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t *errorOffset)
 {
     BSJSONParser parser = {text, size, 0, NULL};
     BSValue result;
     if (!bsJSONDecodeValue(&parser, 0, &result)) {
         if (error != NULL) {
             *error = parser.error;
+        }
+        if (errorOffset != NULL) {
+            *errorOffset = parser.offset;
         }
         return bsNull();
     }
@@ -599,10 +602,19 @@ BSValue bsJSONDecode(const char *text, size_t size, const char **error)
         if (error != NULL) {
             *error = "Unexpected trailing text";
         }
+        if (errorOffset != NULL) {
+            *errorOffset = parser.offset;
+        }
         return bsNull();
     }
     if (error != NULL) {
         *error = NULL;
     }
     return result;
+}
+
+
+BSValue bsJSONDecode(const char *text, size_t size, const char **error)
+{
+    return bsJSONDecodeEx(text, size, error, NULL);
 }

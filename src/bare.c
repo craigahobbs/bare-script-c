@@ -22,21 +22,23 @@ const char *bsVersion(void)
 
 
 static const char *bsUsage =
-    "usage: bare [-h] [-c CODE] [-d] [-s] [-x] [-v VAR EXPR] [--version] [file ...]\n"
+    "usage: bare [-h] [-c CODE] [-d] [-l | -m] [-s] [-x] [-v VAR EXPR] [--version] [file ...]\n"
     "\n"
     "The BareScript command-line interface\n"
     "\n"
     "positional arguments:\n"
-    "  file           files to process\n"
+    "  file            files to process\n"
     "\n"
     "options:\n"
-    "  -h, --help     show this help message and exit\n"
-    "  -c, --code     execute the BareScript code\n"
-    "  -d, --debug    enable debug mode\n"
-    "  -s, --static   perform static analysis\n"
-    "  -x, --staticx  perform static analysis with execution\n"
-    "  -v, --var      set a global variable to an expression value\n"
-    "  --version      show the version and exit\n";
+    "  -h, --help      show this help message and exit\n"
+    "  -c, --code      execute the BareScript code\n"
+    "  -d, --debug     enable debug mode\n"
+    "  -l, --html      run with MarkdownUp HTML output\n"
+    "  -m, --markdown  run with MarkdownUp text output\n"
+    "  -s, --static    perform static analysis\n"
+    "  -x, --staticx   perform static analysis with execution\n"
+    "  -v, --var       set a global variable to an expression value\n"
+    "  --version       show the version and exit\n";
 
 
 /* A command-line script source - a file path or inline code */
@@ -59,7 +61,8 @@ static void bsPrintError(const char *text)
 
 int bsMain(int argc, char **argv)
 {
-    BSScriptSource *sources = bsAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(BSScriptSource));
+    /* Three extra slots for the MarkdownUp preamble and postamble */
+    BSScriptSource *sources = bsAlloc((size_t) (argc > 0 ? argc + 3 : 4) * sizeof(BSScriptSource));
     size_t sourceCount = 0;
     const char **varNames = bsAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(char *));
     const char **varExprs = bsAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(char *));
@@ -67,6 +70,8 @@ int bsMain(int argc, char **argv)
     bool debug = false;
     bool staticAnalysis = false;
     bool staticExecute = false;
+    bool markdownUp = false;
+    bool html = false;
     int statusCode = 0;
 
     /* Parse the command-line arguments */
@@ -98,6 +103,16 @@ int bsMain(int argc, char **argv)
         if (strcmp(arg, "-x") == 0 || strcmp(arg, "--staticx") == 0) {
             staticAnalysis = true;
             staticExecute = true;
+            continue;
+        }
+        if (strcmp(arg, "-m") == 0 || strcmp(arg, "--markdown") == 0) {
+            markdownUp = true;
+            html = false;
+            continue;
+        }
+        if (strcmp(arg, "-l") == 0 || strcmp(arg, "--html") == 0) {
+            markdownUp = true;
+            html = true;
             continue;
         }
         if (strcmp(arg, "-c") == 0 || strcmp(arg, "--code") == 0) {
@@ -132,6 +147,30 @@ int bsMain(int argc, char **argv)
         sourceCount++;
     }
 
+    /*
+     * The MarkdownUp modes wrap the user's scripts in the markdownUp.bare include and, for HTML
+     * output, its document begin and end calls. "ixUserScript" is where the user's own scripts
+     * start, which is what inline script naming, debug timing, and static analysis key off.
+     */
+    size_t ixUserScript = 0;
+    if (statusCode == 0 && sourceCount != 0 && markdownUp) {
+        size_t extra = html ? 2 : 1;
+        memmove(sources + extra, sources, sourceCount * sizeof(BSScriptSource));
+        sources[0].isFile = false;
+        sources[0].value = "include <markdownUp.bare>";
+        if (html) {
+            sources[1].isFile = false;
+            sources[1].value = "markdownUpHTMLBegin()";
+        }
+        sourceCount += extra;
+        if (html) {
+            sources[sourceCount].isFile = false;
+            sources[sourceCount].value = "markdownUpHTMLEnd()";
+            sourceCount++;
+        }
+        ixUserScript = extra;
+    }
+
     if (statusCode == 0 && sourceCount == 0) {
         fputs(bsUsage, stdout);
     } else if (statusCode == 0) {
@@ -161,6 +200,15 @@ int bsMain(int argc, char **argv)
         options->fetchFn = bsFetchReadWrite;
         options->logFn = bsLogStdout;
 
+        /* The shared globals, which each script executes against unless static analysis isolates it */
+        BSValue sharedGlobals = bsRetain(options->globals);
+        if (markdownUp) {
+            bsObjectSet(sharedGlobals, "vUnittestReport", bsBoolean(true));
+            if (staticAnalysis) {
+                bsObjectSet(sharedGlobals, "vUnittestDisabled", bsBoolean(true));
+            }
+        }
+
         /* Evaluate the global variable expression arguments */
         for (size_t ix = 0; ix < varCount && statusCode == 0; ix++) {
             BSParserError parserError;
@@ -174,7 +222,7 @@ int bsMain(int argc, char **argv)
             }
             BSValue value = bsEvaluateExpression(expr, options, NULL, true);
             bsExprFree(expr);
-            bsObjectSet(options->globals, varNames[ix], value);
+            bsObjectSet(sharedGlobals, varNames[ix], value);
         }
 
         /* Parse and execute each script source in order */
@@ -192,14 +240,15 @@ int bsMain(int argc, char **argv)
                 request.headers = bsNull();
                 text = bsFetchReadWrite(&request, &size, NULL);
                 if (text == NULL) {
-                    fprintf(stderr, "bare: failed to load \"%s\"\n", sources[ix].value);
+                    fprintf(stderr, "Failed to load \"%s\"\n", sources[ix].value);
                     statusCode = 1;
                     break;
                 }
             } else {
                 inlineCount++;
-                if (inlineCount > 1) {
-                    snprintf(scriptNameBuffer, sizeof(scriptNameBuffer), "<string%zu>", inlineCount);
+                size_t inlineDisplay = inlineCount - ixUserScript;
+                if (inlineDisplay > 1) {
+                    snprintf(scriptNameBuffer, sizeof(scriptNameBuffer), "<string%zu>", inlineDisplay);
                 } else {
                     snprintf(scriptNameBuffer, sizeof(scriptNameBuffer), "<string>");
                 }
@@ -230,7 +279,23 @@ int bsMain(int argc, char **argv)
              */
             BSValue staticGlobals = bsNull();
             bool runtimeFailed = false;
+            bool isUserScript = (ix >= ixUserScript);
             if (!staticAnalysis || staticExecute) {
+                /*
+                 * Under static analysis each user script executes against its own copy of the
+                 * globals, so one script's definitions do not leak into the next one's analysis
+                 */
+                if (staticAnalysis && isUserScript) {
+                    BSValue isolated = bsObjectCopy(sharedGlobals);
+                    BSValue includes = bsObjectGet(isolated, BS_GLOBAL_INCLUDES);
+                    if (includes.type == BS_OBJECT) {
+                        bsObjectSet(isolated, BS_GLOBAL_INCLUDES, bsObjectCopy(includes));
+                    }
+                    bsAssign(&options->globals, isolated);
+                } else {
+                    bsAssign(&options->globals, bsRetain(sharedGlobals));
+                }
+
                 char *scriptPath = sources[ix].isFile ? bsStrdup(sources[ix].value) : NULL;
                 if (options->urlDataFree != NULL) {
                     options->urlDataFree(options->urlData);
@@ -248,23 +313,30 @@ int bsMain(int argc, char **argv)
                     bsErrorClear(options);
                     statusCode = 1;
                     runtimeFailed = true;
-                } else if (result.type == BS_NUMBER && trunc(result.u.number) == result.u.number &&
-                           result.u.number >= 0 && result.u.number <= 255) {
-                    statusCode = (int) result.u.number;
-                } else if (bsValueBoolean(result)) {
-                    statusCode = 1;
+                } else {
+                    /* A zero result never clears a status code an earlier script set */
+                    int resultStatus;
+                    if (result.type == BS_NUMBER && trunc(result.u.number) == result.u.number &&
+                        result.u.number >= 0 && result.u.number <= 255) {
+                        resultStatus = (int) result.u.number;
+                    } else {
+                        resultStatus = bsValueBoolean(result) ? 1 : 0;
+                    }
+                    if (resultStatus != 0) {
+                        statusCode = resultStatus;
+                    }
                 }
                 bsRelease(result);
 
                 /* Log the script execution time in debug mode */
-                if (debug) {
+                if (debug && isUserScript) {
                     printf("BareScript executed in %.1f milliseconds\n",
                            (double) (bsDatetimeNow() - timeBegin));
                 }
             }
 
             /* Run the linter - a runtime error stops the run before static analysis */
-            if (staticAnalysis && !runtimeFailed) {
+            if (staticAnalysis && isUserScript && !runtimeFailed) {
                 BSValue warnings = bsLintScript(script, staticGlobals);
                 size_t warningCount = bsArrayCount(warnings);
                 if (warningCount == 0) {
@@ -287,6 +359,7 @@ int bsMain(int argc, char **argv)
             }
         }
 
+        bsRelease(sharedGlobals);
         bsOptionsFree(options);
     }
 

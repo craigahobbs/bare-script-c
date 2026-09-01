@@ -92,6 +92,18 @@ void bsErrorSetStatement(BSOptions *options, const BSScript *script, const BSSta
 }
 
 
+void bsFunctionError(BSOptions *options, const char *format, ...)
+{
+    if (options == NULL || options->argsError.type == BS_STRING) {
+        return;
+    }
+    va_list args;
+    va_start(args, format);
+    options->argsError = bsStringNewVFormat(format, args);
+    va_end(args);
+}
+
+
 const char *bsErrorGet(const BSOptions *options)
 {
     return options->error.type == BS_STRING ? bsStringData(options->error) : NULL;

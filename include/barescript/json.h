@@ -34,6 +34,9 @@ void bsJSONEncodeSB(BSStringBuilder *sb, BSValue value, int indent);
  */
 BSValue bsJSONDecode(const char *text, size_t size, const char **error);
 
+/* Decode a JSON string, additionally reporting the byte offset the error was detected at */
+BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t *errorOffset);
+
 
 #ifdef __cplusplus
 }

@@ -1,0 +1,102 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+# Report on performance test data
+#
+# Reads the "language,test,runs,timeMs" CSV that "make perf" writes and prints, for each test, the
+# best per-run timing of each language and its multiple of the fastest. This is the same report the
+# JavaScript and Python implementations print, so the three are directly comparable.
+#
+#   bare bin/perfReport.bare -v vCSV "'build/perf.csv'"
+
+
+# Format a number with trailing zeros trimmed
+function perfReportNumberTrim(value, digits):
+    return numberToFixed(value, digits, true)
+endfunction
+
+
+async function main():
+    csvPath = systemGlobalGet('vCSV')
+    if csvPath == null:
+        systemLog('usage: bare bin/perfReport.bare -v vCSV "\'build/perf.csv\'"')
+        return 1
+    endif
+    csvText = systemFetch(csvPath)
+    if csvText == null:
+        systemLog('perfReport: failed to read "' + csvPath + '"')
+        return 1
+    endif
+
+    # Read the performance test data - compute the best per-run timing per test and language
+    testTimings = {}
+    for row, ixRow in stringSplitLines(csvText):
+        if ixRow == 0 || stringTrim(row) == '':
+            continue
+        endif
+        fields = stringSplit(row, ',')
+        if arrayLength(fields) != 4:
+            continue
+        endif
+        language = arrayGet(fields, 0)
+        test = arrayGet(fields, 1)
+        timeMs = numberParseFloat(arrayGet(fields, 3)) / numberParseFloat(arrayGet(fields, 2))
+        timings = objectGet(testTimings, test)
+        if timings == null:
+            timings = {}
+            objectSet(testTimings, test, timings)
+        endif
+        best = objectGet(timings, language)
+        if best == null || timeMs < best:
+            objectSet(timings, language, timeMs)
+        endif
+    endfor
+
+    # Compute the run multiplier - the smallest power of ten that reports every timing at or above
+    # one millisecond
+    minTiming = null
+    for test in objectKeys(testTimings):
+        for language in objectKeys(objectGet(testTimings, test)):
+            timeMs = objectGet(objectGet(testTimings, test), language)
+            if minTiming == null || timeMs < minTiming:
+                minTiming = timeMs
+            endif
+        endfor
+    endfor
+    runMultiplier = 1
+    while minTiming != null && minTiming > 0 && minTiming * runMultiplier < 1:
+        runMultiplier = runMultiplier * 10
+    endwhile
+
+    # Report the timing multiples for each test
+    perRuns = if(runMultiplier == 1, 'run', runMultiplier + ' runs')
+    tests = objectKeys(testTimings)
+    arraySort(tests)
+    for test, ixTest in tests:
+        if ixTest != 0:
+            systemLog('')
+        endif
+        timings = objectGet(testTimings, test)
+        languages = objectKeys(timings)
+        arraySort(languages, systemPartial(perfReportCompare, timings))
+        bestTiming = objectGet(timings, arrayGet(languages, 0))
+        systemLog(test + ':')
+        for language in languages:
+            timeMs = objectGet(timings, language)
+            multiple = if(bestTiming > 0, timeMs / bestTiming, 1)
+            systemLog('    ' + language + ' - ' + numberToFixed(timeMs * runMultiplier, 1) + \
+                ' milliseconds per ' + perRuns + ' (' + \
+                perfReportNumberTrim(multiple, 1) + 'x)')
+        endfor
+    endfor
+    return 0
+endfunction
+
+
+# Sort languages by their timing, fastest first
+function perfReportCompare(timings, languageA, languageB):
+    return objectGet(timings, languageA) - objectGet(timings, languageB)
+endfunction
+
+
+return main()
