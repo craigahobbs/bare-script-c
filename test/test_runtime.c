@@ -204,6 +204,9 @@ TEST(runtime_functions)
     ASSERT_VALUE(bsTestExecute("function f(c):\n    if c:\n        mathAbs = 1\n    endif\n"
                                "    return mathAbs(-4)\nendfunction\nreturn f(false)"), "4");
 
+    /* An override of a library function must not keep using the intrinsic */
+    ASSERT_VALUE(bsTestExecute("function mathSqrt(x):\n    return x\nendfunction\nreturn mathSqrt(9)"), "9");
+
     /* Function-local variables shadow globals but assignments stay local */
     ASSERT_VALUE(bsTestExecute("x = 1\nfunction f():\n    x = 2\n    return x\nendfunction\n"
                                "return [f(), x]"), "[2,1]");

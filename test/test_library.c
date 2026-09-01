@@ -53,6 +53,7 @@ TEST(library_array)
     bsTestExpr("arrayGet([1, 2], 5)", "null");
     bsTestExpr("arrayGet([1, 2], -1)", "null");
     bsTestExpr("arrayGet([1, 2], 1.5)", "null");
+    bsTestExpr("arrayGet([1, 2], true)", "null");
     bsTestExpr("arrayNew()", "[]");
     bsTestExpr("arrayNew(1, 'a')", "[1,\"a\"]");
     bsTestExpr("arrayNewSize()", "[]");
@@ -238,7 +239,10 @@ TEST(library_math)
     bsTestExpr("mathAbs(-2)", "2");
     bsTestExpr("mathAbs('x')", "null");
     bsTestExpr("mathCeil(1.2)", "2");
+    bsTestExpr("mathCeil('x')", "null");
     bsTestExpr("mathFloor(1.8)", "1");
+    bsTestExpr("mathFloor('x')", "null");
+    bsTestExpr("mathSign('x')", "null");
     bsTestExpr("mathRound(1.5)", "2");
     bsTestExpr("mathRound(2.345, 2)", "2.35");
     bsTestExpr("mathRound(1, -1)", "null");
@@ -714,6 +718,84 @@ TEST(library_args_validate_api)
     ASSERT_FALSE(bsArgsValidate(model, 5, badDatetime, 3, values, options, "test"));
     bsAssign(&options->argsError, bsNull());
     bsRelease(regex);
+    bsOptionsFree(options);
+}
+
+
+TEST(library_direct_call)
+{
+    /* bsFunctionCall bypasses the evaluator intrinsic, covering the original happy paths */
+    BSOptions *options = bsTestOptions();
+    bsLibraryGlobals(options->globals);
+
+    BSValue array = bsArrayNew();
+    bsArrayPush(array, bsNumber(1));
+    bsArrayPush(array, bsNumber(2));
+    BSValue object = bsObjectNew();
+    bsObjectSet(object, "a", bsNumber(1));
+    BSValue key = bsStringNew("a");
+    BSValue str = bsStringNew("hello");
+    BSValue hello = bsStringNew("he");
+    BSValue lo = bsStringNew("lo");
+    BSValue args[3];
+
+    args[0] = array;
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayCopy"), args, 1, options), "[1,2]");
+    args[1] = bsNumber(1);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayGet"), args, 2, options), "2");
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayLength"), args, 1, options), "2");
+    args[1] = bsNumber(0);
+    args[2] = bsNumber(9);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arraySet"), args, 3, options), "9");
+    args[1] = bsNumber(3);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayPush"), args, 2, options), "[9,2,3]");
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayPop"), args, 1, options), "3");
+
+    args[0] = bsNumber(-2);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("mathAbs"), args, 1, options), "2");
+    args[0] = bsNumber(1.2);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("mathCeil"), args, 1, options), "2");
+    args[0] = bsNumber(1.8);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("mathFloor"), args, 1, options), "1");
+    args[0] = bsNumber(-3);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("mathSign"), args, 1, options), "-1");
+    args[0] = bsNumber(9);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("mathSqrt"), args, 1, options), "3");
+
+    args[0] = object;
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectCopy"), args, 1, options), "{\"a\":1}");
+    args[1] = key;
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectGet"), args, 2, options), "1");
+    args[1] = bsStringNew("missing");
+    args[2] = bsNumber(42);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectGet"), args, 3, options), "42");
+    bsRelease(args[1]);
+    args[1] = key;
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectHas"), args, 2, options), "true");
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectKeys"), args, 1, options), "[\"a\"]");
+    args[2] = bsNumber(2);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectSet"), args, 3, options), "2");
+    args[1] = bsStringNew("z");
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectDelete"), args, 2, options), "null");
+    bsRelease(args[1]);
+
+    args[0] = str;
+    args[1] = hello;
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("stringStartsWith"), args, 2, options), "true");
+    args[1] = lo;
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("stringEndsWith"), args, 2, options), "true");
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("stringLength"), args, 1, options), "5");
+
+    args[0] = bsNumber(0);
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("systemBoolean"), args, 1, options), "false");
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("systemType"), args, 1, options), "\"number\"");
+
+    bsRelease(array);
+    bsRelease(object);
+    bsRelease(key);
+    bsRelease(str);
+    bsRelease(hello);
+    bsRelease(lo);
     bsOptionsFree(options);
 }
 

@@ -336,7 +336,7 @@ static BSValue bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, 
 
     BSValue result = bsNull();
     if (function.type == BS_FUNCTION) {
-        result = bsFunctionCall(function, args, argCount, options);
+        result = bsFunctionInvoke(function, args, argCount, options);
 
         /* Log a library function argument error, which is not a runtime error */
         if (options->argsError.type == BS_STRING) {

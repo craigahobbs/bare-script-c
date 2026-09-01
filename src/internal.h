@@ -70,4 +70,40 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
 bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out);
 
 
+/*
+ * Library function fast-path identifiers, stored on BSFunction.intrinsic
+ *
+ * Zero means "call fn". Non-zero values are handled by bsFunctionInvoke without going through
+ * argument-model validation on the happy path.
+ */
+enum {
+    BS_INTRIN_NONE = 0,
+    BS_INTRIN_ARRAY_COPY,
+    BS_INTRIN_ARRAY_GET,
+    BS_INTRIN_ARRAY_LENGTH,
+    BS_INTRIN_ARRAY_POP,
+    BS_INTRIN_ARRAY_PUSH,
+    BS_INTRIN_ARRAY_SET,
+    BS_INTRIN_MATH_ABS,
+    BS_INTRIN_MATH_CEIL,
+    BS_INTRIN_MATH_FLOOR,
+    BS_INTRIN_MATH_SIGN,
+    BS_INTRIN_MATH_SQRT,
+    BS_INTRIN_OBJECT_COPY,
+    BS_INTRIN_OBJECT_DELETE,
+    BS_INTRIN_OBJECT_GET,
+    BS_INTRIN_OBJECT_HAS,
+    BS_INTRIN_OBJECT_KEYS,
+    BS_INTRIN_OBJECT_SET,
+    BS_INTRIN_STRING_ENDS_WITH,
+    BS_INTRIN_STRING_LENGTH,
+    BS_INTRIN_STRING_STARTS_WITH,
+    BS_INTRIN_SYSTEM_BOOLEAN,
+    BS_INTRIN_SYSTEM_TYPE
+};
+
+/* Call a function, taking a library intrinsic fast path when the function has one */
+BSValue bsFunctionInvoke(BSValue function, const BSValue *args, size_t argCount, BSOptions *options);
+
+
 #endif

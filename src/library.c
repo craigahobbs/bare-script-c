@@ -2448,6 +2448,51 @@ static BSValue bsScriptFunctionValues = {BS_NULL, {0}};
 static BSValue bsExpressionFunctionValues = {BS_NULL, {0}};
 
 
+static const struct {
+    const char *name;
+    unsigned char id;
+} bsIntrinsicTable[] = {
+    {"arrayCopy", BS_INTRIN_ARRAY_COPY},
+    {"arrayGet", BS_INTRIN_ARRAY_GET},
+    {"arrayLength", BS_INTRIN_ARRAY_LENGTH},
+    {"arrayPop", BS_INTRIN_ARRAY_POP},
+    {"arrayPush", BS_INTRIN_ARRAY_PUSH},
+    {"arraySet", BS_INTRIN_ARRAY_SET},
+    {"mathAbs", BS_INTRIN_MATH_ABS},
+    {"mathCeil", BS_INTRIN_MATH_CEIL},
+    {"mathFloor", BS_INTRIN_MATH_FLOOR},
+    {"mathSign", BS_INTRIN_MATH_SIGN},
+    {"mathSqrt", BS_INTRIN_MATH_SQRT},
+    {"objectCopy", BS_INTRIN_OBJECT_COPY},
+    {"objectDelete", BS_INTRIN_OBJECT_DELETE},
+    {"objectGet", BS_INTRIN_OBJECT_GET},
+    {"objectHas", BS_INTRIN_OBJECT_HAS},
+    {"objectKeys", BS_INTRIN_OBJECT_KEYS},
+    {"objectSet", BS_INTRIN_OBJECT_SET},
+    {"stringEndsWith", BS_INTRIN_STRING_ENDS_WITH},
+    {"stringLength", BS_INTRIN_STRING_LENGTH},
+    {"stringStartsWith", BS_INTRIN_STRING_STARTS_WITH},
+    {"systemBoolean", BS_INTRIN_SYSTEM_BOOLEAN},
+    {"systemType", BS_INTRIN_SYSTEM_TYPE}
+};
+
+#define BS_INTRINSIC_COUNT (sizeof(bsIntrinsicTable) / sizeof(bsIntrinsicTable[0]))
+
+
+static bool bsFastIndex(BSValue value, size_t *index)
+{
+    if (value.type != BS_NUMBER) {
+        return false;
+    }
+    double number = value.u.number;
+    if (!isfinite(number) || trunc(number) != number || number < 0) {
+        return false;
+    }
+    *index = (size_t) number;
+    return true;
+}
+
+
 static void bsLibraryInit(void)
 {
     if (bsScriptFunctionValues.type == BS_OBJECT) {
@@ -2457,6 +2502,10 @@ static void bsLibraryInit(void)
     for (size_t ix = 0; ix < BS_SCRIPT_FUNCTION_COUNT; ix++) {
         bsObjectSet(bsScriptFunctionValues, bsScriptFunctionTable[ix].name,
                     bsFunctionNew(bsScriptFunctionTable[ix].name, bsScriptFunctionTable[ix].fn, NULL, NULL));
+    }
+    for (size_t ix = 0; ix < BS_INTRINSIC_COUNT; ix++) {
+        BSValue function = bsObjectGet(bsScriptFunctionValues, bsIntrinsicTable[ix].name);
+        function.u.function->intrinsic = bsIntrinsicTable[ix].id;
     }
     bsExpressionFunctionValues = bsObjectNew();
     for (size_t ix = 0; ix < BS_EXPRESSION_FUNCTION_COUNT; ix++) {
@@ -2498,4 +2547,151 @@ void bsLibraryCleanup(void)
     bsRelease(bsScriptFunctionValues);
     bsExpressionFunctionValues = bsNull();
     bsScriptFunctionValues = bsNull();
+}
+
+
+BSValue bsFunctionInvoke(BSValue function, const BSValue *args, size_t argCount, BSOptions *options)
+{
+    BSFunction *fn = function.u.function;
+    switch (fn->intrinsic) {
+    case BS_INTRIN_ARRAY_COPY:
+        if (argCount == 1 && args[0].type == BS_ARRAY) {
+            return bsArrayCopy(args[0]);
+        }
+        break;
+    case BS_INTRIN_ARRAY_GET: {
+        size_t index;
+        if (argCount == 2 && args[0].type == BS_ARRAY && bsFastIndex(args[1], &index) &&
+            index < args[0].u.array->count) {
+            return bsRetain(args[0].u.array->values[index]);
+        }
+        break;
+    }
+    case BS_INTRIN_ARRAY_LENGTH:
+        if (argCount == 1 && args[0].type == BS_ARRAY) {
+            return bsNumber((double) args[0].u.array->count);
+        }
+        break;
+    case BS_INTRIN_ARRAY_POP:
+        if (argCount == 1 && args[0].type == BS_ARRAY && args[0].u.array->count != 0) {
+            size_t index = args[0].u.array->count - 1;
+            BSValue result = bsRetain(args[0].u.array->values[index]);
+            bsArrayDelete(args[0], index);
+            return result;
+        }
+        break;
+    case BS_INTRIN_ARRAY_PUSH:
+        if (argCount >= 1 && args[0].type == BS_ARRAY) {
+            for (size_t ix = 1; ix < argCount; ix++) {
+                bsArrayPush(args[0], bsRetain(args[ix]));
+            }
+            return bsRetain(args[0]);
+        }
+        break;
+    case BS_INTRIN_ARRAY_SET: {
+        size_t index;
+        if (argCount == 3 && args[0].type == BS_ARRAY && bsFastIndex(args[1], &index) &&
+            index < args[0].u.array->count) {
+            bsArraySet(args[0], index, bsRetain(args[2]));
+            return bsRetain(args[2]);
+        }
+        break;
+    }
+    case BS_INTRIN_MATH_ABS:
+        if (argCount == 1 && args[0].type == BS_NUMBER) {
+            return bsNumber(fabs(args[0].u.number));
+        }
+        break;
+    case BS_INTRIN_MATH_CEIL:
+        if (argCount == 1 && args[0].type == BS_NUMBER) {
+            return bsNumber(ceil(args[0].u.number));
+        }
+        break;
+    case BS_INTRIN_MATH_FLOOR:
+        if (argCount == 1 && args[0].type == BS_NUMBER) {
+            return bsNumber(floor(args[0].u.number));
+        }
+        break;
+    case BS_INTRIN_MATH_SIGN:
+        if (argCount == 1 && args[0].type == BS_NUMBER) {
+            double x = args[0].u.number;
+            return bsNumber(x < 0 ? -1 : (x == 0 ? 0 : 1));
+        }
+        break;
+    case BS_INTRIN_MATH_SQRT:
+        if (argCount == 1 && args[0].type == BS_NUMBER && args[0].u.number >= 0) {
+            return bsNumber(sqrt(args[0].u.number));
+        }
+        break;
+    case BS_INTRIN_OBJECT_COPY:
+        if (argCount == 1 && args[0].type == BS_OBJECT) {
+            return bsObjectCopy(args[0]);
+        }
+        break;
+    case BS_INTRIN_OBJECT_DELETE:
+        if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            bsObjectDelete(args[0], bsStringData(args[1]));
+            return bsNull();
+        }
+        break;
+    case BS_INTRIN_OBJECT_GET:
+        if (argCount >= 2 && argCount <= 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            BSValue found;
+            if (bsObjectLookup(args[0], bsStringData(args[1]), bsStringSize(args[1]), &found)) {
+                return bsRetain(found);
+            }
+            return bsRetain(argCount >= 3 ? args[2] : bsNull());
+        }
+        break;
+    case BS_INTRIN_OBJECT_HAS:
+        if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            return bsBoolean(bsObjectHasString(args[0], args[1]));
+        }
+        break;
+    case BS_INTRIN_OBJECT_KEYS:
+        if (argCount == 1 && args[0].type == BS_OBJECT) {
+            return bsObjectKeys(args[0]);
+        }
+        break;
+    case BS_INTRIN_OBJECT_SET:
+        if (argCount == 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            bsObjectSetString(args[0], args[1], bsRetain(args[2]));
+            return bsRetain(args[2]);
+        }
+        break;
+    case BS_INTRIN_STRING_ENDS_WITH:
+        if (argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING) {
+            size_t searchSize = args[1].u.string->size;
+            size_t size = args[0].u.string->size;
+            return bsBoolean(searchSize <= size &&
+                             memcmp(args[0].u.string->data + (size - searchSize),
+                                    args[1].u.string->data, searchSize) == 0);
+        }
+        break;
+    case BS_INTRIN_STRING_LENGTH:
+        if (argCount == 1 && args[0].type == BS_STRING) {
+            return bsNumber((double) args[0].u.string->length);
+        }
+        break;
+    case BS_INTRIN_STRING_STARTS_WITH:
+        if (argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING) {
+            size_t searchSize = args[1].u.string->size;
+            return bsBoolean(searchSize <= args[0].u.string->size &&
+                             memcmp(args[0].u.string->data, args[1].u.string->data, searchSize) == 0);
+        }
+        break;
+    case BS_INTRIN_SYSTEM_BOOLEAN:
+        if (argCount == 1) {
+            return bsBoolean(bsValueBoolean(args[0]));
+        }
+        break;
+    case BS_INTRIN_SYSTEM_TYPE:
+        if (argCount == 1) {
+            return bsStringNew(bsValueTypeString(args[0]));
+        }
+        break;
+    default:
+        break;
+    }
+    return fn->fn(args, argCount, options, fn->data);
 }

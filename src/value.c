@@ -1037,6 +1037,7 @@ BSValue bsFunctionNew(const char *name, BSFunctionFn fn, void *data, void (*data
     function->data = data;
     function->dataFree = dataFree;
     function->name = bsStringNew(name).u.string;
+    function->intrinsic = 0;
 
     BSValue value;
     value.type = BS_FUNCTION;

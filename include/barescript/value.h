@@ -141,6 +141,7 @@ struct BSFunction {
     void *data;                  /* the function's closure data */
     void (*dataFree)(void *data);/* the closure data destructor, or NULL */
     BSString *name;              /* the function name, for error messages */
+    unsigned char intrinsic;     /* 0 = none; otherwise a library fast-path id */
 };
 
 
