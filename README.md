@@ -472,8 +472,8 @@ aborts, platform-specific fallbacks, and two checks that guard against a corrupt
 All three produce output identical to the JavaScript implementation's, so a diff against
 `bare-script` is a conformance check on the parser, the runtime, the library, the regex engine, the
 linter, and the CLI at once. The one difference is the text of two `jsonParse` debug messages,
-where the two reference implementations already differ from each other because each reports its own
-JSON decoder's error.
+which this implementation reports the way the Python implementation does - see
+[Compatibility](#compatibility).
 
 `make test-language` runs this project's own suite, written against a small self-contained harness
 so it runs unchanged on all three implementations.
@@ -561,8 +561,30 @@ An input nested more deeply than the evaluator's expression depth limit is repor
 error rather than crashing; the JavaScript implementation overflows its own stack on the same
 input.
 
-A failed `jsonParse` or `regexNew` reports its own decoder's or compiler's message, as both
-reference implementations do - and, like theirs, the exact wording is this implementation's own.
+### `jsonParse` and `regexNew` messages
+
+A failed `jsonParse` or `regexNew` reports its own decoder's or compiler's message, so the two
+reference implementations already differ from each other here. This implementation matches the
+Python one: `jsonParse` reports CPython's `json` messages with their `line L column C (char N)`
+position, and `regexNew` reports CPython's `re` messages with their `at position N`.
+
+`jsonParse` matches exactly - every message, every position. So does `regexNew`, wherever the two
+engines agree a pattern is invalid. They do not always agree, because BareScript specifies
+JavaScript regular expressions and `re` is not one:
+
+| Pattern         | JavaScript and this implementation | Python `re`                     |
+| --------------- | ---------------------------------- | ------------------------------- |
+| `(?i)`, `(?#c)` | `unknown extension`                | inline flags and comments       |
+| `(?>a)`, `(?(1)a)` | `unknown extension`             | atomic groups and conditionals  |
+| `a*+`           | `multiple repeat`                  | a possessive quantifier         |
+| `[]`            | a set that never matches           | `unterminated character set`    |
+| `[\k]`, `\cA`     | identity and control escapes       | `bad escape`                    |
+| `\1(a)`         | a forward reference, matches empty | `invalid group reference`       |
+| `(?<=a*)b`      | a variable-width lookbehind        | `look-behind requires fixed-width pattern` |
+
+Where a pattern is invalid in both, the message and position match: 3918 of 4000 fuzzed patterns
+agree with CPython character for character, and every one of the remaining 82 is a case from the
+table above.
 
 
 ## License

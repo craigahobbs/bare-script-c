@@ -1324,10 +1324,11 @@ static BSValue bsFnRegexNew(const BSValue *args, size_t argCount, BSOptions *opt
             }
         }
     }
-    const char *error = NULL;
-    BSValue regex = bsRegexNew(bsStringData(values[0]), bsStringSize(values[0]), flags, &error);
-    if (error != NULL) {
-        bsFunctionError(options, "Invalid regular expression: %s", error);
+    char error[BS_REGEX_ERROR_MAX];
+    BSValue regex = bsRegexNew(bsStringData(values[0]), bsStringSize(values[0]), flags, error,
+                               sizeof(error));
+    if (regex.type == BS_NULL) {
+        bsFunctionError(options, "%s", error);
     }
     return regex;
 }

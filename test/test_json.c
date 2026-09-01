@@ -96,7 +96,7 @@ TEST(json_encode_other_types)
     bsRelease(expected);
 
     /* A regex has no JSON representation */
-    BSValue regex = bsRegexNew("a", 1, 0, NULL);
+    BSValue regex = bsRegexNew("a", 1, 0, NULL, 0);
     ASSERT_VALUE_STRING(bsJSONEncode(regex, 0), "null");
     bsRelease(regex);
 }
@@ -180,40 +180,44 @@ TEST(json_decode_containers)
 
 TEST(json_decode_errors)
 {
-    bsTestJSONError("", "Unexpected end of input");
-    bsTestJSONError("  ", "Unexpected end of input");
-    bsTestJSONError("x", "Invalid value");
-    bsTestJSONError("tru", "Invalid value");
-    bsTestJSONError("fals", "Invalid value");
-    bsTestJSONError("nul", "Invalid value");
-    bsTestJSONError("1 2", "Unexpected trailing text");
-    bsTestJSONError("-", "Invalid number");
-    bsTestJSONError("1.", "Invalid number");
-    bsTestJSONError("1e", "Invalid number");
-    bsTestJSONError("1e+", "Invalid number");
-    bsTestJSONError("\"abc", "Unterminated string");
-    bsTestJSONError("\"a\\", "Unterminated string escape");
-    bsTestJSONError("\"a\\q\"", "Invalid string escape");
-    bsTestJSONError("\"a\\u00\"", "Invalid unicode escape");
-    bsTestJSONError("\"a\\u\"", "Invalid unicode escape");
-    bsTestJSONError("\"\x01\"", "Invalid string control character");
-    bsTestJSONError("[1", "Unterminated array");
-    bsTestJSONError("[1 2]", "Expected ',' or ']'");
-    bsTestJSONError("[1,]", "Invalid value");
-    bsTestJSONError("{1:2}", "Expected a string");
-    bsTestJSONError("{\"a\"}", "Expected ':'");
-    bsTestJSONError("{\"a\"", "Expected ':'");
-    bsTestJSONError("{\"a\":1", "Unterminated object");
-    bsTestJSONError("{\"a\":1 \"b\":2}", "Expected ',' or '}'");
-    bsTestJSONError("{\"a\":}", "Invalid value");
-    bsTestJSONError("[[[[", "Unexpected end of input");
+    bsTestJSONError("", "Expecting value");
+    bsTestJSONError("  ", "Expecting value");
+    bsTestJSONError("x", "Expecting value");
+    bsTestJSONError("tru", "Expecting value");
+    bsTestJSONError("fals", "Expecting value");
+    bsTestJSONError("nul", "Expecting value");
+    bsTestJSONError("1 2", "Extra data");
+    bsTestJSONError("-", "Expecting value");
+    bsTestJSONError("1.", "Extra data");
+    bsTestJSONError("1e", "Extra data");
+    bsTestJSONError("1e+", "Extra data");
+    bsTestJSONError("\"abc", "Unterminated string starting at");
+    bsTestJSONError("\"a\\", "Unterminated string starting at");
+    bsTestJSONError("\"a\\q\"", "Invalid \\escape");
+    bsTestJSONError("\"a\\u00\"", "Invalid \\uXXXX escape");
+    bsTestJSONError("\"a\\u\"", "Invalid \\uXXXX escape");
+    bsTestJSONError("\"\x01\"", "Invalid control character at");
+    bsTestJSONError("[1", "Expecting ',' delimiter");
+    bsTestJSONError("[1 2]", "Expecting ',' delimiter");
+    bsTestJSONError("[1,]", "Illegal trailing comma before end of array");
+    bsTestJSONError("{1:2}", "Expecting property name enclosed in double quotes");
+    bsTestJSONError("{\"a\"}", "Expecting ':' delimiter");
+    bsTestJSONError("{\"a\"", "Expecting ':' delimiter");
+    bsTestJSONError("{\"a\":1", "Expecting ',' delimiter");
+    bsTestJSONError("{\"a\":1 \"b\":2}", "Expecting ',' delimiter");
+    bsTestJSONError("{\"a\":}", "Expecting value");
+    bsTestJSONError("{\"a\":1,}", "Illegal trailing comma before end of object");
+    bsTestJSONError("-x", "Expecting value");
+    bsTestJSONError("[[[[", "Expecting value");
 
-    /* A number that overflows the parse buffer */
+    /* A number too long for the decoder's parse buffer, which strtod reads in place */
     char big[128];
     memset(big, '1', sizeof(big));
     const char *error = NULL;
-    bsRelease(bsJSONDecode(big, sizeof(big), &error));
-    ASSERT_STR_EQ(error, "Invalid number");
+    BSValue bigValue = bsJSONDecode(big, sizeof(big), &error);
+    ASSERT_NULL(error);
+    ASSERT_TRUE(bigValue.u.number > 1e126 && bigValue.u.number < 1e128);
+    bsRelease(bigValue);
 
     /* The nesting depth limit */
     BSStringBuilder sb;
@@ -237,8 +241,8 @@ TEST(json_decode_errors)
 TEST(json_decode_invalid_hex)
 {
     /* Four characters are available, but one is not a hex digit */
-    bsTestJSONError("\"\\u00zz\"", "Invalid unicode escape");
-    bsTestJSONError("\"\\u0G00\"", "Invalid unicode escape");
+    bsTestJSONError("\"\\u00zz\"", "Invalid \\uXXXX escape");
+    bsTestJSONError("\"\\u0G00\"", "Invalid \\uXXXX escape");
     ASSERT_VALUE(bsTestJSON("\"\\u00FF\""), "\"\xc3\xbf\"");
     ASSERT_VALUE(bsTestJSON("\"\\u00ff\""), "\"\xc3\xbf\"");
 }
@@ -250,11 +254,11 @@ TEST(json_decode_error_offset)
     const char *error = NULL;
     size_t offset = 0;
     bsRelease(bsJSONDecodeEx("   x", 4, &error, &offset));
-    ASSERT_STR_EQ(error, "Invalid value");
+    ASSERT_STR_EQ(error, "Expecting value");
     ASSERT_INT_EQ(offset, 3);
 
     bsRelease(bsJSONDecodeEx("[1] x", 5, &error, &offset));
-    ASSERT_STR_EQ(error, "Unexpected trailing text");
+    ASSERT_STR_EQ(error, "Extra data");
     ASSERT_INT_EQ(offset, 4);
 
     /* The offset argument is optional, and is untouched on success */

@@ -34,6 +34,9 @@ extern "C" {
 /* The maximum number of capture groups in a pattern */
 #define BS_REGEX_GROUPS_MAX 128
 
+/* The size of a compilation error message buffer */
+#define BS_REGEX_ERROR_MAX 128
+
 
 /* A regular expression match's capture group span, in code point indexes */
 typedef struct BSRegexSpan {
@@ -54,9 +57,15 @@ typedef struct BSRegexMatch {
 
 /*
  * Compile a regular expression. Returns an owned regex value, or a null value if the pattern is
- * invalid. If "error" is non-NULL, it is set to a static description of the compilation error.
+ * invalid.
+ *
+ * If "error" is non-NULL it receives the compilation error message, which is empty on success.
+ * The messages, and the pattern positions they report, are the ones Python's "re" module produces
+ * - the module the Python implementation's regexNew compiles with - so a BareScript program sees
+ * the same diagnostic on both implementations. "errorSize" should be BS_REGEX_ERROR_MAX.
  */
-BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, const char **error);
+BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char *error,
+                   size_t errorSize);
 
 /* Get a compiled regular expression's pattern source and flags */
 const char *bsRegexPattern(BSValue regex);

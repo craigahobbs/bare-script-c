@@ -14,9 +14,9 @@
 /* Match a pattern against a subject, returning the matched text or NULL */
 static BSValue bsTestMatch(const char *pattern, const char *subject, unsigned flags)
 {
-    const char *error = NULL;
-    BSValue regex = bsRegexNew(pattern, strlen(pattern), flags, &error);
-    if (error != NULL) {
+    char error[BS_REGEX_ERROR_MAX];
+    BSValue regex = bsRegexNew(pattern, strlen(pattern), flags, error, sizeof(error));
+    if (regex.type == BS_NULL) {
         bsTestFail(__FILE__, __LINE__, "bsRegexNew(%s) failed: %s", pattern, error);
     }
     BSValue string = bsStringNew(subject);
@@ -39,7 +39,7 @@ static BSValue bsTestMatch(const char *pattern, const char *subject, unsigned fl
 /* Match a pattern and return the match's capture groups as a JSON-comparable array */
 static BSValue bsTestGroups(const char *pattern, const char *subject, unsigned flags)
 {
-    BSValue regex = bsRegexNew(pattern, strlen(pattern), flags, NULL);
+    BSValue regex = bsRegexNew(pattern, strlen(pattern), flags, NULL, 0);
     BSValue string = bsStringNew(subject);
     BSRegexSubject subjectCodes;
     bsRegexSubjectInit(&subjectCodes, string);
@@ -67,11 +67,11 @@ static BSValue bsTestGroups(const char *pattern, const char *subject, unsigned f
 /* Assert a pattern fails to compile with the given error */
 static void bsTestRegexError(const char *pattern, const char *expectedError)
 {
-    const char *error = NULL;
-    BSValue regex = bsRegexNew(pattern, strlen(pattern), 0, &error);
+    char error[BS_REGEX_ERROR_MAX];
+    BSValue regex = bsRegexNew(pattern, strlen(pattern), 0, error, sizeof(error));
     if (!bsTestStringEqual(error, expectedError)) {
         bsTestFail(__FILE__, __LINE__, "bsRegexNew(%s)\n    actual:   %s\n    expected: %s", pattern,
-                   error != NULL ? error : "(null)", expectedError);
+                   error, expectedError);
     } else {
         bsTestPass();
     }
@@ -199,7 +199,7 @@ TEST(regex_alternation_and_groups)
     ASSERT_VALUE(bsTestGroups("(a)?b", "b", 0), "[\"b\",null]");
 
     /* Group names */
-    BSValue regex = bsRegexNew("(?<year>[0-9]{4})-([0-9]{2})", 28, 0, NULL);
+    BSValue regex = bsRegexNew("(?<year>[0-9]{4})-([0-9]{2})", 28, 0, NULL, 0);
     ASSERT_INT_EQ(bsRegexGroupCount(regex), 3);
     ASSERT_STR_EQ(bsRegexGroupName(regex, 1), "year");
     ASSERT_NULL(bsRegexGroupName(regex, 2));
@@ -255,7 +255,7 @@ TEST(regex_ignorecase)
 
 TEST(regex_search_start)
 {
-    BSValue regex = bsRegexNew("a", 1, 0, NULL);
+    BSValue regex = bsRegexNew("a", 1, 0, NULL, 0);
     BSValue string = bsStringNew("aXa");
     BSRegexSubject subject;
     bsRegexSubjectInit(&subject, string);
@@ -285,7 +285,7 @@ TEST(regex_subject_long)
     bsRegexSubjectInit(&subject, string);
     ASSERT_NOT_NULL(subject.owned);
     ASSERT_INT_EQ(subject.length, 206);
-    BSValue regex = bsRegexNew("target", 6, 0, NULL);
+    BSValue regex = bsRegexNew("target", 6, 0, NULL, 0);
     BSRegexMatch match;
     ASSERT_TRUE(bsRegexSearch(regex, &subject, 0, &match));
     ASSERT_INT_EQ(match.begin, 200);
@@ -297,26 +297,41 @@ TEST(regex_subject_long)
 
 TEST(regex_compile_errors)
 {
-    bsTestRegexError("(", "Unmatched parenthesis");
-    bsTestRegexError(")", "Unmatched parenthesis");
-    bsTestRegexError("(?", "Invalid group");
-    bsTestRegexError("(?P<a>b)", "Invalid group");
-    bsTestRegexError("(?<>a)", "Invalid group name");
-    bsTestRegexError("(?<a-b>c)", "Invalid group name");
-    bsTestRegexError("(?<a", "Invalid group name");
-    bsTestRegexError("[a", "Unterminated character class");
-    bsTestRegexError("[a\\", "Unterminated character class");
-    bsTestRegexError("[a-\\", "Unterminated character class");
-    bsTestRegexError("[c-a]", "Invalid character class range");
-    bsTestRegexError("[a-\\d]", "Invalid character class range");
-    bsTestRegexError("a{3,2}", "Invalid quantifier range");
-    bsTestRegexError("\\", "Trailing backslash");
-    bsTestRegexError("\\x4", "Invalid \\x escape");
-    bsTestRegexError("\\u04", "Invalid \\u escape");
-    bsTestRegexError("[\\x4]", "Invalid \\x escape");
-    bsTestRegexError("\\k<none>", "Unknown backreference name");
-    bsTestRegexError("\\k<", "Invalid backreference name");
-    bsTestRegexError("\\999", "Invalid backreference");
+    bsTestRegexError("(", "missing ), unterminated subpattern at position 0");
+    bsTestRegexError(")", "unbalanced parenthesis at position 0");
+    bsTestRegexError("(?", "unexpected end of pattern at position 2");
+    bsTestRegexError("(?P<a>b)", "unknown extension ?P at position 1");
+    bsTestRegexError("(?<>a)", "unknown extension ?<> at position 1");
+    bsTestRegexError("(?<a-b>c)", "unknown extension ?<a at position 1");
+    bsTestRegexError("(?<a", "unknown extension ?<a at position 1");
+    bsTestRegexError("(?<", "unexpected end of pattern at position 3");
+    bsTestRegexError("[a", "unterminated character set at position 0");
+    bsTestRegexError("[a\\", "bad escape (end of pattern) at position 2");
+    bsTestRegexError("[a-\\", "bad escape (end of pattern) at position 3");
+    bsTestRegexError("[c-a]", "bad character range c-a at position 1");
+    bsTestRegexError("[a-\\d]", "bad character range a-\\d at position 1");
+    bsTestRegexError("a{3,2}", "min repeat greater than max repeat at position 2");
+    bsTestRegexError("\\", "bad escape (end of pattern) at position 0");
+    bsTestRegexError("\\x4", "incomplete escape \\x4 at position 0");
+    bsTestRegexError("\\u04", "incomplete escape \\u04 at position 0");
+    bsTestRegexError("[\\x4]", "incomplete escape \\x4 at position 1");
+    bsTestRegexError("\\k<none>", "unknown group name 'none' at position 4");
+    bsTestRegexError("\\k<", "bad escape \\k at position 0");
+    bsTestRegexError("\\k", "bad escape \\k at position 0");
+    bsTestRegexError("\\kx", "bad escape \\k at position 0");
+    bsTestRegexError("*", "nothing to repeat at position 0");
+    bsTestRegexError("{2}", "nothing to repeat at position 0");
+    bsTestRegexError("(|*)", "nothing to repeat at position 2");
+    bsTestRegexError("^*", "nothing to repeat at position 1");
+    bsTestRegexError("$?", "nothing to repeat at position 1");
+    bsTestRegexError("\\b+", "nothing to repeat at position 2");
+    bsTestRegexError("\\B{2}", "nothing to repeat at position 2");
+    bsTestRegexError("(?\\d)", "unknown extension ?\\d at position 1");
+    bsTestRegexError("(?<\\w>a)", "unknown extension ?<\\w at position 1");
+    bsTestRegexError("a**", "multiple repeat at position 2");
+    bsTestRegexError("a{2}{3}", "multiple repeat at position 4");
+    bsTestRegexError("a*?*", "multiple repeat at position 3");
+    bsTestRegexError("\\999", "invalid group reference 999 at position 1");
 
     /* Too many capture groups */
     BSStringBuilder sb;
@@ -325,14 +340,14 @@ TEST(regex_compile_errors)
         bsSBAppendString(&sb, "(a)");
     }
     BSValue pattern = bsSBToValue(&sb);
-    const char *error = NULL;
-    bsRelease(bsRegexNew(bsStringData(pattern), bsStringSize(pattern), 0, &error));
-    ASSERT_STR_EQ(error, "Too many capture groups");
+    char error[BS_REGEX_ERROR_MAX];
+    bsRelease(bsRegexNew(bsStringData(pattern), bsStringSize(pattern), 0, error, sizeof(error)));
+    ASSERT_STR_EQ(error, "sorry, but this version only supports 127 groups at position 381");
     bsRelease(pattern);
 
     /* The error argument is optional */
-    bsRelease(bsRegexNew("(", 1, 0, NULL));
-    bsRelease(bsRegexNew("a", 1, 0, NULL));
+    bsRelease(bsRegexNew("(", 1, 0, NULL, 0));
+    bsRelease(bsRegexNew("a", 1, 0, NULL, 0));
 }
 
 
@@ -345,7 +360,7 @@ TEST(regex_depth_limit)
         bsSBAppendChar(&sb, 'a');
     }
     BSValue subject = bsSBToValue(&sb);
-    BSValue regex = bsRegexNew("(a|aa)+$b", 9, 0, NULL);
+    BSValue regex = bsRegexNew("(a|aa)+$b", 9, 0, NULL, 0);
     BSRegexSubject subjectCodes;
     bsRegexSubjectInit(&subjectCodes, subject);
     BSRegexMatch match;
@@ -361,7 +376,7 @@ TEST(regex_depth_limit)
     }
     bsSBAppendChar(&sb, 'y');
     BSValue longSubject = bsSBToValue(&sb);
-    BSValue longRegex = bsRegexNew("x*y", 3, 0, NULL);
+    BSValue longRegex = bsRegexNew("x*y", 3, 0, NULL, 0);
     bsRegexSubjectInit(&subjectCodes, longSubject);
     ASSERT_TRUE(bsRegexSearch(longRegex, &subjectCodes, 0, &match));
     ASSERT_INT_EQ(match.end, 20001);
@@ -389,8 +404,8 @@ TEST(regex_coverage_gaps)
     /* Upper-case hex escapes */
     ASSERT_VALUE_STRING(bsTestMatch("\\x4A", "xJy", 0), "J");
     ASSERT_VALUE_STRING(bsTestMatch("\\u004A", "xJy", 0), "J");
-    bsTestRegexError("\\x4G", "Invalid \\x escape");
-    bsTestRegexError("[a\\x4G]", "Invalid \\x escape");
+    bsTestRegexError("\\x4G", "incomplete escape \\x4 at position 0");
+    bsTestRegexError("[a\\x4G]", "incomplete escape \\x4 at position 2");
 
     /* A character class range with an escaped high bound */
     ASSERT_VALUE_STRING(bsTestMatch("[a-\\x63]+", "xabcy", 0), "abc");
@@ -433,11 +448,11 @@ TEST(regex_coverage_gaps)
 TEST(regex_coverage_gaps2)
 {
     /* An invalid escape as a character class range's high bound */
-    bsTestRegexError("[a-\\x4G]", "Invalid \\x escape");
+    bsTestRegexError("[a-\\x4G]", "incomplete escape \\x4 at position 3");
 
     /* An invalid sub-pattern inside a group */
-    bsTestRegexError("(\\x4G)", "Invalid \\x escape");
-    bsTestRegexError("(?:[c-a])", "Invalid character class range");
+    bsTestRegexError("(\\x4G)", "incomplete escape \\x4 at position 1");
+    bsTestRegexError("(?:[c-a])", "bad character range c-a at position 4");
 
     /* A lookbehind whose length bound saturates on an unbounded body */
     ASSERT_VALUE_STRING(bsTestMatch("(?<=\\1{2})b", "ab", 0), "b");

@@ -678,9 +678,9 @@ TEST(value_function)
 
 TEST(value_regex)
 {
-    const char *error = NULL;
-    BSValue regex = bsRegexNew("a+", 2, 0, &error);
-    ASSERT_NULL(error);
+    char error[BS_REGEX_ERROR_MAX];
+    BSValue regex = bsRegexNew("a+", 2, 0, error, sizeof(error));
+    ASSERT_STR_EQ(error, "");
     ASSERT_STR_EQ(bsValueTypeString(regex), "regex");
     ASSERT_VALUE_STRING(bsRetain(regex), "<regex>");
     ASSERT_VALUE_KEEP(regex, "null");

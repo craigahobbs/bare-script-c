@@ -215,12 +215,31 @@ BSValue bsJSONEncode(BSValue value, int indent)
  */
 
 
+/*
+ * Decode
+ *
+ * The decoder's errors - their text and the position they report - match CPython's json module,
+ * which is what the Python implementation's jsonParse surfaces, so a BareScript program sees the
+ * same diagnostic on every implementation.
+ */
+
+
 typedef struct BSJSONParser {
     const char *text;
     size_t size;
     size_t offset;
     const char *error;
+    size_t errorOffset;
 } BSJSONParser;
+
+
+/* Record a decoding error and its position. Always returns false, for the caller to return. */
+static bool bsJSONError(BSJSONParser *parser, const char *error, size_t offset)
+{
+    parser->error = error;
+    parser->errorOffset = offset;
+    return false;
+}
 
 
 static void bsJSONSkipSpace(BSJSONParser *parser)
@@ -274,9 +293,9 @@ static bool bsJSONHex4(BSJSONParser *parser, uint32_t *result)
 
 static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result)
 {
-    if (parser->offset >= parser->size || parser->text[parser->offset] != '"') {
-        parser->error = "Expected a string";
-        return false;
+    size_t begin = parser->offset;
+    if (begin >= parser->size || parser->text[begin] != '"') {
+        return bsJSONError(parser, "Expecting property name enclosed in double quotes", begin);
     }
     parser->offset++;
 
@@ -285,9 +304,8 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result)
     char utf8[4];
     while (true) {
         if (parser->offset >= parser->size) {
-            parser->error = "Unterminated string";
             bsSBFree(&sb);
-            return false;
+            return bsJSONError(parser, "Unterminated string starting at", begin);
         }
         char ch = parser->text[parser->offset];
         if (ch == '"') {
@@ -296,20 +314,19 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result)
         }
         if (ch != '\\') {
             if ((unsigned char) ch < 0x20) {
-                parser->error = "Invalid string control character";
                 bsSBFree(&sb);
-                return false;
+                return bsJSONError(parser, "Invalid control character at", parser->offset);
             }
             bsSBAppendChar(&sb, ch);
             parser->offset++;
             continue;
         }
 
+        size_t escapeOffset = parser->offset;
         parser->offset++;
         if (parser->offset >= parser->size) {
-            parser->error = "Unterminated string escape";
             bsSBFree(&sb);
-            return false;
+            return bsJSONError(parser, "Unterminated string starting at", begin);
         }
         char escape = parser->text[parser->offset++];
         switch (escape) {
@@ -340,9 +357,8 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result)
         case 'u': {
             uint32_t codePoint;
             if (!bsJSONHex4(parser, &codePoint)) {
-                parser->error = "Invalid unicode escape";
                 bsSBFree(&sb);
-                return false;
+                return bsJSONError(parser, "Invalid \\uXXXX escape", escapeOffset + 1);
             }
 
             /* Combine a surrogate pair */
@@ -366,9 +382,8 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result)
             break;
         }
         default:
-            parser->error = "Invalid string escape";
             bsSBFree(&sb);
-            return false;
+            return bsJSONError(parser, "Invalid \\escape", escapeOffset);
         }
     }
 
@@ -398,19 +413,20 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
         }
         bsArrayPush(array, item);
         bsJSONSkipSpace(parser);
-        if (parser->offset >= parser->size) {
-            parser->error = "Unterminated array";
-            bsRelease(array);
-            return false;
-        }
-        char ch = parser->text[parser->offset++];
-        if (ch == ']') {
+        if (parser->offset < parser->size && parser->text[parser->offset] == ']') {
+            parser->offset++;
             break;
         }
-        if (ch != ',') {
-            parser->error = "Expected ',' or ']'";
+        if (parser->offset >= parser->size || parser->text[parser->offset] != ',') {
             bsRelease(array);
-            return false;
+            return bsJSONError(parser, "Expecting ',' delimiter", parser->offset);
+        }
+        size_t commaOffset = parser->offset;
+        parser->offset++;
+        bsJSONSkipSpace(parser);
+        if (parser->offset < parser->size && parser->text[parser->offset] == ']') {
+            bsRelease(array);
+            return bsJSONError(parser, "Illegal trailing comma before end of array", commaOffset);
         }
     }
     *result = array;
@@ -437,10 +453,9 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
         }
         bsJSONSkipSpace(parser);
         if (parser->offset >= parser->size || parser->text[parser->offset] != ':') {
-            parser->error = "Expected ':'";
             bsRelease(key);
             bsRelease(object);
-            return false;
+            return bsJSONError(parser, "Expecting ':' delimiter", parser->offset);
         }
         parser->offset++;
         BSValue item;
@@ -452,19 +467,20 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
         bsObjectSetString(object, key, item);
         bsRelease(key);
         bsJSONSkipSpace(parser);
-        if (parser->offset >= parser->size) {
-            parser->error = "Unterminated object";
-            bsRelease(object);
-            return false;
-        }
-        char ch = parser->text[parser->offset++];
-        if (ch == '}') {
+        if (parser->offset < parser->size && parser->text[parser->offset] == '}') {
+            parser->offset++;
             break;
         }
-        if (ch != ',') {
-            parser->error = "Expected ',' or '}'";
+        if (parser->offset >= parser->size || parser->text[parser->offset] != ',') {
             bsRelease(object);
-            return false;
+            return bsJSONError(parser, "Expecting ',' delimiter", parser->offset);
+        }
+        size_t commaOffset = parser->offset;
+        parser->offset++;
+        bsJSONSkipSpace(parser);
+        if (parser->offset < parser->size && parser->text[parser->offset] == '}') {
+            bsRelease(object);
+            return bsJSONError(parser, "Illegal trailing comma before end of object", commaOffset);
         }
     }
     *result = object;
@@ -472,60 +488,74 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
 }
 
 
+/*
+ * Decode a number
+ *
+ * The grammar is CPython's NUMBER_RE - "-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?" - which
+ * rejects a leading zero and simply stops at anything it cannot consume, so "01" and "1." are a
+ * number followed by trailing text rather than a malformed number.
+ */
 static bool bsJSONDecodeNumber(BSJSONParser *parser, BSValue *result)
 {
+    const char *text = parser->text;
+    size_t size = parser->size;
     size_t begin = parser->offset;
-    if (parser->offset < parser->size && parser->text[parser->offset] == '-') {
-        parser->offset++;
+    size_t ix = begin;
+
+    if (ix < size && text[ix] == '-') {
+        ix++;
     }
-    size_t digits = 0;
-    while (parser->offset < parser->size && isdigit((unsigned char) parser->text[parser->offset])) {
-        parser->offset++;
-        digits++;
+    if (ix >= size) {
+        return bsJSONError(parser, "Expecting value", begin);
     }
-    if (digits == 0) {
-        parser->error = "Invalid number";
-        return false;
-    }
-    if (parser->offset < parser->size && parser->text[parser->offset] == '.') {
-        parser->offset++;
-        size_t fractionDigits = 0;
-        while (parser->offset < parser->size && isdigit((unsigned char) parser->text[parser->offset])) {
-            parser->offset++;
-            fractionDigits++;
+    if (text[ix] == '0') {
+        ix++;
+    } else if (text[ix] >= '1' && text[ix] <= '9') {
+        while (ix < size && isdigit((unsigned char) text[ix])) {
+            ix++;
         }
-        if (fractionDigits == 0) {
-            parser->error = "Invalid number";
-            return false;
+    } else {
+        return bsJSONError(parser, "Expecting value", begin);
+    }
+    if (ix + 1 < size && text[ix] == '.' && isdigit((unsigned char) text[ix + 1])) {
+        ix += 2;
+        while (ix < size && isdigit((unsigned char) text[ix])) {
+            ix++;
         }
     }
-    if (parser->offset < parser->size &&
-        (parser->text[parser->offset] == 'e' || parser->text[parser->offset] == 'E')) {
-        parser->offset++;
-        if (parser->offset < parser->size &&
-            (parser->text[parser->offset] == '-' || parser->text[parser->offset] == '+')) {
-            parser->offset++;
+    if (ix < size && (text[ix] == 'e' || text[ix] == 'E')) {
+        size_t save = ix;
+        ix++;
+        if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
+            ix++;
         }
-        size_t exponentDigits = 0;
-        while (parser->offset < parser->size && isdigit((unsigned char) parser->text[parser->offset])) {
-            parser->offset++;
-            exponentDigits++;
-        }
-        if (exponentDigits == 0) {
-            parser->error = "Invalid number";
-            return false;
+        if (ix < size && isdigit((unsigned char) text[ix])) {
+            while (ix < size && isdigit((unsigned char) text[ix])) {
+                ix++;
+            }
+        } else {
+            ix = save;
         }
     }
 
+    /*
+     * strtod needs a terminated string and the decoder's text is not terminated, so copy the
+     * number out. Almost every number fits the stack buffer; a longer one - a very long run of
+     * digits - takes a heap copy.
+     */
     char buffer[64];
-    size_t size = parser->offset - begin;
-    if (size >= sizeof(buffer)) {
-        parser->error = "Invalid number";
-        return false;
+    size_t numberSize = ix - begin;
+    char *number = buffer;
+    if (numberSize >= sizeof(buffer)) {
+        number = bsAlloc(numberSize + 1);
     }
-    memcpy(buffer, parser->text + begin, size);
-    buffer[size] = '\0';
-    *result = bsNumber(strtod(buffer, NULL));
+    memcpy(number, text + begin, numberSize);
+    number[numberSize] = '\0';
+    *result = bsNumber(strtod(number, NULL));
+    if (number != buffer) {
+        free(number);
+    }
+    parser->offset = ix;
     return true;
 }
 
@@ -533,15 +563,14 @@ static bool bsJSONDecodeNumber(BSJSONParser *parser, BSValue *result)
 static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
 {
     if (depth >= BS_JSON_DEPTH_MAX) {
-        parser->error = "Maximum nesting depth exceeded";
-        return false;
+        return bsJSONError(parser, "Maximum nesting depth exceeded", parser->offset);
     }
     bsJSONSkipSpace(parser);
     if (parser->offset >= parser->size) {
-        parser->error = "Unexpected end of input";
-        return false;
+        return bsJSONError(parser, "Expecting value", parser->offset);
     }
-    char ch = parser->text[parser->offset];
+    size_t begin = parser->offset;
+    char ch = parser->text[begin];
     if (ch == '{') {
         return bsJSONDecodeObject(parser, depth, result);
     }
@@ -551,48 +580,35 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
     if (ch == '"') {
         return bsJSONDecodeString(parser, result);
     }
-    if (ch == 't') {
-        if (!bsJSONLiteral(parser, "true")) {
-            parser->error = "Invalid value";
-            return false;
-        }
+    if (ch == 't' && bsJSONLiteral(parser, "true")) {
         *result = bsBoolean(true);
         return true;
     }
-    if (ch == 'f') {
-        if (!bsJSONLiteral(parser, "false")) {
-            parser->error = "Invalid value";
-            return false;
-        }
+    if (ch == 'f' && bsJSONLiteral(parser, "false")) {
         *result = bsBoolean(false);
         return true;
     }
-    if (ch == 'n') {
-        if (!bsJSONLiteral(parser, "null")) {
-            parser->error = "Invalid value";
-            return false;
-        }
+    if (ch == 'n' && bsJSONLiteral(parser, "null")) {
         *result = bsNull();
         return true;
     }
     if (ch == '-' || isdigit((unsigned char) ch)) {
         return bsJSONDecodeNumber(parser, result);
     }
-    parser->error = "Invalid value";
-    return false;
+    return bsJSONError(parser, "Expecting value", begin);
 }
 
 
 BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t *errorOffset)
 {
-    BSJSONParser parser = {text, size, 0, NULL};
+    BSJSONParser parser = {text, size, 0, NULL, 0};
     BSValue result;
     if (!bsJSONDecodeValue(&parser, 0, &result)) {
         if (error != NULL) {
             *error = parser.error;
         }
         if (errorOffset != NULL) {
-            *errorOffset = parser.offset;
+            *errorOffset = parser.errorOffset;
         }
         return bsNull();
     }
@@ -600,7 +616,7 @@ BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t
     if (parser.offset != parser.size) {
         bsRelease(result);
         if (error != NULL) {
-            *error = "Unexpected trailing text";
+            *error = "Extra data";
         }
         if (errorOffset != NULL) {
             *errorOffset = parser.offset;

@@ -567,14 +567,14 @@ TEST(library_argument_errors)
     bsRelease(bsTestExecuteOptions("regexNew('(')", options));
     ASSERT_STR_EQ(bsTestLogText(),
                   "test.bare:1: BareScript: Function \"regexNew\" failed with error: "
-                  "Invalid regular expression: Unmatched parenthesis\n");
+                  "missing ), unterminated subpattern at position 0\n");
 
     /* A jsonParse failure reports the decoder's error and its position */
     bsTestLogClear();
     bsRelease(bsTestExecuteOptions("jsonParse('BAD')", options));
     ASSERT_STR_EQ(bsTestLogText(),
                   "test.bare:1: BareScript: Function \"jsonParse\" failed with error: "
-                  "Invalid value: line 1 column 1 (char 0)\n");
+                  "Expecting value: line 1 column 1 (char 0)\n");
     bsTestLogClear();
     bsRelease(bsTestExecuteOptions("jsonParse('{\\n\\'a\\': }')", options));
     ASSERT_TRUE(strstr(bsTestLogText(), "line 2 column 1") != NULL);
@@ -704,7 +704,7 @@ TEST(library_args_validate_api)
     bsAssign(&options->argsError, bsNull());
 
     /* The datetime, regex, and function argument types */
-    BSValue regex = bsRegexNew("a", 1, 0, NULL);
+    BSValue regex = bsRegexNew("a", 1, 0, NULL, 0);
     BSValue function = bsLibraryScriptFunction("mathAbs");
     BSValue all[5] = {bsNumber(1), bsBoolean(true), bsDatetime(0), regex, function};
     ASSERT_TRUE(bsArgsValidate(model, 5, all, 5, values, options, "test"));
