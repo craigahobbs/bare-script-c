@@ -653,13 +653,10 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
     bsScopeInit(&scope);
     BSValue slotsInline[16];
     BSValue *slots = def->slotCount <= 16 ? slotsInline : bsAlloc(def->slotCount * sizeof(BSValue));
-    for (size_t ix = 0; ix < def->slotCount; ix++) {
-        slots[ix] = bsUnset();
-    }
     scope.slots = slots;
     scope.slotCount = def->slotCount;
 
-    /* Bind the declared arguments */
+    /* Bind the declared arguments, then mark remaining locals unset */
     size_t ixArgLast = def->argCount - 1;
     for (size_t ix = 0; ix < def->argCount; ix++) {
         if (def->lastArgArray && ix == ixArgLast) {
@@ -671,6 +668,9 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
         } else {
             slots[ix] = ix < argCount ? bsRetain(args[ix]) : bsNull();
         }
+    }
+    for (size_t ix = def->argCount; ix < def->slotCount; ix++) {
+        slots[ix] = bsUnset();
     }
 
     BSValue result = bsExecuteStatements(scriptFunction->script, def->statements, def->statementCount,
@@ -698,10 +698,13 @@ static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions
 BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t statementCount,
                             BSOptions *options, BSScope *scope)
 {
-    /* The coverage configuration is invariant across this call */
-    BSValue coverage = bsObjectGet(options->globals, BS_GLOBAL_COVERAGE);
-    bool hasCoverage = coverage.type == BS_OBJECT && bsValueBoolean(bsObjectGet(coverage, "enabled")) &&
-        !script->system;
+    /* System includes never record coverage - skip the globals lookup on that hot path */
+    BSValue coverage = bsNull();
+    bool hasCoverage = false;
+    if (!script->system) {
+        coverage = bsObjectGet(options->globals, BS_GLOBAL_COVERAGE);
+        hasCoverage = coverage.type == BS_OBJECT && bsValueBoolean(bsObjectGet(coverage, "enabled"));
+    }
 
     size_t ixStatement = 0;
     while (ixStatement < statementCount) {

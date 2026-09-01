@@ -76,7 +76,13 @@ static inline void bsReleaseInline(BSValue value)
 #define BS_UNSET_TYPE ((BSType) -1)
 #define BS_IS_UNSET(value) ((int) (value).type == (int) BS_UNSET_TYPE)
 
-BSValue bsUnset(void);
+static inline BSValue bsUnset(void)
+{
+    BSValue value;
+    value.type = BS_UNSET_TYPE;
+    value.u.ref = NULL;
+    return value;
+}
 
 
 /* Statement and expression execution, shared by the runtime and the parser's model conversion */

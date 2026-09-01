@@ -1912,12 +1912,3 @@ int bsValueCompare(BSValue left, BSValue right)
     int typeCompare = strcmp(bsValueTypeString(left), bsValueTypeString(right));
     return typeCompare < 0 ? -1 : (typeCompare == 0 ? 0 : 1);
 }
-
-
-BSValue bsUnset(void)
-{
-    BSValue value;
-    value.type = BS_UNSET_TYPE;
-    value.u.ref = NULL;
-    return value;
-}
