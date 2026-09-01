@@ -63,4 +63,11 @@ typedef struct BSScriptFunction {
 BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *options, void *data);
 
 
+/*
+ * Look up an object key. Returns true if the key is present; "*out" is then a borrowed value
+ * (which may itself be null). Distinguishes a missing key from a key whose value is null.
+ */
+bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out);
+
+
 #endif

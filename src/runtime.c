@@ -251,11 +251,51 @@ static BSValue bsLookup(BSValue name, int slot, BSOptions *options, BSScope *sco
                     return value;
                 }
             }
-        } else if (scope->object.type == BS_OBJECT && bsObjectHasString(scope->object, name)) {
-            return bsObjectGetString(scope->object, name);
+        } else if (scope->object.type == BS_OBJECT) {
+            BSValue found;
+            if (bsObjectLookup(scope->object, bsStringData(name), bsStringSize(name), &found)) {
+                return found;
+            }
         }
     }
     return bsObjectGetString(options->globals, name);
+}
+
+
+/* Look up a function, using the call site's globals cache when the name is not a local */
+static BSValue bsLookupFunction(BSExpr *expr, BSOptions *options, BSScope *scope)
+{
+    if (scope != NULL) {
+        if (scope->slots != NULL) {
+            if (expr->u.function.slot >= 0) {
+                BSValue value = scope->slots[expr->u.function.slot];
+                if (!BS_IS_UNSET(value)) {
+                    return value;
+                }
+            }
+        } else if (scope->object.type == BS_OBJECT) {
+            BSValue found;
+            if (bsObjectLookup(scope->object, bsStringData(expr->u.function.name),
+                               bsStringSize(expr->u.function.name), &found)) {
+                return found;
+            }
+        }
+    }
+
+    if (options->globals.type == BS_OBJECT) {
+        BSObject *globals = options->globals.u.object;
+        if (expr->u.function.cachedObject == globals &&
+            expr->u.function.cachedGen == globals->generation &&
+            expr->u.function.cached.type != BS_NULL) {
+            return expr->u.function.cached;
+        }
+        BSValue function = bsObjectGetString(options->globals, expr->u.function.name);
+        expr->u.function.cached = function;
+        expr->u.function.cachedGen = globals->generation;
+        expr->u.function.cachedObject = globals;
+        return function;
+    }
+    return bsNull();
 }
 
 
@@ -289,7 +329,7 @@ static BSValue bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, 
     }
 
     /* Resolve the function value */
-    BSValue function = bsLookup(expr->u.function.name, expr->u.function.slot, options, scope);
+    BSValue function = bsLookupFunction(expr, options, scope);
     if (function.type == BS_NULL && builtins) {
         function = bsLibraryExpressionFunction(expr->u.function.name);
     }

@@ -117,6 +117,7 @@ typedef struct BSObjectNode {
 struct BSObject {
     int32_t refcount;
     size_t count;
+    uint32_t generation; /* incremented on every insert, update, or delete */
     BSObjectNode *root;
     BSObjectNode *insertHead;
     BSObjectNode *insertTail;

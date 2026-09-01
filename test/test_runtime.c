@@ -186,6 +186,24 @@ TEST(runtime_functions)
                                "endfunction\nreturn fact(5)"), "120");
     ASSERT_VALUE(bsTestExecute("function f(a):\n    return a\nendfunction\ng = f\nreturn g(7)"), "7");
 
+    /* Redefining a function must not keep serving the previous definition */
+    ASSERT_VALUE(bsTestExecute("function f():\n    return 1\nendfunction\na = f()\n"
+                               "function f():\n    return 2\nendfunction\nreturn [a, f()]"), "[1,2]");
+
+    /* Repeated calls of a global function (the call-site cache's hit path) */
+    ASSERT_VALUE(bsTestExecute("function f():\n    return 1\nendfunction\n"
+                               "i = 0\ns = 0\nwhile i < 3:\n    s = s + f()\n    i = i + 1\n"
+                               "endwhile\nreturn s"), "3");
+
+    /* A function value in a local slot is called through the slot, not the globals cache */
+    ASSERT_VALUE(bsTestExecute("function inc(n):\n    return n + 1\nendfunction\n"
+                               "function apply(fn, x):\n    return fn(x)\nendfunction\n"
+                               "return apply(inc, 4)"), "5");
+
+    /* An unassigned local of the same name falls through to the global function */
+    ASSERT_VALUE(bsTestExecute("function f(c):\n    if c:\n        mathAbs = 1\n    endif\n"
+                               "    return mathAbs(-4)\nendfunction\nreturn f(false)"), "4");
+
     /* Function-local variables shadow globals but assignments stay local */
     ASSERT_VALUE(bsTestExecute("x = 1\nfunction f():\n    x = 2\n    return x\nendfunction\n"
                                "return [f(), x]"), "[2,1]");
@@ -344,6 +362,36 @@ TEST(runtime_evaluate_expression)
     ASSERT_VALUE(bsEvaluateExpression(expr, options, &scope, false), "3");
     bsRelease(locals);
     bsExprFree(expr);
+
+    /* A function value in the locals object */
+    bsLibraryGlobals(options->globals);
+    expr = bsParseExpression("f(-3)", 5, 0, NULL, false, NULL);
+    bsScopeInit(&scope);
+    locals = bsObjectNew();
+    bsObjectSet(locals, "f", bsRetain(bsObjectGet(options->globals, "mathAbs")));
+    scope.object = locals;
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, &scope, false), "3");
+    bsRelease(locals);
+    bsExprFree(expr);
+
+    /* A locals object that does not contain the function falls through to globals */
+    expr = bsParseExpression("mathAbs(-5)", 11, 0, NULL, false, NULL);
+    bsScopeInit(&scope);
+    locals = bsObjectNew();
+    bsObjectSet(locals, "other", bsNumber(1));
+    scope.object = locals;
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, &scope, false), "5");
+    bsRelease(locals);
+    bsExprFree(expr);
+
+    /* A function call with no globals object */
+    expr = bsParseExpression("mathAbs(-1)", 11, 0, NULL, false, NULL);
+    BSValue savedGlobals = options->globals;
+    options->globals = bsNull();
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, NULL, false), "null");
+    options->globals = savedGlobals;
+    bsExprFree(expr);
+
     bsOptionsFree(options);
 }
 

@@ -1121,10 +1121,11 @@ static BSValue bsFnObjectGet(const BSValue *args, size_t argCount, BSOptions *op
     if (!bsArgsValidate(objectGetArgs, 3, args, argCount, values, options, "objectGet")) {
         return bsRetain(defaultValue);
     }
-    if (!bsObjectHasString(values[0], values[1])) {
+    BSValue found;
+    if (!bsObjectLookup(values[0], bsStringData(values[1]), bsStringSize(values[1]), &found)) {
         return bsRetain(values[2]);
     }
-    return bsRetain(bsObjectGetString(values[0], values[1]));
+    return bsRetain(found);
 }
 
 

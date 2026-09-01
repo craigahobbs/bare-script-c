@@ -687,6 +687,7 @@ BSValue bsObjectNew(void)
     BSObject *object = bsAlloc(sizeof(BSObject));
     object->refcount = 1;
     object->count = 0;
+    object->generation = 0;
     object->root = NULL;
     object->insertHead = NULL;
     object->insertTail = NULL;
@@ -775,6 +776,7 @@ static BSObjectNode *bsObjectInsert(BSObjectNode *node, BSValue key, BSValue ite
         object->insertTail = created;
 
         object->count++;
+        object->generation++;
         return created;
     }
 
@@ -782,6 +784,7 @@ static BSObjectNode *bsObjectInsert(BSObjectNode *node, BSValue key, BSValue ite
     if (compare == 0) {
         bsRelease(node->value);
         node->value = item;
+        object->generation++;
         return node;
     }
     if (compare > 0) {
@@ -844,6 +847,7 @@ static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t 
         bsRelease(node->value);
         free(node);
         object->count--;
+        object->generation++;
         *removed = true;
         return NULL;
     }
@@ -886,23 +890,31 @@ void bsObjectSet(BSValue value, const char *key, BSValue item)
 }
 
 
+bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out)
+{
+    if (object.type != BS_OBJECT) {
+        return false;
+    }
+    BSObjectNode *node = bsObjectFind(object.u.object->root, key, size);
+    if (node == NULL) {
+        return false;
+    }
+    *out = node->value;
+    return true;
+}
+
+
 BSValue bsObjectGetString(BSValue value, BSValue key)
 {
-    if (value.type != BS_OBJECT) {
-        return bsNull();
-    }
-    BSObjectNode *node = bsObjectFind(value.u.object->root, bsStringData(key), bsStringSize(key));
-    return node != NULL ? node->value : bsNull();
+    BSValue found;
+    return bsObjectLookup(value, bsStringData(key), bsStringSize(key), &found) ? found : bsNull();
 }
 
 
 BSValue bsObjectGet(BSValue value, const char *key)
 {
-    if (value.type != BS_OBJECT) {
-        return bsNull();
-    }
-    BSObjectNode *node = bsObjectFind(value.u.object->root, key, strlen(key));
-    return node != NULL ? node->value : bsNull();
+    BSValue found;
+    return bsObjectLookup(value, key, strlen(key), &found) ? found : bsNull();
 }
 
 

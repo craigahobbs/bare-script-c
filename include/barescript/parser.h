@@ -103,6 +103,13 @@ struct BSExpr {
             bool isIf;                /* the built-in "if" function */
             BSExpr **args;
             size_t argCount;
+            /*
+             * Call-site cache of the last globals lookup. Valid while cachedObject still is the
+             * globals object and cachedGen matches its mutation generation. A borrowed value.
+             */
+            BSValue cached;
+            uint32_t cachedGen;
+            BSObject *cachedObject;
         } function;
         struct {
             BSBinaryOp op;
