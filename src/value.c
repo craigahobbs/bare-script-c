@@ -538,9 +538,36 @@ BSValue bsSBToValue(BSStringBuilder *sb)
  */
 
 
+static BSArray *bsArrayPool;
+static unsigned bsArrayPoolCount;
+#define BS_ARRAY_POOL_MAX 1024
+
+static BSArray *bsArrayAlloc(void)
+{
+    if (bsArrayPool != NULL) {
+        BSArray *array = bsArrayPool;
+        bsArrayPool = (BSArray *) array->values;
+        bsArrayPoolCount--;
+        return array;
+    }
+    return bsAlloc(sizeof(BSArray));
+}
+
+static void bsArrayRecycle(BSArray *array)
+{
+    if (bsArrayPoolCount >= BS_ARRAY_POOL_MAX) {
+        free(array);
+        return;
+    }
+    array->values = (BSValue *) bsArrayPool;
+    bsArrayPool = array;
+    bsArrayPoolCount++;
+}
+
+
 BSValue bsArrayNewCapacity(size_t capacity)
 {
-    BSArray *array = bsAlloc(sizeof(BSArray));
+    BSArray *array = bsArrayAlloc();
     array->refcount = 1;
     array->count = 0;
     array->capacity = capacity;
@@ -682,9 +709,36 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
  */
 
 
+static BSObject *bsObjectPool;
+static unsigned bsObjectPoolCount;
+#define BS_OBJECT_POOL_MAX 1024
+
+static BSObject *bsObjectAlloc(void)
+{
+    if (bsObjectPool != NULL) {
+        BSObject *object = bsObjectPool;
+        bsObjectPool = (BSObject *) object->insertHead;
+        bsObjectPoolCount--;
+        return object;
+    }
+    return bsAlloc(sizeof(BSObject));
+}
+
+static void bsObjectRecycle(BSObject *object)
+{
+    if (bsObjectPoolCount >= BS_OBJECT_POOL_MAX) {
+        free(object);
+        return;
+    }
+    object->insertHead = (BSObjectNode *) bsObjectPool;
+    bsObjectPool = object;
+    bsObjectPoolCount++;
+}
+
+
 BSValue bsObjectNew(void)
 {
-    BSObject *object = bsAlloc(sizeof(BSObject));
+    BSObject *object = bsObjectAlloc();
     object->refcount = 1;
     object->count = 0;
     object->generation = 0;
@@ -1139,13 +1193,13 @@ void bsRelease(BSValue value)
             bsRelease(array->values[ix]);
         }
         free(array->values);
-        free(array);
+        bsArrayRecycle(array);
         break;
     }
     case BS_OBJECT: {
         BSObject *object = value.u.object;
         bsObjectNodeFree(object->root);
-        free(object);
+        bsObjectRecycle(object);
         break;
     }
     default: {
