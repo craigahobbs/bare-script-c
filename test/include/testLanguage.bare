@@ -1,0 +1,288 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+# BareScript language tests - statements, expressions, and scoping
+
+
+function testLanguageArithmetic():
+    unittestEqual(1 + 2, 3)
+    unittestEqual(5 - 3, 2)
+    unittestEqual(2 * 3, 6)
+    unittestEqual(7 / 2, 3.5)
+    unittestEqual(7 % 2, 1)
+    unittestEqual(2 ** 3 ** 2, 64)
+    unittestEqual(-2 ** 2, 4)
+    unittestEqual(0.5 * (2 + 4), 3)
+    unittestEqual(1 / 0, null)
+    unittestEqual(1e308 * 10, null)
+endfunction
+unittestRunTest('testLanguageArithmetic')
+
+
+function testLanguageStrings():
+    unittestEqual('abc' + 'def', 'abcdef')
+    unittestEqual('n=' + 5, 'n=5')
+    unittestEqual(5 + '=n', '5=n')
+    unittestEqual('a' + null, 'anull')
+    unittestEqual('a' + [1, 2], 'a[1,2]')
+    unittestEqual('that\'s a "quote"', "that's a \"quote\"")
+    unittestEqual('Line 1\nLine 2', stringSlice('Line 1', 0, 6) + stringFromCharCode(10) + 'Line 2')
+    unittestEqual('Unicode: ABC', 'Unicode: ABC')
+    unittestEqual('Tab\tseparated', 'Tab' + stringFromCharCode(9) + 'separated')
+endfunction
+unittestRunTest('testLanguageStrings')
+
+
+function testLanguageNumbers():
+    unittestEqual(0xFF, 255)
+    unittestEqual(0x1A, 26)
+    unittestEqual(1.5e10, 15000000000)
+    unittestEqual(3e-5, 0.00003)
+    unittestEqual(-2.5, 0 - 2.5)
+    unittestEqual(stringNew(1e21), '1e+21')
+    unittestEqual(stringNew(1e-7), '1e-7')
+    unittestEqual(stringNew(0.1 + 0.2), '0.30000000000000004')
+endfunction
+unittestRunTest('testLanguageNumbers')
+
+
+function testLanguageBitwise():
+    unittestEqual(5 & 3, 1)
+    unittestEqual(5 | 3, 7)
+    unittestEqual(5 ^ 3, 6)
+    unittestEqual(1 << 4, 16)
+    unittestEqual(-16 >> 2, -4)
+    unittestEqual(~5, -6)
+    unittestEqual(1.5 & 1, null)
+endfunction
+unittestRunTest('testLanguageBitwise')
+
+
+function testLanguageTruthiness():
+    unittestFalse(null)
+    unittestFalse(false)
+    unittestFalse(0)
+    unittestFalse('')
+    unittestFalse([])
+    unittestTrue({})
+    unittestTrue('a')
+    unittestTrue([0])
+    unittestTrue(1)
+endfunction
+unittestRunTest('testLanguageTruthiness')
+
+
+function testLanguageComparison():
+    unittestTrue([1, [2, 3]] == [1, [2, 3]])
+    unittestTrue({'b': 2, 'a': 1} == {'a': 1, 'b': 2})
+    unittestTrue(null < 1)
+    unittestTrue(1 < 'a')
+    unittestTrue([1] < [1, 2])
+    unittestEqual(systemCompare('a', 'z'), -1)
+    unittestEqual(systemCompare('z', 'a'), 1)
+    unittestEqual(systemCompare(1, 1), 0)
+endfunction
+unittestRunTest('testLanguageComparison')
+
+
+function testLanguageLogical():
+    unittestEqual(0 && 1, 0)
+    unittestEqual(1 && 2, 2)
+    unittestEqual(0 || 3, 3)
+    unittestEqual(4 || 5, 4)
+    unittestEqual(!0, true)
+    unittestEqual(!'a', false)
+
+    # Short circuiting does not evaluate the right operand
+    unittestEqual(false && undefinedFunction(), false)
+    unittestEqual(true || undefinedFunction(), true)
+endfunction
+unittestRunTest('testLanguageLogical')
+
+
+function testLanguageIfThen():
+    values = []
+    for value in [-1, 0, 1]:
+        if value < 0:
+            arrayPush(values, 'neg')
+        elif value > 0:
+            arrayPush(values, 'pos')
+        else:
+            arrayPush(values, 'zero')
+        endif
+    endfor
+    unittestEqual(values, ['neg', 'zero', 'pos'])
+endfunction
+unittestRunTest('testLanguageIfThen')
+
+
+function testLanguageWhileDo():
+    i = 0
+    sum = 0
+    while i < 10:
+        sum = sum + i
+        i = i + 1
+    endwhile
+    unittestEqual(sum, 45)
+
+    # Break and continue
+    i = 0
+    while true:
+        i = i + 1
+        if i < 5:
+            continue
+        endif
+        break
+    endwhile
+    unittestEqual(i, 5)
+endfunction
+unittestRunTest('testLanguageWhileDo')
+
+
+function testLanguageForEach():
+    sum = 0
+    for value in [1, 2, 3]:
+        sum = sum + value
+    endfor
+    unittestEqual(sum, 6)
+
+    sum = 0
+    for value, ixValue in [1, 2, 3]:
+        sum = sum + ixValue * value
+    endfor
+    unittestEqual(sum, 8)
+
+    # Iterating a non-array is a no-op, and the loop variables remain set
+    count = 0
+    for value in 'not an array':
+        count = count + 1
+    endfor
+    unittestEqual(count, 0)
+
+    # The array and its length are evaluated once
+    values = [1, 2]
+    count = 0
+    for value in values:
+        count = count + 1
+        arrayPush(values, 9)
+    endfor
+    unittestEqual(count, 2)
+endfunction
+unittestRunTest('testLanguageForEach')
+
+
+function testLanguageJumpLabel():
+    values = [1, 2, 3, 5, 7]
+    sum = 0
+    ixValue = 0
+    valueLoop:
+        jumpif (ixValue >= arrayLength(values)) valueLoopDone
+        sum = sum + arrayGet(values, ixValue)
+        ixValue = ixValue + 1
+    jump valueLoop
+    valueLoopDone:
+    unittestEqual(sum, 18)
+endfunction
+unittestRunTest('testLanguageJumpLabel')
+
+
+function testLanguageFunctionArgs(a, b):
+    return [a, b]
+endfunction
+
+function testLanguageVarArgs(label, values...):
+    return label + ': ' + arrayJoin(values, ', ')
+endfunction
+
+function testLanguageFunctions():
+    unittestEqual(testLanguageFunctionArgs(1, 2), [1, 2])
+    unittestEqual(testLanguageFunctionArgs(1), [1, null])
+    unittestEqual(testLanguageFunctionArgs(), [null, null])
+    unittestEqual(testLanguageVarArgs('sizes', 1, 2, 3), 'sizes: 1, 2, 3')
+    unittestEqual(testLanguageVarArgs('none'), 'none: ')
+
+    # Functions are first-class values
+    fn = testLanguageFunctionArgs
+    unittestEqual(fn(3, 4), [3, 4])
+    unittestEqual(systemType(fn), 'function')
+
+    # systemPartial
+    addTen = systemPartial(testLanguageFunctionArgs, 10)
+    unittestEqual(addTen(5), [10, 5])
+endfunction
+unittestRunTest('testLanguageFunctions')
+
+
+testLanguageGlobal = 'global'
+
+function testLanguageScopeHelper():
+    testLanguageGlobal = 'local'
+    return testLanguageGlobal
+endfunction
+
+function testLanguageScopeGlobalSet():
+    systemGlobalSet('testLanguageGlobal', 'updated')
+    return systemGlobalGet('testLanguageGlobal')
+endfunction
+
+function testLanguageScope():
+    # An assignment inside a function creates a local, leaving the global alone
+    unittestEqual(testLanguageScopeHelper(), 'local')
+    unittestEqual(testLanguageGlobal, 'global')
+
+    # systemGlobalSet updates the global
+    unittestEqual(testLanguageScopeGlobalSet(), 'updated')
+    unittestEqual(testLanguageGlobal, 'updated')
+    systemGlobalSet('testLanguageGlobal', 'global')
+
+    # An undefined variable is null
+    unittestEqual(undefinedVariableName, null)
+endfunction
+unittestRunTest('testLanguageScope')
+
+
+function testLanguageRecursion():
+    return testLanguageFactorial(10)
+endfunction
+
+function testLanguageFactorial(n):
+    return if(n <= 1, 1, n * testLanguageFactorial(n - 1))
+endfunction
+
+function testLanguageBuiltinIf():
+    unittestEqual(testLanguageRecursion(), 3628800)
+
+    # Only the selected branch is evaluated
+    unittestEqual(if(false, undefinedFunction(), 'safe'), 'safe')
+    unittestEqual(if(true, 'safe', undefinedFunction()), 'safe')
+    unittestEqual(if(true), null)
+endfunction
+unittestRunTest('testLanguageBuiltinIf')
+
+
+function testLanguageMultiline():
+    colors = [ \
+        'red', \
+        'green', \
+        'blue' \
+    ]
+    unittestEqual(arrayJoin(colors, ', '), 'red, green, blue')
+endfunction
+unittestRunTest('testLanguageMultiline')
+
+
+function testLanguageLiterals():
+    unittestEqual({'name': 'John', 'age': 30}, objectNew('age', 30, 'name', 'John'))
+    unittestEqual([1, 2, 3], arrayNew(1, 2, 3))
+    unittestEqual({'values': [1, 2], 'meta': {'count': 2}}, \
+        objectNew('meta', objectNew('count', 2), 'values', arrayNew(1, 2)))
+
+    # Computed object keys
+    key = 'computed'
+    unittestEqual(objectKeys({key: 1}), ['computed'])
+
+    # Special variables cannot be overridden
+    null = 1
+    unittestEqual(null, null)
+endfunction
+unittestRunTest('testLanguageLiterals')

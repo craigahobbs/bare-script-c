@@ -1,0 +1,4 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+testIncludeNestedGlobal = 'from the nested include'

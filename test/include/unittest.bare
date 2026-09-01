@@ -1,0 +1,88 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+# A self-contained BareScript unit test harness
+#
+# The bundled include library is not part of the C runtime, so the language-level tests carry a
+# minimal harness of their own. It reports through systemLog and returns a non-zero status code
+# when any test fails.
+
+
+unittestTests = []
+unittestFailures = []
+unittestCurrent = null
+unittestAssertions = 0
+
+
+# $function: unittestRunTest
+# $doc: Run a test function by name
+function unittestRunTest(testName):
+    testFn = systemGlobalGet(testName)
+    if systemType(testFn) != 'function':
+        systemLog('ERROR: unknown test "' + testName + '"')
+        arrayPush(unittestFailures, testName)
+        return
+    endif
+    arrayPush(unittestTests, testName)
+    systemGlobalSet('unittestCurrent', testName)
+    testFn()
+endfunction
+
+
+# $function: unittestFail
+# $doc: Record a test failure
+function unittestFail(message):
+    systemLog('  FAIL ' + unittestCurrent + ': ' + message)
+    if arrayIndexOf(unittestFailures, unittestCurrent) < 0:
+        arrayPush(unittestFailures, unittestCurrent)
+    endif
+endfunction
+
+
+# $function: unittestEqual
+# $doc: Assert that two values are deeply equal
+function unittestEqual(actual, expected):
+    systemGlobalSet('unittestAssertions', unittestAssertions + 1)
+    if systemCompare(actual, expected) != 0:
+        unittestFail('expected ' + jsonStringify(expected) + ', actual ' + jsonStringify(actual))
+    endif
+endfunction
+
+
+# $function: unittestNotEqual
+# $doc: Assert that two values are not deeply equal
+function unittestNotEqual(actual, expected):
+    systemGlobalSet('unittestAssertions', unittestAssertions + 1)
+    if systemCompare(actual, expected) == 0:
+        unittestFail('expected not ' + jsonStringify(expected))
+    endif
+endfunction
+
+
+# $function: unittestTrue
+# $doc: Assert that a value is true
+function unittestTrue(actual):
+    unittestEqual(systemBoolean(actual), true)
+endfunction
+
+
+# $function: unittestFalse
+# $doc: Assert that a value is false
+function unittestFalse(actual):
+    unittestEqual(systemBoolean(actual), false)
+endfunction
+
+
+# $function: unittestReport
+# $doc: Report the test results; returns 1 if any test failed
+function unittestReport(title):
+    testCount = arrayLength(unittestTests)
+    failCount = arrayLength(unittestFailures)
+    systemLog(title + ': ' + testCount + ' tests, ' + unittestAssertions + ' assertions, ' + \
+        failCount + ' failures')
+    if failCount != 0:
+        systemLog('Failed tests: ' + arrayJoin(unittestFailures, ', '))
+        return 1
+    endif
+    return 0
+endfunction

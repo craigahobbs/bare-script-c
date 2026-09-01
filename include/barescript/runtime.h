@@ -1,0 +1,188 @@
+/* Licensed under the MIT License
+   https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE */
+
+/*
+ * The BareScript runtime
+ */
+
+#ifndef BARESCRIPT_RUNTIME_H
+#define BARESCRIPT_RUNTIME_H
+
+#include "parser.h"
+#include "value.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
+/* The default maximum number of statements executed by bsExecuteScript */
+#define BS_MAX_STATEMENTS_DEFAULT 1000000000
+
+/* The coverage configuration global variable name */
+#define BS_GLOBAL_COVERAGE "__barescriptCoverage"
+
+/* The includes-loaded global variable name */
+#define BS_GLOBAL_INCLUDES "__barescriptIncludes"
+
+
+/*
+ * A fetch request
+ */
+typedef struct BSFetchRequest {
+    const char *url;
+    const char *body;  /* the request body, or NULL for a GET request */
+    size_t bodySize;
+    BSValue headers;   /* an object of string header values, or a null value */
+} BSFetchRequest;
+
+/*
+ * The fetch function signature
+ *
+ * Returns the response text as a NUL-terminated, malloc-allocated buffer that the caller frees,
+ * or NULL if the fetch failed. If "responseSize" is non-NULL it is set to the response size.
+ */
+typedef char *(*BSFetchFn)(const BSFetchRequest *request, size_t *responseSize, void *data);
+
+/* The log function signature */
+typedef void (*BSLogFn)(const char *text, void *data);
+
+/*
+ * The URL function signature - resolves an include or fetch URL relative to the current script
+ *
+ * Returns the resolved URL as a NUL-terminated, malloc-allocated buffer that the caller frees.
+ */
+typedef char *(*BSUrlFn)(const char *url, void *data);
+
+
+/*
+ * The script execution options
+ *
+ * Create with bsOptionsNew and destroy with bsOptionsFree. The options own the globals object.
+ */
+struct BSOptions {
+    BSValue globals;      /* the global variables object */
+    BSFetchFn fetchFn;
+    void *fetchData;
+    BSLogFn logFn;
+    void *logData;
+    BSUrlFn urlFn;
+    void *urlData;
+    void (*urlDataFree)(void *data);
+    bool debug;
+    int64_t maxStatements;
+    int64_t statementCount;
+
+    /* The pending runtime error, or a null value. Set with bsErrorSet. */
+    BSValue error;
+
+    /*
+     * The pending library function argument error, or a null value
+     *
+     * A library function reports an invalid argument by setting this and returning its documented
+     * error value. The expression evaluator logs it - with the call site's script name, line
+     * number, and function name - when debug logging is on, then clears it.
+     */
+    BSValue argsError;
+
+    /* The expression evaluation recursion depth guard */
+    int depth;
+    int depthMax;
+};
+
+
+BSOptions *bsOptionsNew(void);
+void bsOptionsFree(BSOptions *options);
+
+/* Set the pending runtime error, which halts script execution */
+void bsErrorSet(BSOptions *options, const char *format, ...);
+
+/* Set the pending runtime error, prefixed with a script statement's location */
+void bsErrorSetStatement(BSOptions *options, const BSScript *script, const BSStatement *statement,
+                         const char *format, ...);
+
+/* Get the pending runtime error message, or NULL if there is none */
+const char *bsErrorGet(const BSOptions *options);
+
+/* Clear the pending runtime error */
+void bsErrorClear(BSOptions *options);
+
+/* Log a message */
+void bsLog(BSOptions *options, const char *format, ...);
+
+
+/*
+ * Execute a parsed script. Returns the script result as an owned value. On a runtime error the
+ * result is a null value and bsErrorGet returns the error message.
+ */
+BSValue bsExecuteScript(BSScript *script, BSOptions *options);
+
+
+/*
+ * The expression evaluation scope
+ *
+ * A compiled function body uses the "slots" array, indexed by the slot numbers the parser
+ * resolved. An expression evaluated against a caller-supplied locals object uses "object".
+ * A slot holding the internal unset marker falls through to the globals object, matching the
+ * reference implementation's "name not in locals" behavior.
+ */
+typedef struct BSScope {
+    BSValue *slots;
+    size_t slotCount;
+    BSValue object;
+} BSScope;
+
+/* Initialize an empty scope - the global scope */
+void bsScopeInit(BSScope *scope);
+
+
+/*
+ * Evaluate an expression. "scope" may be NULL for the global scope. If "builtins" is true, the
+ * built-in expression function aliases (min, max, len, ...) are in scope.
+ */
+BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins);
+
+
+/*
+ * Evaluate an expression model object - the JSON "Expression" model the reference implementations
+ * use. Returns an owned value.
+ */
+BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue locals, bool builtins);
+
+
+/*
+ * Model conversion
+ */
+
+/* Convert a parsed script to its JSON "BareScript" model - returns an owned object value */
+BSValue bsScriptToModel(const BSScript *script);
+
+/* Convert an expression to its JSON "Expression" model - returns an owned object value */
+BSValue bsExprToModel(const BSExpr *expr);
+
+/*
+ * Convert a JSON "Expression" model to a compiled expression. Returns NULL if the model is
+ * invalid; free the result with bsExprFree.
+ */
+BSExpr *bsExprFromModel(BSValue model);
+
+
+/*
+ * The system include library
+ *
+ * System includes - "include <name.bare>" - resolve against a registry of named scripts, then
+ * against the registered search path directories. Both are empty unless the host adds to them, so
+ * a system include fails by default. The command-line interface adds every directory in the
+ * BARESCRIPT_INCLUDE_PATH environment variable to the search path.
+ */
+void bsSystemIncludeRegister(const char *name, const char *text);
+void bsSystemIncludePath(const char *directory);
+const char *bsSystemIncludeGet(const char *name);
+void bsSystemIncludeClear(void);
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

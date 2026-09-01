@@ -1,0 +1,36 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+# Include statement tests
+
+include 'testIncludeLib.bare'
+include 'testIncludeLib.bare'
+
+
+function testIncludeStatement():
+    # The included file's globals and functions are available
+    unittestEqual(testIncludeLibGlobal, 'from the include')
+    unittestEqual(testIncludeLibConcat('abc', 'def'), 'abcdef')
+
+    # A nested include resolves relative to its includer
+    unittestEqual(testIncludeNestedGlobal, 'from the nested include')
+
+    # Including the same file twice evaluates its top-level statements once
+    unittestEqual(testIncludeLibCounter, 1)
+endfunction
+unittestRunTest('testIncludeStatement')
+
+
+# Declared async so the same test file also runs under the asynchronous JavaScript runtime
+async function testIncludeFetch():
+    # systemFetch reads files relative to the running script
+    text = systemFetch('testIncludeLib.bare')
+    unittestTrue(stringIndexOf(text, 'testIncludeLibGlobal') >= 0)
+    unittestEqual(systemFetch('no-such-file.bare'), null)
+
+    # An array of URLs fetches in order
+    responses = systemFetch(['testIncludeLib.bare', 'no-such-file.bare'])
+    unittestEqual(arrayLength(responses), 2)
+    unittestEqual(arrayGet(responses, 1), null)
+endfunction
+unittestRunTest('testIncludeFetch')

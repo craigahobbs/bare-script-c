@@ -1,0 +1,12 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+include 'testIncludeNested.bare'
+
+testIncludeLibGlobal = 'from the include'
+testIncludeLibCounter = systemGlobalGet('testIncludeLibCounter', 0) + 1
+
+
+function testIncludeLibConcat(a, b):
+    return a + b
+endfunction

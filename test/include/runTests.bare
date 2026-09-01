@@ -1,0 +1,11 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+# The BareScript language test suite runner
+
+include 'unittest.bare'
+include 'testLanguage.bare'
+include 'testLibrary.bare'
+include 'testInclude.bare'
+
+return unittestReport('BareScript language tests')

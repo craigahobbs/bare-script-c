@@ -1,0 +1,182 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+# The BareScript performance suite
+#
+# Each test is written in plain BareScript with no include library dependencies, so it runs
+# unchanged on the JavaScript, Python, and C runtimes. Output is CSV: language,test,runs,timeMs
+
+
+# The performance tests and their iteration counts
+perfTests = { \
+    'mandelbrot': 1, \
+    'arraySort': 20, \
+    'objectTree': 20, \
+    'stringBuild': 20, \
+    'jsonRoundTrip': 50, \
+    'regexMatch': 50, \
+    'functionCall': 20 \
+}
+
+
+function main():
+    language = systemGlobalGet('vLanguage', 'BareScript')
+    testArg = systemGlobalGet('vTest')
+    for test in if(testArg != null, [testArg], objectKeys(perfTests)):
+        runs = objectGet(perfTests, test)
+        if runs == null:
+            systemLog('Unknown test "' + test + '"')
+            return 1
+        endif
+        systemLog(language + ',' + test + ',' + runs + ',' + perfRun(test, runs))
+    endfor
+    return 0
+endfunction
+
+
+function perfRun(test, iterations):
+    timeBegin = datetimeNow()
+    ix = 0
+    while ix < iterations:
+        if test == 'mandelbrot':
+            perfMandelbrot(120, 80, -0.75, 0.1, 0.05, 60)
+        elif test == 'arraySort':
+            perfArraySort(2000)
+        elif test == 'objectTree':
+            perfObjectTree(2000)
+        elif test == 'stringBuild':
+            perfStringBuild(2000)
+        elif test == 'jsonRoundTrip':
+            perfJSONRoundTrip(200)
+        elif test == 'regexMatch':
+            perfRegexMatch(200)
+        else:
+            perfFunctionCall(20000)
+        endif
+        ix = ix + 1
+    endwhile
+    return datetimeNow() - timeBegin
+endfunction
+
+
+# Compute the "seahorse valley", a computationally dense region of the Mandelbrot set boundary
+function perfMandelbrot(width, height, centerX, centerY, size, maxIterations):
+    total = 0
+    xMin = centerX - size
+    yMin = centerY - size
+    xStep = 2 * size / width
+    yStep = 2 * size / height
+    iy = 0
+    while iy < height:
+        y0 = yMin + iy * yStep
+        ix = 0
+        while ix < width:
+            x0 = xMin + ix * xStep
+            x = 0
+            y = 0
+            iteration = 0
+            while x * x + y * y <= 4 && iteration < maxIterations:
+                xTemp = x * x - y * y + x0
+                y = 2 * x * y + y0
+                x = xTemp
+                iteration = iteration + 1
+            endwhile
+            total = total + iteration
+            ix = ix + 1
+        endwhile
+        iy = iy + 1
+    endwhile
+    return total
+endfunction
+
+
+function perfArraySortCompare(a, b):
+    return a - b
+endfunction
+
+
+function perfArraySort(count):
+    values = []
+    ix = 0
+    while ix < count:
+        arrayPush(values, (ix * 7919) % count)
+        ix = ix + 1
+    endwhile
+    arraySort(values)
+    arraySort(values, perfArraySortCompare)
+    return arrayLength(values)
+endfunction
+
+
+function perfObjectTree(count):
+    object = {}
+    ix = 0
+    while ix < count:
+        objectSet(object, 'key' + ((ix * 7919) % count), ix)
+        ix = ix + 1
+    endwhile
+    total = 0
+    ix = 0
+    while ix < count:
+        total = total + objectGet(object, 'key' + ix, 0)
+        ix = ix + 1
+    endwhile
+    return total + arrayLength(objectKeys(object))
+endfunction
+
+
+function perfStringBuild(count):
+    parts = []
+    ix = 0
+    while ix < count:
+        arrayPush(parts, 'item-' + ix)
+        ix = ix + 1
+    endwhile
+    text = arrayJoin(parts, ', ')
+    return stringLength(stringUpper(text))
+endfunction
+
+
+function perfJSONRoundTrip(count):
+    records = []
+    ix = 0
+    while ix < count:
+        arrayPush(records, {'id': ix, 'name': 'record-' + ix, 'tags': ['a', 'b'], 'active': true})
+        ix = ix + 1
+    endwhile
+    return arrayLength(jsonParse(jsonStringify({'records': records})))
+endfunction
+
+
+perfRegex = regexNew('(?<key>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(?<value>[0-9]+|"[^"]*")')
+
+
+function perfRegexMatch(count):
+    lines = []
+    ix = 0
+    while ix < count:
+        arrayPush(lines, 'name' + ix + ' = "value ' + ix + '"')
+        ix = ix + 1
+    endwhile
+    text = arrayJoin(lines, '\n')
+    return arrayLength(regexMatchAll(perfRegex, text))
+endfunction
+
+
+function perfFunctionCallAdd(a, b):
+    return a + b
+endfunction
+
+
+function perfFunctionCall(count):
+    total = 0
+    ix = 0
+    while ix < count:
+        total = perfFunctionCallAdd(total, ix)
+        ix = ix + 1
+    endwhile
+    return total
+endfunction
+
+
+return main()
