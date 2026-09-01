@@ -28,6 +28,43 @@ extern const char *bsUnaryOpText[BS_UNARY_COUNT];
 void bsRegexRetain(BSValue value);
 void bsRegexRelease(BSValue value);
 
+/* Destroy a heap value whose refcount has reached zero */
+void bsReleaseDestroyed(BSValue value);
+
+#ifndef BARESCRIPT_VALUE_IMPL
+/*
+ * Fast-path retain/release for implementation files. Immediate values are a no-op the compiler
+ * can see; the public functions in value.c remain the library ABI.
+ */
+static inline BSValue bsRetainInline(BSValue value)
+{
+    if (value.type >= BS_STRING && value.type <= BS_FUNCTION) {
+        (*(int32_t *) value.u.ref)++;
+    } else if (value.type == BS_REGEX) {
+        bsRegexRetain(value);
+    }
+    return value;
+}
+
+static inline void bsReleaseInline(BSValue value)
+{
+    if (value.type == BS_REGEX) {
+        bsRegexRelease(value);
+        return;
+    }
+    if (value.type < BS_STRING || value.type > BS_FUNCTION) {
+        return;
+    }
+    if (--(*(int32_t *) value.u.ref) != 0) {
+        return;
+    }
+    bsReleaseDestroyed(value);
+}
+
+#define bsRetain bsRetainInline
+#define bsRelease bsReleaseInline
+#endif
+
 
 /*
  * The internal "unset" value

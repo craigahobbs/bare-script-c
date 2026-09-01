@@ -18,6 +18,7 @@
 #include "barescript/runtime.h"
 #include "barescript/value.h"
 
+#define BARESCRIPT_VALUE_IMPL
 #include "internal.h"
 
 
@@ -1171,18 +1172,8 @@ BSValue bsRetain(BSValue value)
 }
 
 
-void bsRelease(BSValue value)
+void bsReleaseDestroyed(BSValue value)
 {
-    if (value.type == BS_REGEX) {
-        bsRegexRelease(value);
-        return;
-    }
-    if (value.type < BS_STRING || value.type > BS_FUNCTION) {
-        return;
-    }
-    if (--(*(int32_t *) value.u.ref) != 0) {
-        return;
-    }
     switch (value.type) {
     case BS_STRING:
         free(value.u.string);
@@ -1212,6 +1203,22 @@ void bsRelease(BSValue value)
         break;
     }
     }
+}
+
+
+void bsRelease(BSValue value)
+{
+    if (value.type == BS_REGEX) {
+        bsRegexRelease(value);
+        return;
+    }
+    if (value.type < BS_STRING || value.type > BS_FUNCTION) {
+        return;
+    }
+    if (--(*(int32_t *) value.u.ref) != 0) {
+        return;
+    }
+    bsReleaseDestroyed(value);
 }
 
 
