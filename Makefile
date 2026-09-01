@@ -23,11 +23,11 @@ UNAME_S := $(shell uname -s)
 ifeq '$(UNAME_S)' 'Darwin'
     SO_EXT := dylib
     SO_LDFLAGS = -dynamiclib -install_name @rpath/lib$(LIB_NAME).$(SO_EXT)
-    RPATH_FLAGS := -Wl,-rpath,@executable_path
+    RPATH_FLAGS := -Wl,-rpath,@executable_path -Wl,-rpath,@executable_path/../lib
 else
     SO_EXT := so
     SO_LDFLAGS = -shared -Wl,-soname,lib$(LIB_NAME).$(SO_EXT)
-    RPATH_FLAGS := -Wl,-rpath,'$$ORIGIN'
+    RPATH_FLAGS := -Wl,-rpath,'$$ORIGIN' -Wl,-rpath,'$$ORIGIN/../lib'
 endif
 
 
@@ -39,6 +39,18 @@ WARN_FLAGS := -Wall -Wextra -Werror -Wno-unused-parameter -Wshadow -Wpointer-ari
 BASE_CFLAGS := -std=c11 -pedantic -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -I$(INC_DIR) $(WARN_FLAGS)
 OPT_CFLAGS ?= -O2 -g
 LIBS := -lm
+
+# Use a flag only where the toolchain accepts it - the argument must not contain a comma
+CC_SUPPORTS = $(shell echo 'int main(void){return 0;}' | \
+    $(CC) -Werror $(1) -x c - -o /dev/null > /dev/null 2>&1 && echo $(1))
+
+# Shared library code generation
+#
+# Without this, a call from one translation unit of the library to another goes through the PLT on
+# ELF targets, because the symbol could be interposed at load time - which also blocks inlining
+# across the library. Nothing here is meant to be interposed. Mach-O binds these calls directly
+# already, and Apple's clang rejects the flag, so the probe leaves it out there.
+SO_CFLAGS := -fPIC $(call CC_SUPPORTS,-fno-semantic-interposition)
 
 
 # Optional libcurl support for the HTTP fetch function
@@ -107,7 +119,7 @@ help:
 	@echo "  perf          run the performance suite"
 	@echo "  release       profile-guided optimization build in build/release"
 	@echo "  includes      regenerate the bundled include library source"
-	@echo "  install       install to \$$(PREFIX), default /usr/local"
+	@echo "  install       build the release and install it to \$$(PREFIX), default /usr/local"
 	@echo "  clean         remove the build directory"
 	@echo
 	@echo "  TEST=<name>   filter the unit tests by name substring"
@@ -153,7 +165,7 @@ compile: $(LIB_SO) $(LIB_A) $(CLI_BIN)
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(BASE_CFLAGS) $(OPT_CFLAGS) -fPIC -MMD -MP -c -o $@ $<
+	$(CC) $(BASE_CFLAGS) $(OPT_CFLAGS) $(SO_CFLAGS) -MMD -MP -c -o $@ $<
 
 $(OBJ_DIR)/test-%.o: $(TEST_DIR)/%.c
 	@mkdir -p $(dir $@)
@@ -161,7 +173,7 @@ $(OBJ_DIR)/test-%.o: $(TEST_DIR)/%.c
 
 $(LIB_SO): $(LIB_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(SO_LDFLAGS) -o $@ $^ $(LIBS)
+	$(CC) $(OPT_CFLAGS) $(SO_LDFLAGS) -o $@ $^ $(LIBS)
 
 $(LIB_A): $(LIB_OBJS)
 	@mkdir -p $(dir $@)
@@ -170,7 +182,7 @@ $(LIB_A): $(LIB_OBJS)
 
 $(CLI_BIN): $(OBJ_DIR)/main.o $(LIB_SO)
 	@mkdir -p $(dir $@)
-	$(CC) -o $@ $(OBJ_DIR)/main.o -L$(BUILD_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
+	$(CC) $(OPT_CFLAGS) -o $@ $(OBJ_DIR)/main.o -L$(BUILD_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
 
 
 #
@@ -181,11 +193,17 @@ $(CLI_BIN): $(OBJ_DIR)/main.o $(LIB_SO)
 #
 
 RELEASE_DIR := $(BUILD_DIR)/release
+RELEASE_OBJ_DIR := $(RELEASE_DIR)/obj
 PROFILE_DIR := $(BUILD_DIR)/profile
 RELEASE_CFLAGS ?= -O3 -DNDEBUG -flto
 RELEASE_LIB_SO := $(RELEASE_DIR)/lib$(LIB_NAME).$(SO_EXT)
 RELEASE_LIB_A := $(RELEASE_DIR)/lib$(LIB_NAME).a
 RELEASE_CLI := $(RELEASE_DIR)/$(CLI_NAME)
+RELEASE_A_OBJS := $(patsubst $(SRC_DIR)/%.c,$(RELEASE_OBJ_DIR)/%.o,$(LIB_SRCS))
+
+# The static library keeps the profile but drops link-time optimization, so it stays an archive of
+# ordinary object files that any linker consumes rather than one of compiler intermediate code
+RELEASE_A_CFLAGS := $(filter-out -flto -flto=%,$(RELEASE_CFLAGS))
 
 ifneq '$(filter-out 0,$(CC_IS_CLANG))' ''
     PROFILE_DATA := $(PROFILE_DIR)/barescript.profdata
@@ -201,7 +219,7 @@ else
 endif
 
 .PHONY: release
-release: $(RELEASE_CLI)
+release: $(RELEASE_CLI) $(RELEASE_LIB_A)
 	@echo
 	@echo "Release build: $(RELEASE_CLI)"
 
@@ -219,12 +237,22 @@ $(PROFILE_DATA): $(LIB_SRCS) $(SRC_DIR)/main.c $(PERF_DIR)/train.bare $(PERF_DIR
 	$(PROFILE_MERGE)
 
 # Stage 3 - rebuild with the profile
-$(RELEASE_CLI): $(PROFILE_DATA)
+$(RELEASE_LIB_SO): $(PROFILE_DATA)
 	@mkdir -p $(RELEASE_DIR)
-	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -fPIC $(SO_LDFLAGS) \
-	    -o $(RELEASE_LIB_SO) $(LIB_SRCS) $(LIBS)
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) $(SO_CFLAGS) $(SO_LDFLAGS) \
+	    -o $@ $(LIB_SRCS) $(LIBS)
+
+$(RELEASE_CLI): $(RELEASE_LIB_SO)
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -o $@ $(SRC_DIR)/main.c \
 	    -L$(RELEASE_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
+
+$(RELEASE_OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(PROFILE_DATA)
+	@mkdir -p $(dir $@)
+	$(CC) $(BASE_CFLAGS) $(RELEASE_A_CFLAGS) $(PROFILE_USE) $(SO_CFLAGS) -c -o $@ $<
+
+$(RELEASE_LIB_A): $(RELEASE_A_OBJS)
+	rm -f $@
+	ar rcs $@ $^
 
 
 #
@@ -362,12 +390,13 @@ $(PERF_NATIVE): $(PERF_DIR)/test.c
 
 PREFIX ?= /usr/local
 
+# Install the release build - the development build is a third slower and carries debug symbols
 .PHONY: install
-install: compile
+install: release
 	install -d $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/include/barescript
-	install -m 755 $(LIB_SO) $(DESTDIR)$(PREFIX)/lib/
-	install -m 644 $(LIB_A) $(DESTDIR)$(PREFIX)/lib/
-	install -m 755 $(CLI_BIN) $(DESTDIR)$(PREFIX)/bin/
+	install -m 755 $(RELEASE_LIB_SO) $(DESTDIR)$(PREFIX)/lib/
+	install -m 644 $(RELEASE_LIB_A) $(DESTDIR)$(PREFIX)/lib/
+	install -m 755 $(RELEASE_CLI) $(DESTDIR)$(PREFIX)/bin/
 	install -m 644 $(INC_DIR)/barescript/*.h $(DESTDIR)$(PREFIX)/include/barescript/
 
 

@@ -52,19 +52,47 @@ make perf           # run the performance suite
 make release        # profile-guided optimization build in build/release
 make includes       # regenerate the bundled include library source
 make clean          # remove the build directory
-make install        # install to $(PREFIX), default /usr/local
+make install        # build the release and install it to $(PREFIX), default /usr/local
 ```
 
 ### Release Builds
 
 `make release` is a three-stage profile-guided build: compile instrumented, run a training
-workload, then recompile with the profile and link-time optimization. It is worth about 1.3x over
-the default `-O2` build.
+workload, then recompile with the profile and link-time optimization. It is worth about 1.2x over
+the default `-O2` build on the performance suite, and takes about ten seconds. `make install`
+installs it.
 
 ```sh
 make release
 ./build/release/bare script.bare
 ```
+
+The flags were chosen by measurement, over the performance suite, relative to a plain `-O2` build:
+
+| Flags                    | Mean  | Notes                                              |
+| ------------------------ | -----:| -------------------------------------------------- |
+| `-O2`                    | 1.00x | the default build                                   |
+| `-O3`                    | 1.00x | no measurable difference from `-O2` on its own      |
+| **`-Os`**                | 1.07x | **slower** - every test, no exceptions              |
+| `-Oz`                    | 1.43x | much slower                                         |
+| `-O2 -flto`              | 0.93x |                                                     |
+| PGO, `-O3`               | 0.87x |                                                     |
+| PGO, `-Os -flto`         | 0.87x | PGO does not rescue `-Os`                           |
+| **PGO, `-O3 -flto`**     | 0.82x | **the release build**                               |
+
+`-Os` is the interesting one, since trading code size for instruction cache residency often wins
+in an interpreter. It does not here: `-Os` costs 7% and `-Oz` 43%, and PGO does not close the gap.
+The dispatch loop and the value operations are small and hot enough that the inlining `-O2` and
+`-O3` do is worth more than the 11% of text section `-Os` gives back.
+
+Link-time optimization is the single largest flag-level win - 7% on its own, and still 6% on top
+of PGO - because the value system is small functions across translation unit boundaries:
+`bsRetain`, `bsRelease`, and the object treap's comparisons are called from everywhere and can
+only be inlined across the library at link time.
+
+The release static library keeps the profile but drops link-time optimization, so it stays an
+archive of ordinary object files rather than one of compiler intermediate code, which not every
+consumer's linker can read.
 
 The training workload is `perf/train.bare`. A PGO profile is only as good as the workload that
 produces it - the optimizer lays out branches and inlines call sites in the proportion the training
