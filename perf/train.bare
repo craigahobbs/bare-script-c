@@ -1,22 +1,17 @@
 # Licensed under the MIT License
 # https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
 
-# The profile-guided optimization training workload
+# The profile-guided optimization source-parse training workload
 #
-# A PGO profile is only as good as the workload that produces it: the optimizer lays out branches
-# and inlines call sites in the proportion the training run exercises them, so a lopsided workload
-# makes the release build faster on that one thing and slower on everything else. This script
-# covers the four phases a real BareScript program spends its time in, at roughly the ratio a
-# realistic mix of programs does:
+# "make release" trains on four programs. The official performance suite dominates the profile by
+# count; this script is the complement: it runs the interpreted parser over BareScript *source*
+# (the path "bare script.bare" takes), which the suite never does - the suite loads bundled JSON
+# models. Edge-count overlap with the suite is only about 20%, so this mix is load-bearing even
+# though it is the shorter run.
 #
-#   1. Parsing    - barescriptParser.bare, which is itself interpreted BareScript driving the regex
-#                   engine and the string library. This dominates short scripts and every include
-#                   of a non-bundled file, so it gets the largest share.
-#   2. Loading    - JSON decoding and model-to-runtime conversion, the path every bundled system
-#                   include takes.
-#   3. Evaluating - the statement loop and expression evaluator over numeric, string, array, and
-#                   object work, plus function calls.
-#   4. Library    - regex matching, JSON round trips, sorting, and datetime formatting.
+# Inside this script, parsing the include library sources is the bulk of the work. Loading,
+# evaluating, and the library phase exist so those paths are not absent from a hand-run of this
+# file; the Makefile also runs the suite, the language tests, and a static-analysis pass.
 #
 # Run with the instrumented command-line interface; see "make release".
 
@@ -37,8 +32,10 @@ include <unittestMock.bare>
 include <url.bare>
 
 
-# The include library scripts to parse, chosen to span the parser's grammar - long function
-# libraries, deeply nested expressions, large string literal tables, and heavy regex construction
+# Include library sources to parse, chosen to span the parser's grammar: long function
+# libraries, nested expressions, large string-literal tables, and heavy regex construction.
+# The list is a measured subset - parsing every bundled script, including barescriptParser.bare,
+# shifted regex PGO away from markdownParse and made the official suite slower.
 trainParseFiles = [ \
     'args.bare', 'barescriptLint.bare', 'data.bare', 'diff.bare', 'draw.bare', \
     'markdownHighlight.bare', 'markdownParser.bare', 'qrcode.bare', 'schemaParser.bare', 'url.bare' \
@@ -52,7 +49,7 @@ async function main():
         return 1
     endif
 
-    trainParse(includeDir)
+    trainParse(includeDir, trainParseFiles)
     trainLoad()
     trainEvaluate()
     trainLibrary()
@@ -60,10 +57,10 @@ async function main():
 endfunction
 
 
-# Phase 1 - parse the include library sources
-function trainParse(includeDir):
+# Phase 1 - parse include library sources with the interpreted parser
+function trainParse(includeDir, parseFiles):
     statements = 0
-    for file in trainParseFiles:
+    for file in parseFiles:
         text = systemFetch(includeDir + '/' + file)
         if text == null:
             systemLog('train: failed to read "' + file + '"')
@@ -203,10 +200,11 @@ function trainLibrary():
         '    optional float[] values', '    TrainEnum kind', '', 'enum TrainEnum', '    a', '    b' \
     ])
 
-    # URL encoding, JSON round trips, and datetime formatting
+    # URL encoding - both the query-string form MarkdownUp uses and the component helper
     ix = 0
     while ix < 400:
         urlEncodeComponent('a b/c?d=' + ix)
+        urlEncodeQueryString({'id': ix, 'name': 'record ' + ix, 'on': true})
         jsonParse(jsonStringify({'id': ix, 'name': 'record-' + ix, 'tags': ['a', 'b'], 'on': true}))
         datetimeISOFormat(datetimeNew(2026, 1 + ix % 12, 1 + ix % 28, ix % 24, ix % 60))
         ix = ix + 1

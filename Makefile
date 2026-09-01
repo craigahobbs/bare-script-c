@@ -228,16 +228,25 @@ release: $(RELEASE_CLI) $(RELEASE_LIB_A)
 	@echo "Release build: $(RELEASE_CLI)"
 
 # Stage 1 and 2 - build instrumented and run the training workload
-$(PROFILE_DATA): $(LIB_SRCS) $(SRC_DIR)/main.c $(PERF_DIR)/train.bare $(PERF_DIR)/test.bare
+#
+# Four programs, merged by count. The performance suite is most of the counters; train.bare is
+# the source-parse complement (the suite only loads bundled JSON models). Language tests and
+# "bare -s" are a small CLI/linter slice. %p so each process writes its own profraw, then merge.
+$(PROFILE_DATA): $(LIB_SRCS) $(SRC_DIR)/main.c $(PERF_DIR)/train.bare $(PERF_DIR)/test.bare \
+        $(TEST_DIR)/include/runTests.bare $(TEST_DIR)/include/testLibrary.bare $(INCLUDE_LIB_SRCS)
 	@rm -rf $(PROFILE_DIR) $(BUILD_DIR)/pgo
 	@mkdir -p $(PROFILE_DIR) $(BUILD_DIR)/pgo
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_GENERATE) -o $(BUILD_DIR)/pgo/$(CLI_NAME) \
 	    $(LIB_SRCS) $(SRC_DIR)/main.c $(LIBS)
-	$(BUILD_DIR)/pgo/$(CLI_NAME) $(CURDIR)/$(PERF_DIR)/train.bare \
-	    -v vIncludeDir "'$(CURDIR)/$(INCLUDE_LIB_DIR)'"
-	$(BUILD_DIR)/pgo/$(CLI_NAME) $(PERF_DIR)/test.bare > /dev/null
-	$(BUILD_DIR)/pgo/$(CLI_NAME) $(TEST_DIR)/include/runTests.bare > /dev/null
-	$(BUILD_DIR)/pgo/$(CLI_NAME) -s $(TEST_DIR)/include/testLibrary.bare > /dev/null
+	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
+	    $(BUILD_DIR)/pgo/$(CLI_NAME) $(CURDIR)/$(PERF_DIR)/train.bare \
+	        -v vIncludeDir "'$(CURDIR)/$(INCLUDE_LIB_DIR)'"
+	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
+	    $(BUILD_DIR)/pgo/$(CLI_NAME) $(PERF_DIR)/test.bare > /dev/null
+	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
+	    $(BUILD_DIR)/pgo/$(CLI_NAME) $(TEST_DIR)/include/runTests.bare > /dev/null
+	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
+	    $(BUILD_DIR)/pgo/$(CLI_NAME) -s $(TEST_DIR)/include/testLibrary.bare > /dev/null
 	$(PROFILE_MERGE)
 
 # Stage 3 - rebuild with the profile

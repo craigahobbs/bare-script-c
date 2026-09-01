@@ -94,20 +94,20 @@ The release static library keeps the profile but drops link-time optimization, s
 archive of ordinary object files rather than one of compiler intermediate code, which not every
 consumer's linker can read.
 
-The training workload is `perf/train.bare`. A PGO profile is only as good as the workload that
-produces it - the optimizer lays out branches and inlines call sites in the proportion the training
-run exercises them - so the workload deliberately spans the four phases a real program spends time
-in, at roughly the ratio a realistic mix of programs does:
+The training mix is four programs, merged by execution count. A PGO profile is only as good as the
+workload that produces it - the optimizer lays out branches and inlines call sites in the
+proportion the training run exercises them.
 
-| Phase      | What it covers                                                          |
-| ---------- | ----------------------------------------------------------------------- |
-| Parsing    | the interpreted parser driving the regex engine and string library       |
-| Loading    | JSON decoding and model-to-runtime conversion, the system include path   |
-| Evaluating | the statement loop and expression evaluator; numbers, strings, calls     |
-| Library    | regex matching, JSON round trips, sorting, datetime formatting           |
+| Program | Role |
+| ------- | ---- |
+| `perf/test.bare` | the official suite - most of the counters |
+| `perf/train.bare` | source-parse complement: the interpreted parser over include-library `.bare` files. The suite never does this; it loads bundled JSON models. This is the path `bare script.bare` takes. |
+| `test/include/runTests.bare` | a small slice of the evaluator on this project's own scripts |
+| `bare -s test/include/testLibrary.bare` | the CLI static-analysis path and the linter |
 
-The release target also trains on the performance suite, the BareScript language test suite, and a
-static analysis run, so the linter and the CLI's own paths are represented.
+`perf/train.bare` is parse-heavy on purpose. Its edge-count overlap with the suite is only about
+20%; doubling the suite in training made the suite slower, so that complementary parse mix is
+load-bearing even though it is the shorter run.
 
 `make test` and `make cover` accept a `TEST` variable that filters test cases by name substring:
 
