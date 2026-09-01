@@ -328,6 +328,9 @@ TEST(value_object)
     ASSERT_TRUE(bsObjectHas(object, "a"));
     ASSERT_FALSE(bsObjectHas(object, "z"));
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "b").u.number, 2);
+    bsObjectSet(object, "", bsNumber(0));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "").u.number, 0);
+    ASSERT_TRUE(bsObjectDelete(object, ""));
     ASSERT_INT_EQ(bsObjectGet(object, "z").type, BS_NULL);
 
     /* Objects iterate in insertion order and serialize in sorted key order */
@@ -715,6 +718,15 @@ TEST(value_object_iterate)
     count = 0;
     ASSERT_FALSE(bsObjectIterSorted(object, bsTestIterStop, &count));
     ASSERT_INT_EQ(count, 1);
+
+    /* Stop after descending a left child so the in-order walk unwinds from the left */
+    BSValue leftObject = bsObjectNew();
+    bsObjectSet(leftObject, "m", bsNumber(1));
+    bsObjectSet(leftObject, "a", bsNumber(2));
+    count = 0;
+    ASSERT_FALSE(bsObjectIterSorted(leftObject, bsTestIterStop, &count));
+    ASSERT_INT_EQ(count, 1);
+    bsRelease(leftObject);
 
     /* Non-object values iterate as empty */
     count = 0;

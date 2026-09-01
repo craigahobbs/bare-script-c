@@ -815,6 +815,23 @@ static BSObjectNode *bsObjectFind(BSObjectNode *node, const char *key, size_t si
 }
 
 
+/* Small objects are faster to scan in insertion order than to chase treap pointers */
+#define BS_OBJECT_SMALL 12
+
+static BSObjectNode *bsObjectFindKey(const BSObject *object, const char *key, size_t size)
+{
+    if (object->count <= BS_OBJECT_SMALL) {
+        for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
+            if (node->key->size == size && (size == 0 || memcmp(node->key->data, key, size) == 0)) {
+                return node;
+            }
+        }
+        return NULL;
+    }
+    return bsObjectFind(object->root, key, size);
+}
+
+
 static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t size, bool *removed,
                                     BSObject *object)
 {
@@ -895,7 +912,7 @@ bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out)
     if (object.type != BS_OBJECT) {
         return false;
     }
-    BSObjectNode *node = bsObjectFind(object.u.object->root, key, size);
+    BSObjectNode *node = bsObjectFindKey(object.u.object, key, size);
     if (node == NULL) {
         return false;
     }
@@ -921,13 +938,13 @@ BSValue bsObjectGet(BSValue value, const char *key)
 bool bsObjectHasString(BSValue value, BSValue key)
 {
     return value.type == BS_OBJECT &&
-        bsObjectFind(value.u.object->root, bsStringData(key), bsStringSize(key)) != NULL;
+        bsObjectFindKey(value.u.object, bsStringData(key), bsStringSize(key)) != NULL;
 }
 
 
 bool bsObjectHas(BSValue value, const char *key)
 {
-    return value.type == BS_OBJECT && bsObjectFind(value.u.object->root, key, strlen(key)) != NULL;
+    return value.type == BS_OBJECT && bsObjectFindKey(value.u.object, key, strlen(key)) != NULL;
 }
 
 
