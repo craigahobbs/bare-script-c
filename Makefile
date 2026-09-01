@@ -207,7 +207,11 @@ RELEASE_A_CFLAGS := $(filter-out -flto -flto=%,$(RELEASE_CFLAGS))
 
 ifneq '$(filter-out 0,$(CC_IS_CLANG))' ''
     PROFILE_DATA := $(PROFILE_DIR)/barescript.profdata
-    PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR)
+    # The evaluator's indirect calls have many targets (library functions). Clang's
+    # default of one value-profile counter per site exhausts the static pool during
+    # training: "Unable to track new values: Running out of static counters."
+    # Eight is the smallest power of two that covers the training workload.
+    PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR) -mllvm -vp-counters-per-site=8
     PROFILE_USE = -fprofile-use=$(CURDIR)/$(PROFILE_DATA) -Wno-profile-instr-unprofiled \
         -Wno-profile-instr-out-of-date
     PROFILE_MERGE = xcrun llvm-profdata merge -output=$(PROFILE_DATA) $(PROFILE_DIR)/*.profraw
