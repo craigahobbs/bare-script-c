@@ -23,8 +23,10 @@ the CLI application.
 
 - Use barescriptLint.bare to lint BareScript
 
-- Include the BareScript include library in the dynamic library for code-loading parser JSON. Use the same compression
-  scheme as well. Use BareScript in the Makefile to generate the includeSource.c (or whatever you choose to call it).
+- Include the BareScript include library in the dynamic library for code-loading parser JSON. Use the exact same
+  compression scheme. Use BareScript in the Makefile to generate the includeSource.c.
+
+- Include the BareScript include library tests and the `make test-include` target (and its sub-tests)
 
 - Provide exports for the bare-script include library stubs
 

@@ -10,6 +10,7 @@
 #ifndef BARESCRIPT_H
 #define BARESCRIPT_H
 
+#include "includeSource.h"
 #include "json.h"
 #include "library.h"
 #include "options.h"

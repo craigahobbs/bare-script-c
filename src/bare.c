@@ -22,7 +22,7 @@ const char *bsVersion(void)
 
 
 static const char *bsUsage =
-    "usage: bare [-h] [-c CODE] [-d] [-s] [-v VAR EXPR] [--version] [file ...]\n"
+    "usage: bare [-h] [-c CODE] [-d] [-s] [-x] [-v VAR EXPR] [--version] [file ...]\n"
     "\n"
     "The BareScript command-line interface\n"
     "\n"
@@ -33,7 +33,8 @@ static const char *bsUsage =
     "  -h, --help     show this help message and exit\n"
     "  -c, --code     execute the BareScript code\n"
     "  -d, --debug    enable debug mode\n"
-    "  -s, --static   perform static analysis without executing\n"
+    "  -s, --static   perform static analysis\n"
+    "  -x, --staticx  perform static analysis with execution\n"
     "  -v, --var      set a global variable to an expression value\n"
     "  --version      show the version and exit\n";
 
@@ -64,7 +65,8 @@ int bsMain(int argc, char **argv)
     const char **varExprs = bsAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(char *));
     size_t varCount = 0;
     bool debug = false;
-    bool staticOnly = false;
+    bool staticAnalysis = false;
+    bool staticExecute = false;
     int statusCode = 0;
 
     /* Parse the command-line arguments */
@@ -89,7 +91,13 @@ int bsMain(int argc, char **argv)
             continue;
         }
         if (strcmp(arg, "-s") == 0 || strcmp(arg, "--static") == 0) {
-            staticOnly = true;
+            staticAnalysis = true;
+            staticExecute = false;
+            continue;
+        }
+        if (strcmp(arg, "-x") == 0 || strcmp(arg, "--staticx") == 0) {
+            staticAnalysis = true;
+            staticExecute = true;
             continue;
         }
         if (strcmp(arg, "-c") == 0 || strcmp(arg, "--code") == 0) {
@@ -171,7 +179,7 @@ int bsMain(int argc, char **argv)
 
         /* Parse and execute each script source in order */
         size_t inlineCount = 0;
-        for (size_t ix = 0; ix < sourceCount && statusCode == 0; ix++) {
+        for (size_t ix = 0; ix < sourceCount && (statusCode == 0 || staticAnalysis); ix++) {
             char *text = NULL;
             size_t size = 0;
             char scriptNameBuffer[32];
@@ -213,35 +221,70 @@ int bsMain(int argc, char **argv)
                 break;
             }
 
-            if (staticOnly) {
-                printf("BareScript static analysis \"%s\" ... OK\n", scriptName);
-                bsScriptRelease(script);
-                continue;
+            /*
+             * Execute the script
+             *
+             * Static analysis without execution ("-s") lints the parsed script alone; static
+             * analysis with execution ("-x") executes first, so the linter sees the globals the
+             * script defined.
+             */
+            BSValue staticGlobals = bsNull();
+            bool runtimeFailed = false;
+            if (!staticAnalysis || staticExecute) {
+                char *scriptPath = sources[ix].isFile ? bsStrdup(sources[ix].value) : NULL;
+                if (options->urlDataFree != NULL) {
+                    options->urlDataFree(options->urlData);
+                }
+                options->urlFn = scriptPath != NULL ? bsUrlFileRelative : NULL;
+                options->urlData = scriptPath;
+                options->urlDataFree = scriptPath != NULL ? free : NULL;
+
+                int64_t timeBegin = bsDatetimeNow();
+                BSValue result = bsExecuteScript(script, options);
+                staticGlobals = options->globals;
+                const char *error = bsErrorGet(options);
+                if (error != NULL) {
+                    bsPrintError(error);
+                    bsErrorClear(options);
+                    statusCode = 1;
+                    runtimeFailed = true;
+                } else if (result.type == BS_NUMBER && trunc(result.u.number) == result.u.number &&
+                           result.u.number >= 0 && result.u.number <= 255) {
+                    statusCode = (int) result.u.number;
+                } else if (bsValueBoolean(result)) {
+                    statusCode = 1;
+                }
+                bsRelease(result);
+
+                /* Log the script execution time in debug mode */
+                if (debug) {
+                    printf("BareScript executed in %.1f milliseconds\n",
+                           (double) (bsDatetimeNow() - timeBegin));
+                }
             }
 
-            /* Execute the script */
-            char *scriptPath = sources[ix].isFile ? bsStrdup(sources[ix].value) : NULL;
-            if (options->urlDataFree != NULL) {
-                options->urlDataFree(options->urlData);
+            /* Run the linter - a runtime error stops the run before static analysis */
+            if (staticAnalysis && !runtimeFailed) {
+                BSValue warnings = bsLintScript(script, staticGlobals);
+                size_t warningCount = bsArrayCount(warnings);
+                if (warningCount == 0) {
+                    printf("BareScript static analysis \"%s\" ... OK\n", scriptName);
+                } else {
+                    printf("BareScript static analysis \"%s\" ... %zu warning%s:\n", scriptName,
+                           warningCount, warningCount > 1 ? "s" : "");
+                    for (size_t ixWarning = 0; ixWarning < warningCount; ixWarning++) {
+                        BSValue warning = bsValueString(bsArrayGet(warnings, ixWarning));
+                        printf("%s\n", bsStringData(warning));
+                        bsRelease(warning);
+                    }
+                    statusCode = 1;
+                }
+                bsRelease(warnings);
             }
-            options->urlFn = scriptPath != NULL ? bsUrlFileRelative : NULL;
-            options->urlData = scriptPath;
-            options->urlDataFree = scriptPath != NULL ? free : NULL;
-
-            BSValue result = bsExecuteScript(script, options);
-            const char *error = bsErrorGet(options);
-            if (error != NULL) {
-                bsPrintError(error);
-                bsErrorClear(options);
-                statusCode = 1;
-            } else if (result.type == BS_NUMBER && trunc(result.u.number) == result.u.number &&
-                       result.u.number >= 0 && result.u.number <= 255) {
-                statusCode = (int) result.u.number;
-            } else if (bsValueBoolean(result)) {
-                statusCode = 1;
-            }
-            bsRelease(result);
             bsScriptRelease(script);
+            if (runtimeFailed) {
+                break;
+            }
         }
 
         bsOptionsFree(options);
@@ -250,7 +293,9 @@ int bsMain(int argc, char **argv)
     free(sources);
     free(varNames);
     free(varExprs);
+    bsParserCleanup();
     bsSystemIncludeClear();
+    bsIncludeCleanup();
     bsLibraryCleanup();
     return statusCode;
 }

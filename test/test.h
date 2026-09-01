@@ -15,6 +15,7 @@
 #include <stddef.h>
 
 #include "barescript/barescript.h"
+#include "barescript/includeSource.h"
 
 
 typedef struct BSTestCase {

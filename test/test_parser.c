@@ -142,7 +142,7 @@ TEST(parser_expression_literals_compound)
 
     /* Without array literals, brackets are a variable name */
     ASSERT_VALUE_STRING(bsTestParseExpr("[Height (ft)]", false), "{\"variable\":\"Height (ft)\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[ a ]", false), "{\"variable\":\"a\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("[ a ]", false), "{\"variable\":\"a \"}");
     ASSERT_VALUE_STRING(bsTestParseExpr("[a\\]b]", false), "{\"variable\":\"a]b\"}");
     ASSERT_VALUE_STRING(bsTestParseExpr("[a\\\\b]", false), "{\"variable\":\"a\\\\b\"}");
 }
@@ -573,4 +573,74 @@ TEST(parser_final_coverage)
     /* A nested function definition with arguments frees its parsed argument names */
     ASSERT_VALUE_STRING(bsTestParse("function f():\n    function g(a, b):\n    endfunction\nendfunction"),
                         "test.bare:2: Nested function definition\n    function g(a, b):\n^\n");
+}
+
+
+TEST(parser_bootstrap_errors)
+{
+    /* A deeply nested expression exceeds the parser's own expression depth */
+    BSStringBuilder sb;
+    bsSBInit(&sb);
+    for (int ix = 0; ix < 600; ix++) {
+        bsSBAppendChar(&sb, '(');
+    }
+    bsSBAppendChar(&sb, '1');
+    for (int ix = 0; ix < 600; ix++) {
+        bsSBAppendChar(&sb, ')');
+    }
+    BSValue text = bsSBToValue(&sb);
+
+    /* Reported against the script being parsed, not against the parser */
+    BSParserError error;
+    memset(&error, 0, sizeof(error));
+    ASSERT_NULL(bsParseExpression(bsStringData(text), bsStringSize(text), 0, "deep.bare", false, &error));
+    ASSERT_VALUE_STRING(bsRetain(error.message), "deep.bare: Maximum expression depth exceeded\n");
+    ASSERT_VALUE_STRING(bsRetain(error.error), "Maximum expression depth exceeded");
+    bsParserErrorFree(&error);
+
+    /* Without a script name the message has no location */
+    memset(&error, 0, sizeof(error));
+    ASSERT_NULL(bsParseExpression(bsStringData(text), bsStringSize(text), 0, NULL, false, &error));
+    ASSERT_VALUE_STRING(bsRetain(error.message), "Maximum expression depth exceeded\n");
+    ASSERT_INT_EQ(error.scriptName.type, BS_NULL);
+    bsParserErrorFree(&error);
+
+    /* The error argument is optional */
+    ASSERT_NULL(bsParseExpression(bsStringData(text), bsStringSize(text), 0, NULL, false, NULL));
+    ASSERT_NULL(bsParseScript(bsStringData(text), bsStringSize(text), 1, NULL, NULL));
+    bsRelease(text);
+}
+
+
+TEST(parser_lint)
+{
+    static const char *text = "function f():\n    unused = 1\n    return 2\nendfunction\n1 + 2\n";
+    BSParserError error;
+    memset(&error, 0, sizeof(error));
+    BSScript *script = bsParseScript(text, strlen(text), 1, "lint.bare", &error);
+    ASSERT_NOT_NULL(script);
+
+    BSValue warnings = bsLintScript(script, bsNull());
+    ASSERT_TRUE(bsArrayCount(warnings) >= 2);
+    BSValue json = bsJSONEncode(warnings, 0);
+    ASSERT_TRUE(strstr(bsStringData(json), "Unused variable \\\"unused\\\"") != NULL);
+    ASSERT_TRUE(strstr(bsStringData(json), "Pointless global statement") != NULL);
+    bsRelease(json);
+    bsRelease(warnings);
+
+    /* Linting with the script's globals resolves function references */
+    BSOptions *options = bsTestOptions();
+    bsRelease(bsExecuteScript(script, options));
+    warnings = bsLintScript(script, options->globals);
+    ASSERT_TRUE(bsArrayCount(warnings) >= 1);
+    bsRelease(warnings);
+    bsOptionsFree(options);
+    bsScriptRelease(script);
+
+    /* A clean script lints without warnings */
+    static const char *clean = "function f(a):\n    return a\nendfunction\nreturn f(1)\n";
+    script = bsParseScript(clean, strlen(clean), 1, "clean.bare", &error);
+    warnings = bsLintScript(script, bsNull());
+    ASSERT_VALUE(warnings, "[]");
+    bsScriptRelease(script);
 }

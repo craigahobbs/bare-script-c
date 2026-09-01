@@ -279,8 +279,10 @@ int bsTestRun(const char *filter)
     bsTestTempClear();
     bsTestLogClear();
     bsAssign(&bsTestError, bsNull());
-    bsLibraryCleanup();
+    bsParserCleanup();
     bsSystemIncludeClear();
+    bsIncludeCleanup();
+    bsLibraryCleanup();
 
     printf("\n%zu test%s, %zu assertion%s, %zu failure%s\n", testCount, testCount == 1 ? "" : "s",
            bsTestAssertions, bsTestAssertions == 1 ? "" : "s", bsTestFailures,

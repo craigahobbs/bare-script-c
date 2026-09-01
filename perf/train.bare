@@ -1,0 +1,223 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+# The profile-guided optimization training workload
+#
+# A PGO profile is only as good as the workload that produces it: the optimizer lays out branches
+# and inlines call sites in the proportion the training run exercises them, so a lopsided workload
+# makes the release build faster on that one thing and slower on everything else. This script
+# covers the four phases a real BareScript program spends its time in, at roughly the ratio a
+# realistic mix of programs does:
+#
+#   1. Parsing    - barescriptParser.bare, which is itself interpreted BareScript driving the regex
+#                   engine and the string library. This dominates short scripts and every include
+#                   of a non-bundled file, so it gets the largest share.
+#   2. Loading    - JSON decoding and model-to-runtime conversion, the path every bundled system
+#                   include takes.
+#   3. Evaluating - the statement loop and expression evaluator over numeric, string, array, and
+#                   object work, plus function calls.
+#   4. Library    - regex matching, JSON round trips, sorting, and datetime formatting.
+#
+# Run with the instrumented command-line interface; see "make release".
+
+# Phase 2 - loading these exercises JSON decode and model-to-runtime conversion, the path every
+# bundled system include takes. Between them they pull in most of the include library.
+include <barescriptParser.bare>
+include <baredoc.bare>
+include <dataTable.bare>
+include <diff.bare>
+include <forms.bare>
+include <markdown.bare>
+include <markdownParser.bare>
+include <pager.bare>
+include <schema.bare>
+include <schemaDoc.bare>
+include <schemaParser.bare>
+include <unittestMock.bare>
+include <url.bare>
+
+
+# The include library scripts to parse, chosen to span the parser's grammar - long function
+# libraries, deeply nested expressions, large string literal tables, and heavy regex construction
+trainParseFiles = [ \
+    'args.bare', 'barescriptLint.bare', 'data.bare', 'diff.bare', 'draw.bare', \
+    'markdownHighlight.bare', 'markdownParser.bare', 'qrcode.bare', 'schemaParser.bare', 'url.bare' \
+]
+
+
+async function main():
+    includeDir = systemGlobalGet('vIncludeDir')
+    if includeDir == null:
+        systemLog('usage: bare perf/train.bare -v vIncludeDir "\'lib/include\'"')
+        return 1
+    endif
+
+    trainParse(includeDir)
+    trainLoad()
+    trainEvaluate()
+    trainLibrary()
+    return 0
+endfunction
+
+
+# Phase 1 - parse the include library sources
+function trainParse(includeDir):
+    statements = 0
+    for file in trainParseFiles:
+        text = systemFetch(includeDir + '/' + file)
+        if text == null:
+            systemLog('train: failed to read "' + file + '"')
+            continue
+        endif
+        result = barescriptParseScriptEx(text, 1, file)
+        if objectHas(result, 'error'):
+            systemLog(objectGet(objectGet(result, 'error'), 'message'))
+            continue
+        endif
+        statements = statements + arrayLength(objectGet(objectGet(result, 'result'), 'statements'))
+    endfor
+
+    # Expression parsing, which the script parser drives one line at a time
+    for exprText in [ \
+        'a + b * c - d / e % f ** g', 'f(g(h(1, 2), "three"), [1, 2, 3], {"k": v})', \
+        '!a && (b || c) == d != e < f <= g > h >= i', 'a & b | c ^ d << e >> f', \
+        '{"a": 1, "b": [2, 3], "c": {"d": 4}}', "'a string with \\\\'escapes\\\\' and \\\\n newlines'" \
+    ]:
+        ix = 0
+        while ix < 40:
+            barescriptParseExpressionEx(exprText, 1, 'train', true)
+            ix = ix + 1
+        endwhile
+    endfor
+    return statements
+endfunction
+
+
+# Phase 2 - JSON decode and model conversion, past the include statements above
+function trainLoad():
+    # An expression model, the barescriptEvaluateExpression path
+    exprModel = objectGet(barescriptParseExpressionEx( \
+        'a + b * mathAbs(c) - stringLength("d")', 1, 'train', true), 'result')
+    ix = 0
+    while ix < 400:
+        barescriptEvaluateExpression(exprModel, {'a': 1, 'b': 2, 'c': -3})
+        ix = ix + 1
+    endwhile
+
+    # A script model of the shape a bundled include decodes to
+    model = jsonStringify(objectGet(barescriptParseScriptEx( \
+        'function f(a, b):\n    if a:\n        return b\n    endif\n    for v in a:\n' + \
+        '        systemLog(v)\n    endfor\n    return 0\nendfunction\n', 1, 'train.bare'), 'result'))
+    ix = 0
+    while ix < 200:
+        jsonParse(model)
+        ix = ix + 1
+    endwhile
+endfunction
+
+
+# Phase 3 - the statement loop and expression evaluator
+function trainEvaluate():
+    # Numeric work - the arithmetic and comparison operator paths
+    total = 0
+    ix = 0
+    while ix < 40000:
+        total = total + ix * 2 - (ix % 7) + (ix / 3)
+        ix = ix + 1
+    endwhile
+
+    # Function calls, including recursion and variable arguments
+    ix = 0
+    while ix < 4000:
+        trainAdd(ix, trainAdd(ix, 1))
+        trainVarArgs('x', 1, 2, 3)
+        ix = ix + 1
+    endwhile
+    trainFibonacci(18)
+
+    # Array and object work
+    values = []
+    object = {}
+    ix = 0
+    while ix < 4000:
+        arrayPush(values, (ix * 7919) % 4000)
+        objectSet(object, 'key' + ((ix * 7919) % 4000), ix)
+        ix = ix + 1
+    endwhile
+    arraySort(values)
+    arraySort(values, trainCompare)
+    for key in objectKeys(object):
+        objectGet(object, key)
+    endfor
+
+    # String building and slicing
+    parts = []
+    ix = 0
+    while ix < 4000:
+        arrayPush(parts, 'item-' + ix + '-' + stringUpper(stringSlice('abcdef', ix % 5)))
+        ix = ix + 1
+    endwhile
+    return stringLength(arrayJoin(parts, ', '))
+endfunction
+
+
+function trainAdd(a, b):
+    return a + b
+endfunction
+
+
+function trainVarArgs(label, values...):
+    return label + arrayLength(values)
+endfunction
+
+
+function trainFibonacci(n):
+    return if(n < 2, n, trainFibonacci(n - 1) + trainFibonacci(n - 2))
+endfunction
+
+
+function trainCompare(a, b):
+    return b - a
+endfunction
+
+
+# Phase 4 - the library's own hot spots
+function trainLibrary():
+    # Regex matching, replacement, and splitting over a realistic document
+    lines = []
+    ix = 0
+    while ix < 400:
+        arrayPush(lines, '## Heading ' + ix + '\n\nSome *emphasized* and `code` text with a ' + \
+            '[link](http://example.com/' + ix + ') and name' + ix + ' = "value ' + ix + '".\n')
+        ix = ix + 1
+    endwhile
+    text = arrayJoin(lines, '\n')
+    regexMatchAll(trainRegexAssign, text)
+    regexReplace(trainRegexSpace, text, ' ')
+    regexSplit(trainRegexLine, text)
+
+    # Markdown and schema parsing, the include library's heaviest consumers
+    markdownParse(text)
+    schemaParse([ \
+        '# A trained type', 'struct Train', '    int(> 0) count', '    string name', \
+        '    optional float[] values', '    TrainEnum kind', '', 'enum TrainEnum', '    a', '    b' \
+    ])
+
+    # URL encoding, JSON round trips, and datetime formatting
+    ix = 0
+    while ix < 400:
+        urlEncodeComponent('a b/c?d=' + ix)
+        jsonParse(jsonStringify({'id': ix, 'name': 'record-' + ix, 'tags': ['a', 'b'], 'on': true}))
+        datetimeISOFormat(datetimeNew(2026, 1 + ix % 12, 1 + ix % 28, ix % 24, ix % 60))
+        ix = ix + 1
+    endwhile
+    return 0
+endfunction
+
+
+trainRegexAssign = regexNew('(?<key>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(?<value>[0-9]+|"[^"]*")')
+trainRegexSpace = regexNew('[ \\t]+')
+trainRegexLine = regexNew('\\r?\\n')
+
+
+return main()

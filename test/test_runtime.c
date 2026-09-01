@@ -256,7 +256,10 @@ TEST(runtime_max_statements)
 
 TEST(runtime_depth_limit)
 {
-    /* A deeply nested expression is rejected rather than overflowing the C stack */
+    /*
+     * A deeply nested expression is rejected rather than overflowing the C stack. The parser is
+     * itself a BareScript script, so the depth limit stops it while parsing.
+     */
     BSStringBuilder sb;
     bsSBInit(&sb);
     bsSBAppendString(&sb, "return ");
@@ -269,7 +272,7 @@ TEST(runtime_depth_limit)
     }
     BSValue text = bsSBToValue(&sb);
     ASSERT_VALUE(bsTestExecute(bsStringData(text)), "null");
-    ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Maximum expression depth exceeded");
+    ASSERT_STR_EQ(bsTestErrorText(), "test.bare: Maximum expression depth exceeded\n");
     bsRelease(text);
 }
 
@@ -482,7 +485,9 @@ static char *bsTestFetchFn(const BSFetchRequest *request, size_t *responseSize, 
     }
     const char *text = "includedGlobal = 'included'\nfunction includedFn():\n    return 'from include'\n"
         "endfunction";
-    if (strcmp(request->url, "bad.bare") == 0) {
+    if (strcmp(request->url, "lint.bare") == 0) {
+        text = "function lintFn():\n    unused = 1\n    return 1\nendfunction";
+    } else if (strcmp(request->url, "bad.bare") == 0) {
         text = "a = 1 +";
     } else if (strcmp(request->url, "error.bare") == 0) {
         text = "undefinedFunc()";
@@ -714,4 +719,45 @@ TEST(runtime_concat_all_types)
     ASSERT_VALUE(bsTestExecute("return arrayJoin([1, true, null, [2], {'k': 1}, systemType], '|')"),
                  "\"1|true|null|[2]|{\\\"k\\\":1}|<function>\"");
     ASSERT_VALUE(bsTestExecute("return arrayJoin([regexNew('x')], '|')"), "\"<regex>\"");
+}
+
+
+TEST(runtime_include_lint_debug)
+{
+    /* In debug mode the runtime lints each include it loads */
+    BSOptions *options = bsTestOptions();
+    options->debug = true;
+    options->fetchFn = bsTestFetchFn;
+    bsTestLogClear();
+    bsRelease(bsTestExecuteOptions("include 'lint.bare'", options));
+    ASSERT_TRUE(strstr(bsTestLogText(), "BareScript: Include \"lint.bare\" static analysis...") != NULL);
+    ASSERT_TRUE(strstr(bsTestLogText(), "Unused variable") != NULL);
+    bsOptionsFree(options);
+
+    /* An include with no warnings logs nothing */
+    options = bsTestOptions();
+    options->debug = true;
+    options->fetchFn = bsTestFetchFn;
+    bsTestLogClear();
+    bsRelease(bsTestExecuteOptions("include 'a.bare'", options));
+    ASSERT_NULL(strstr(bsTestLogText(), "static analysis"));
+    bsOptionsFree(options);
+}
+
+
+TEST(runtime_include_bundled_model)
+{
+    /* A bundled system include loads from its compiled JSON model */
+    ASSERT_VALUE(bsTestExecute("include <unittest.bare>\nreturn systemType(unittestEqual)"), "\"function\"");
+
+    /* A registered system include whose text is an invalid JSON model fails */
+    bsSystemIncludeRegister("badmodel.bare", "{\"statements\":[{}]}");
+    ASSERT_VALUE(bsTestExecute("include <badmodel.bare>"), "null");
+    ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Include of \"badmodel.bare\" failed");
+    bsSystemIncludeClear();
+
+    /* A registered system include whose text is source is parsed */
+    bsSystemIncludeRegister("source.bare", "sourceGlobal = 'parsed'");
+    ASSERT_VALUE(bsTestExecute("include <source.bare>\nreturn sourceGlobal"), "\"parsed\"");
+    bsSystemIncludeClear();
 }

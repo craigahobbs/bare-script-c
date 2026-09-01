@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "barescript/json.h"
 #include "barescript/library.h"
 #include "barescript/options.h"
 #include "barescript/runtime.h"
@@ -159,7 +160,8 @@ const char *bsSystemIncludeGet(const char *name)
         return bsStringData(text);
     }
 
-    /* Search the registered directories, caching what is found */
+    /* Search the registered directories, caching what is found. A directory takes precedence over
+       the bundled library, so a script can run against an include library checkout. */
     for (size_t ix = 0; ix < bsArrayCount(bsSystemIncludePaths); ix++) {
         BSValue directory = bsArrayGet(bsSystemIncludePaths, ix);
         BSValue path = bsStringNewFormat("%s/%s", bsStringData(directory), name);
@@ -179,7 +181,9 @@ const char *bsSystemIncludeGet(const char *name)
             return bsStringData(bsObjectGet(bsSystemIncludes, name));
         }
     }
-    return NULL;
+
+    /* The bundled include library, as a compiled JSON script model */
+    return bsIncludeSource(name);
 }
 
 
@@ -189,310 +193,6 @@ void bsSystemIncludeClear(void)
     bsSystemIncludes = bsNull();
     bsRelease(bsSystemIncludePaths);
     bsSystemIncludePaths = bsNull();
-}
-
-
-/*
- * Model conversion
- */
-
-
-BSValue bsExprToModel(const BSExpr *expr)
-{
-    BSValue model = bsObjectNew();
-    switch (expr->type) {
-    case BS_EXPR_NUMBER:
-        bsObjectSet(model, "number", bsNumber(expr->u.number));
-        break;
-
-    case BS_EXPR_STRING:
-        bsObjectSet(model, "string", bsRetain(expr->u.string));
-        break;
-
-    case BS_EXPR_VARIABLE:
-        bsObjectSet(model, "variable", bsRetain(expr->u.variable.name));
-        break;
-
-    case BS_EXPR_FUNCTION: {
-        BSValue function = bsObjectNew();
-        bsObjectSet(function, "name", bsRetain(expr->u.function.name));
-        BSValue args = bsArrayNewCapacity(expr->u.function.argCount);
-        for (size_t ix = 0; ix < expr->u.function.argCount; ix++) {
-            bsArrayPush(args, bsExprToModel(expr->u.function.args[ix]));
-        }
-        bsObjectSet(function, "args", args);
-        bsObjectSet(model, "function", function);
-        break;
-    }
-
-    case BS_EXPR_BINARY: {
-        BSValue binary = bsObjectNew();
-        bsObjectSet(binary, "op", bsStringNew(bsBinaryOpText[expr->u.binary.op]));
-        bsObjectSet(binary, "left", bsExprToModel(expr->u.binary.left));
-        bsObjectSet(binary, "right", bsExprToModel(expr->u.binary.right));
-        bsObjectSet(model, "binary", binary);
-        break;
-    }
-
-    case BS_EXPR_UNARY: {
-        BSValue unary = bsObjectNew();
-        bsObjectSet(unary, "op", bsStringNew(bsUnaryOpText[expr->u.unary.op]));
-        bsObjectSet(unary, "expr", bsExprToModel(expr->u.unary.expr));
-        bsObjectSet(model, "unary", unary);
-        break;
-    }
-
-    default:
-        bsObjectSet(model, "group", bsExprToModel(expr->u.group));
-        break;
-    }
-    return model;
-}
-
-
-static BSValue bsStatementToModel(const BSStatement *statement)
-{
-    BSValue model = bsObjectNew();
-    BSValue value = bsObjectNew();
-    if (statement->lineNumber != 0) {
-        bsObjectSet(value, "lineNumber", bsNumber(statement->lineNumber));
-    }
-    if (statement->lineCount != 0) {
-        bsObjectSet(value, "lineCount", bsNumber(statement->lineCount));
-    }
-
-    switch (statement->type) {
-    case BS_STMT_EXPR:
-        if (statement->u.expr.name.type == BS_STRING) {
-            bsObjectSet(value, "name", bsRetain(statement->u.expr.name));
-        }
-        bsObjectSet(value, "expr", bsExprToModel(statement->u.expr.expr));
-        bsObjectSet(model, "expr", value);
-        break;
-
-    case BS_STMT_JUMP:
-        bsObjectSet(value, "label", bsRetain(statement->u.jump.label));
-        if (statement->u.jump.expr != NULL) {
-            bsObjectSet(value, "expr", bsExprToModel(statement->u.jump.expr));
-        }
-        bsObjectSet(model, "jump", value);
-        break;
-
-    case BS_STMT_RETURN:
-        if (statement->u.ret.expr != NULL) {
-            bsObjectSet(value, "expr", bsExprToModel(statement->u.ret.expr));
-        }
-        bsObjectSet(model, "return", value);
-        break;
-
-    case BS_STMT_LABEL:
-        bsObjectSet(value, "name", bsRetain(statement->u.label.name));
-        bsObjectSet(model, "label", value);
-        break;
-
-    case BS_STMT_FUNCTION: {
-        const BSFunctionDef *def = statement->u.function.def;
-        if (def->async) {
-            bsObjectSet(value, "async", bsBoolean(true));
-        }
-        bsObjectSet(value, "name", bsRetain(def->name));
-        if (def->argCount != 0) {
-            BSValue args = bsArrayNewCapacity(def->argCount);
-            for (size_t ix = 0; ix < def->argCount; ix++) {
-                bsArrayPush(args, bsRetain(def->argNames[ix]));
-            }
-            bsObjectSet(value, "args", args);
-        }
-        if (def->lastArgArray) {
-            bsObjectSet(value, "lastArgArray", bsBoolean(true));
-        }
-        BSValue statements = bsArrayNewCapacity(def->statementCount);
-        for (size_t ix = 0; ix < def->statementCount; ix++) {
-            bsArrayPush(statements, bsStatementToModel(def->statements[ix]));
-        }
-        bsObjectSet(value, "statements", statements);
-        bsObjectSet(model, "function", value);
-        break;
-    }
-
-    default: {
-        BSValue includes = bsArrayNewCapacity(statement->u.include.count);
-        for (size_t ix = 0; ix < statement->u.include.count; ix++) {
-            BSValue include = bsObjectNew();
-            bsObjectSet(include, "url", bsRetain(statement->u.include.includes[ix].url));
-            if (statement->u.include.includes[ix].system) {
-                bsObjectSet(include, "system", bsBoolean(true));
-            }
-            bsArrayPush(includes, include);
-        }
-        bsObjectSet(value, "includes", includes);
-        bsObjectSet(model, "include", value);
-        break;
-    }
-    }
-    return model;
-}
-
-
-BSValue bsScriptToModel(const BSScript *script)
-{
-    BSValue model = bsObjectNew();
-    BSValue statements = bsArrayNewCapacity(script->statementCount);
-    for (size_t ix = 0; ix < script->statementCount; ix++) {
-        bsArrayPush(statements, bsStatementToModel(script->statements[ix]));
-    }
-    bsObjectSet(model, "statements", statements);
-    if (script->scriptName.type == BS_STRING) {
-        bsObjectSet(model, "scriptName", bsRetain(script->scriptName));
-    }
-    if (bsArrayCount(script->scriptLines) != 0) {
-        bsObjectSet(model, "scriptLines", bsRetain(script->scriptLines));
-    }
-    if (script->system) {
-        bsObjectSet(model, "system", bsBoolean(true));
-    }
-    return model;
-}
-
-
-static BSExpr *bsExprModelNew(BSExprType type)
-{
-    BSExpr *expr = bsAlloc(sizeof(BSExpr));
-    memset(expr, 0, sizeof(BSExpr));
-    expr->type = type;
-    return expr;
-}
-
-
-BSExpr *bsExprFromModel(BSValue model)
-{
-    if (model.type != BS_OBJECT) {
-        return NULL;
-    }
-
-    BSValue number = bsObjectGet(model, "number");
-    if (number.type == BS_NUMBER) {
-        BSExpr *expr = bsExprModelNew(BS_EXPR_NUMBER);
-        expr->u.number = number.u.number;
-        return expr;
-    }
-
-    BSValue string = bsObjectGet(model, "string");
-    if (string.type == BS_STRING) {
-        BSExpr *expr = bsExprModelNew(BS_EXPR_STRING);
-        expr->u.string = bsRetain(string);
-        return expr;
-    }
-
-    BSValue variable = bsObjectGet(model, "variable");
-    if (variable.type == BS_STRING) {
-        BSExpr *expr = bsExprModelNew(BS_EXPR_VARIABLE);
-        expr->u.variable.name = bsRetain(variable);
-        expr->u.variable.slot = -1;
-        const char *name = bsStringData(variable);
-        if (strcmp(name, "null") == 0) {
-            expr->u.variable.special = BS_SPECIAL_NULL;
-        } else if (strcmp(name, "true") == 0) {
-            expr->u.variable.special = BS_SPECIAL_TRUE;
-        } else if (strcmp(name, "false") == 0) {
-            expr->u.variable.special = BS_SPECIAL_FALSE;
-        }
-        return expr;
-    }
-
-    BSValue function = bsObjectGet(model, "function");
-    if (function.type == BS_OBJECT) {
-        BSValue name = bsObjectGet(function, "name");
-        if (name.type != BS_STRING) {
-            return NULL;
-        }
-        BSValue args = bsObjectGet(function, "args");
-        BSExpr *expr = bsExprModelNew(BS_EXPR_FUNCTION);
-        expr->u.function.name = bsRetain(name);
-        expr->u.function.slot = -1;
-        expr->u.function.isIf = (strcmp(bsStringData(name), "if") == 0);
-        size_t argCount = bsArrayCount(args);
-        if (argCount != 0) {
-            expr->u.function.args = bsAlloc(argCount * sizeof(BSExpr *));
-            for (size_t ix = 0; ix < argCount; ix++) {
-                BSExpr *arg = bsExprFromModel(bsArrayGet(args, ix));
-                if (arg == NULL) {
-                    bsExprFree(expr);
-                    return NULL;
-                }
-                expr->u.function.args[expr->u.function.argCount++] = arg;
-            }
-        }
-        return expr;
-    }
-
-    BSValue binary = bsObjectGet(model, "binary");
-    if (binary.type == BS_OBJECT) {
-        BSValue op = bsObjectGet(binary, "op");
-        if (op.type != BS_STRING) {
-            return NULL;
-        }
-        int opIndex = -1;
-        for (int ix = 0; ix < BS_BINARY_COUNT; ix++) {
-            if (strcmp(bsBinaryOpText[ix], bsStringData(op)) == 0) {
-                opIndex = ix;
-                break;
-            }
-        }
-        if (opIndex < 0) {
-            return NULL;
-        }
-        BSExpr *left = bsExprFromModel(bsObjectGet(binary, "left"));
-        BSExpr *right = bsExprFromModel(bsObjectGet(binary, "right"));
-        if (left == NULL || right == NULL) {
-            bsExprFree(left);
-            bsExprFree(right);
-            return NULL;
-        }
-        BSExpr *expr = bsExprModelNew(BS_EXPR_BINARY);
-        expr->u.binary.op = (BSBinaryOp) opIndex;
-        expr->u.binary.left = left;
-        expr->u.binary.right = right;
-        return expr;
-    }
-
-    BSValue unary = bsObjectGet(model, "unary");
-    if (unary.type == BS_OBJECT) {
-        BSValue op = bsObjectGet(unary, "op");
-        if (op.type != BS_STRING) {
-            return NULL;
-        }
-        int opIndex = -1;
-        for (int ix = 0; ix < BS_UNARY_COUNT; ix++) {
-            if (strcmp(bsUnaryOpText[ix], bsStringData(op)) == 0) {
-                opIndex = ix;
-                break;
-            }
-        }
-        if (opIndex < 0) {
-            return NULL;
-        }
-        BSExpr *operand = bsExprFromModel(bsObjectGet(unary, "expr"));
-        if (operand == NULL) {
-            return NULL;
-        }
-        BSExpr *expr = bsExprModelNew(BS_EXPR_UNARY);
-        expr->u.unary.op = (BSUnaryOp) opIndex;
-        expr->u.unary.expr = operand;
-        return expr;
-    }
-
-    if (bsObjectHas(model, "group")) {
-        BSExpr *inner = bsExprFromModel(bsObjectGet(model, "group"));
-        if (inner == NULL) {
-            return NULL;
-        }
-        BSExpr *expr = bsExprModelNew(BS_EXPR_GROUP);
-        expr->u.group = inner;
-        return expr;
-    }
-
-    return NULL;
 }
 
 
@@ -1096,19 +796,37 @@ static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions
             return false;
         }
 
-        /* Parse the include script */
-        BSParserError parserError;
-        memset(&parserError, 0, sizeof(parserError));
-        BSScript *includeScript = bsParseScript(includeText, includeSize, 1, bsStringData(includeUrl),
-                                                &parserError);
-        free(includeText);
-        if (includeScript == NULL) {
-            BSValue message = bsRetain(parserError.message);
-            bsErrorSet(options, "%s", bsStringData(message));
-            bsRelease(message);
-            bsParserErrorFree(&parserError);
-            bsRelease(includeUrl);
-            return false;
+        /*
+         * Load the include script. A system include starting with "{" is the parser-compiled JSON
+         * script model - every bundled include is embedded pre-compiled, so including one costs a
+         * JSON parse rather than a run of the BareScript parser.
+         */
+        BSScript *includeScript;
+        if (system && includeText[0] == '{') {
+            BSValue model = bsJSONDecode(includeText, includeSize, NULL);
+            includeScript = bsScriptFromModel(model, bsStringData(includeUrl));
+            bsRelease(model);
+            free(includeText);
+            if (includeScript == NULL) {
+                bsErrorSetStatement(options, script, statement, "Include of \"%s\" failed",
+                                    bsStringData(includeUrl));
+                bsRelease(includeUrl);
+                return false;
+            }
+        } else {
+            BSParserError parserError;
+            memset(&parserError, 0, sizeof(parserError));
+            includeScript = bsParseScript(includeText, includeSize, 1, bsStringData(includeUrl),
+                                          &parserError);
+            free(includeText);
+            if (includeScript == NULL) {
+                BSValue message = bsRetain(parserError.message);
+                bsErrorSet(options, "%s", bsStringData(message));
+                bsRelease(message);
+                bsParserErrorFree(&parserError);
+                bsRelease(includeUrl);
+                return false;
+            }
         }
         includeScript->system = system;
 
@@ -1122,6 +840,22 @@ static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions
         BSValue result = bsExecuteStatements(includeScript, includeScript->statements,
                                              includeScript->statementCount, options, NULL);
         bsRelease(result);
+
+        /* Run the linter over the include in debug mode */
+        if (options->logFn != NULL && options->debug && options->error.type != BS_STRING) {
+            BSValue warnings = bsLintScript(includeScript, options->globals);
+            size_t warningCount = bsArrayCount(warnings);
+            if (warningCount != 0) {
+                bsLog(options, "BareScript: Include \"%s\" static analysis... %zu warning%s:",
+                      bsStringData(includeUrl), warningCount, warningCount > 1 ? "s" : "");
+                for (size_t ixWarning = 0; ixWarning < warningCount; ixWarning++) {
+                    BSValue warning = bsValueString(bsArrayGet(warnings, ixWarning));
+                    bsLog(options, "BareScript: %s", bsStringData(warning));
+                    bsRelease(warning);
+                }
+            }
+            bsRelease(warnings);
+        }
         free(options->urlData);
         options->urlFn = savedUrlFn;
         options->urlData = savedUrlData;

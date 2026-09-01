@@ -151,23 +151,6 @@ BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue
 
 
 /*
- * Model conversion
- */
-
-/* Convert a parsed script to its JSON "BareScript" model - returns an owned object value */
-BSValue bsScriptToModel(const BSScript *script);
-
-/* Convert an expression to its JSON "Expression" model - returns an owned object value */
-BSValue bsExprToModel(const BSExpr *expr);
-
-/*
- * Convert a JSON "Expression" model to a compiled expression. Returns NULL if the model is
- * invalid; free the result with bsExprFree.
- */
-BSExpr *bsExprFromModel(BSValue model);
-
-
-/*
  * The system include library
  *
  * System includes - "include <name.bare>" - resolve against a registry of named scripts, then
@@ -179,6 +162,27 @@ void bsSystemIncludeRegister(const char *name, const char *text);
 void bsSystemIncludePath(const char *directory);
 const char *bsSystemIncludeGet(const char *name);
 void bsSystemIncludeClear(void);
+
+
+/*
+ * The bundled BareScript include library
+ *
+ * The library embeds the BareScript include library - args.bare, markdown.bare, schema.bare, and
+ * the rest - as compressed, parser-compiled JSON script models, so "include <name.bare>" resolves
+ * without a file system. See barescript/includeSource.h for the per-include stub accessors.
+ */
+
+/* The number of bundled include library scripts */
+size_t bsIncludeCount(void);
+
+/* A bundled include library script's name, by index; NULL if the index is out of range */
+const char *bsIncludeName(size_t index);
+
+/* A bundled include library script's JSON script model, by name; NULL if there is no such script */
+const char *bsIncludeSource(const char *name);
+
+/* Release the bundled include library's decoded models */
+void bsIncludeCleanup(void);
 
 
 #ifdef __cplusplus

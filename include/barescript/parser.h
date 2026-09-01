@@ -2,15 +2,17 @@
    https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE */
 
 /*
- * The BareScript parser
+ * The BareScript parser and the compiled script representation
  *
- * The parser is a native, single-pass recursive-descent parser that produces a compiled abstract
- * syntax tree rather than the JSON "BareScript model" the JavaScript and Python implementations
- * build. Structured statements (if/while/for/break/continue) are lowered to labels and jumps
- * exactly as the reference parser lowers them, so the runtime only ever sees the six primitive
- * statement kinds. Jump labels and function-local variable slots resolve at parse time.
+ * Parsing is done by barescriptParser.bare, an include library script that runs on this runtime and
+ * produces the JSON "BareScript model" - so the parser, and the exact syntax and error messages it
+ * accepts, are shared with the JavaScript and Python implementations. The model is converted to the
+ * compiled representation below, which is what the evaluator walks: statements and expressions as C
+ * structs, with a jump's label resolved to a statement index and a function-local variable resolved
+ * to a slot index.
  *
- * See runtime.h for model conversion, which reproduces the reference JSON model.
+ * Structured statements - if/elif/else, while, for, break, continue - never reach the runtime; the
+ * parser lowers them to labels and jumps.
  */
 
 #ifndef BARESCRIPT_PARSER_H
@@ -218,12 +220,42 @@ BSScript *bsParseScript(const char *text, size_t size, int startLineNumber, cons
                         BSParserError *error);
 
 /*
+ * Lint a parsed script with barescriptLint.bare. "globals" is the globals object the script would
+ * execute against, used to resolve function references, or a null value. Returns an owned array of
+ * warning strings.
+ */
+BSValue bsLintScript(const BSScript *script, BSValue globals);
+
+/* Release the parser and linter include library scripts - call at process exit */
+void bsParserCleanup(void);
+
+/*
  * Parse a BareScript expression. Returns the parsed expression, or NULL on error, in which case
  * "error" is filled in and must be freed with bsParserErrorFree. If "arrayLiterals" is true,
  * "[...]" parses as an array literal rather than a bracketed variable name.
  */
 BSExpr *bsParseExpression(const char *text, size_t size, int lineNumber, const char *scriptName,
                           bool arrayLiterals, BSParserError *error);
+
+
+/*
+ * Model conversion
+ */
+
+/* Convert a JSON "BareScript" model to a compiled script; NULL if the model is invalid */
+BSScript *bsScriptFromModel(BSValue model, const char *scriptName);
+
+/* Convert a JSON "Expression" model to a compiled expression; NULL if the model is invalid */
+BSExpr *bsExprFromModel(BSValue model);
+
+/* Convert a compiled script to its JSON "BareScript" model - returns an owned object value */
+BSValue bsScriptToModel(const BSScript *script);
+
+/* Convert a compiled statement to its JSON "ScriptStatement" model - returns an owned object value */
+BSValue bsStatementToModel(const BSStatement *statement);
+
+/* Convert a compiled expression to its JSON "Expression" model - returns an owned object value */
+BSValue bsExprToModel(const BSExpr *expr);
 
 
 /* Script reference counting */

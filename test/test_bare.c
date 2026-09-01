@@ -220,13 +220,15 @@ TEST(bare_includes)
 
 TEST(bare_debug_and_static)
 {
+    /* Debug mode also logs the script execution time */
     const char *argvDebug[] = {"bare", "-d", "-c", "systemLogDebug('debug on')"};
     ASSERT_INT_EQ(bsTestMain(4, argvDebug), 0);
-    ASSERT_STR_EQ(bsTestMainText(), "debug on\n");
+    ASSERT_TRUE(strstr(bsTestMainText(), "debug on\n") != NULL);
+    ASSERT_TRUE(strstr(bsTestMainText(), "BareScript executed in") != NULL);
 
     const char *argvDebugLong[] = {"bare", "--debug", "-c", "systemLogDebug('debug long')"};
     ASSERT_INT_EQ(bsTestMain(4, argvDebugLong), 0);
-    ASSERT_STR_EQ(bsTestMainText(), "debug long\n");
+    ASSERT_TRUE(strstr(bsTestMainText(), "debug long\n") != NULL);
 
     /* Static analysis parses without executing */
     const char *argvStatic[] = {"bare", "-s", "-c", "systemLog('never runs')"};
@@ -273,5 +275,55 @@ TEST(bare_multiple_files)
     const char *argv[] = {"bare", firstPath, second};
     ASSERT_INT_EQ(bsTestMain(3, argv), 0);
     ASSERT_STR_EQ(bsTestMainText(), "first\nsecond\n");
+    bsAssign(&bsTestMainOutput, bsNull());
+}
+
+
+TEST(bare_static_analysis)
+{
+    /* Static analysis of a clean script */
+    const char *argvClean[] = {"bare", "-s", "-c", "return 1"};
+    ASSERT_INT_EQ(bsTestMain(4, argvClean), 0);
+    ASSERT_STR_EQ(bsTestMainText(), "BareScript static analysis \"<string>\" ... OK\n");
+
+    /* A script with one warning */
+    const char *argvOne[] = {"bare", "-s", "-c", "1 + 2"};
+    ASSERT_INT_EQ(bsTestMain(4, argvOne), 1);
+    ASSERT_TRUE(strstr(bsTestMainText(), "... 1 warning:\n") != NULL);
+    ASSERT_TRUE(strstr(bsTestMainText(), "Pointless global statement") != NULL);
+
+    /* A script with several warnings */
+    const char *argvMany[] = {"bare", "-s", "-c",
+                              "function f():\n    unused = 1\n    return 1\nendfunction\n1 + 2\n"};
+    ASSERT_INT_EQ(bsTestMain(4, argvMany), 1);
+    ASSERT_TRUE(strstr(bsTestMainText(), " warnings:\n") != NULL);
+    ASSERT_TRUE(strstr(bsTestMainText(), "Unused variable") != NULL);
+
+    /* Static analysis does not execute */
+    const char *argvNoRun[] = {"bare", "-s", "-c", "systemLog('never runs')"};
+    ASSERT_INT_EQ(bsTestMain(4, argvNoRun), 0);
+    ASSERT_NULL(strstr(bsTestMainText(), "never runs"));
+
+    /* Static analysis with execution */
+    const char *argvExecute[] = {"bare", "-x", "-c", "systemLog('runs')"};
+    ASSERT_INT_EQ(bsTestMain(4, argvExecute), 0);
+    ASSERT_TRUE(strstr(bsTestMainText(), "runs\n") != NULL);
+    ASSERT_TRUE(strstr(bsTestMainText(), "... OK\n") != NULL);
+
+    const char *argvExecuteLong[] = {"bare", "--staticx", "-c", "return 0"};
+    ASSERT_INT_EQ(bsTestMain(4, argvExecuteLong), 0);
+    ASSERT_TRUE(strstr(bsTestMainText(), "... OK\n") != NULL);
+
+    /* A runtime error stops the run before static analysis */
+    const char *argvError[] = {"bare", "-x", "-c", "undefinedFunc()"};
+    ASSERT_INT_EQ(bsTestMain(4, argvError), 1);
+    ASSERT_TRUE(strstr(bsTestMainText(), "Undefined function") != NULL);
+    ASSERT_NULL(strstr(bsTestMainText(), "static analysis"));
+
+    /* Static analysis continues past a failing script */
+    const char *argvTwo[] = {"bare", "-s", "-c", "1 + 2", "-c", "return 1"};
+    ASSERT_INT_EQ(bsTestMain(6, argvTwo), 1);
+    ASSERT_TRUE(strstr(bsTestMainText(), "<string2>") != NULL);
+
     bsAssign(&bsTestMainOutput, bsNull());
 }

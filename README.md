@@ -22,7 +22,8 @@ make compile
   - [The Value System](#the-value-system)
   - [The Function Format](#the-function-format)
   - [The Fetch Function Format](#the-fetch-function-format)
-  - [The Parser](#the-parser)
+  - [The Parser and Linter](#the-parser-and-linter)
+  - [The Bundled Include Library](#the-bundled-include-library)
   - [JSON](#json)
   - [Regular Expressions](#regular-expressions)
 - [Testing](#testing)
@@ -42,9 +43,37 @@ make test           # build and run the unit tests
 make cover          # run the unit tests and report line coverage; fails under 100%
 make test-include   # run the BareScript language test suite with the built CLI
 make perf           # run the performance suite
+make release        # profile-guided optimization build in build/release
+make includes       # regenerate the bundled include library source
 make clean          # remove the build directory
 make install        # install to $(PREFIX), default /usr/local
 ```
+
+### Release Builds
+
+`make release` is a three-stage profile-guided build: compile instrumented, run a training
+workload, then recompile with the profile and link-time optimization. It is worth about 1.3x over
+the default `-O2` build.
+
+```sh
+make release
+./build/release/bare script.bare
+```
+
+The training workload is `perf/train.bare`. A PGO profile is only as good as the workload that
+produces it - the optimizer lays out branches and inlines call sites in the proportion the training
+run exercises them - so the workload deliberately spans the four phases a real program spends time
+in, at roughly the ratio a realistic mix of programs does:
+
+| Phase      | What it covers                                                          |
+| ---------- | ----------------------------------------------------------------------- |
+| Parsing    | the interpreted parser driving the regex engine and string library       |
+| Loading    | JSON decoding and model-to-runtime conversion, the system include path   |
+| Evaluating | the statement loop and expression evaluator; numbers, strings, calls     |
+| Library    | regex matching, JSON round trips, sorting, datetime formatting           |
+
+The release target also trains on the performance suite, the BareScript language test suite, and a
+static analysis run, so the linter and the CLI's own paths are represented.
 
 `make test` and `make cover` accept a `TEST` variable that filters test cases by name substring:
 
@@ -56,7 +85,9 @@ make test TEST=regex
 ## Command-Line Interface
 
 ```
-usage: bare [-h] [-c CODE] [-d] [-s] [-v VAR EXPR] [--version] [file ...]
+usage: bare [-h] [-c CODE] [-d] [-s] [-x] [-v VAR EXPR] [--version] [file ...]
+
+The BareScript command-line interface
 
 positional arguments:
   file           files to process
@@ -65,7 +96,8 @@ options:
   -h, --help     show this help message and exit
   -c, --code     execute the BareScript code
   -d, --debug    enable debug mode
-  -s, --static   perform static analysis without executing
+  -s, --static   perform static analysis
+  -x, --staticx  perform static analysis with execution
   -v, --var      set a global variable to an expression value
   --version      show the version and exit
 ```
@@ -82,17 +114,33 @@ bare -v vName "'World'" script.bare
 
 ### System Includes
 
-A system include - `include <name.bare>` - resolves against the system include registry, which is
-empty by default; this implementation does not bundle the BareScript include library. The CLI adds
-every directory in the colon-separated `BARESCRIPT_INCLUDE_PATH` environment variable to the
-search path, so an include library checkout can be used directly:
+The BareScript include library is bundled into the library itself, so a system include -
+`include <name.bare>` - resolves with no file system at all:
 
 ```sh
-BARESCRIPT_INCLUDE_PATH=/path/to/bare-script/lib/include bare -c 'include <unittest.bare>'
+bare -c 'include <unittest.bare>
+systemLog(systemType(unittestRunTest))'
 ```
 
-An embedding application registers includes with `bsSystemIncludeRegister` or
-`bsSystemIncludePath`.
+A system include resolves in three steps: scripts registered with `bsSystemIncludeRegister`, then
+the directories registered with `bsSystemIncludePath`, then the bundled library. The CLI adds every
+directory in the colon-separated `BARESCRIPT_INCLUDE_PATH` environment variable to the search path,
+so a script can run against an include library checkout instead of the bundled copy:
+
+```sh
+BARESCRIPT_INCLUDE_PATH=/path/to/bare-script/lib/include bare script.bare
+```
+
+### Static Analysis
+
+`-s` parses and lints without executing; `-x` executes first, so the linter sees the globals the
+script defined. Both run barescriptLint.bare, the same linter the JavaScript and Python
+implementations use.
+
+```sh
+bare -s script.bare
+bare -x script.bare
+```
 
 
 ## Embedding the Runtime
@@ -141,7 +189,8 @@ cc -Iinclude example.c -Lbuild -lbarescript -o example
 ```
 
 The public headers are in `include/barescript`: `value.h`, `parser.h`, `runtime.h`, `library.h`,
-`json.h`, `regex.h`, `options.h`, and the `barescript.h` umbrella header.
+`json.h`, `regex.h`, `options.h`, the generated `includeSource.h`, and the `barescript.h` umbrella
+header.
 
 
 ## Design
@@ -262,19 +311,30 @@ Four options ship with the library:
 work and URL fetches fail.
 
 
-### The Parser
+### The Parser and Linter
 
-The parser is a native, single-pass recursive-descent parser that produces a compiled abstract
-syntax tree rather than the JSON "BareScript model" that the JavaScript and Python implementations
-build - both of those run a parser *written in BareScript*, which a C implementation cannot
-bootstrap. Structured statements (`if`/`elif`/`else`, `while`, `for`, `break`, `continue`) are
-lowered to labels and jumps exactly as the reference parser lowers them, including the generated
-`__barescript*` label and temporary variable names, so a compiled script is
-statement-for-statement identical to the reference model. `bsScriptToModel` and `bsExprToModel`
-produce that JSON model and `bsExprFromModel` converts back - which is how
-`barescriptEvaluateExpression` works.
+BareScript is parsed by **barescriptParser.bare** and linted by **barescriptLint.bare** - the same
+include library scripts the JavaScript and Python implementations use, running on this runtime.
+The syntax accepted, the lowering of structured statements, and the exact text and column of every
+error message are therefore shared with the reference implementations rather than reimplemented.
 
-Two resolution passes run once a statement list is complete:
+That is a bootstrap problem: the parser is a BareScript script, so parsing it would need a parser.
+It is solved the way the reference implementations solve it - the bundled parser is stored as its
+own parser-compiled JSON model, which loads with a JSON decode and no parser at all.
+
+```
+barescriptParser.bare (bundled JSON model)
+        |  JSON decode
+        v
+  BareScript model  --.
+        |             |  bsScriptFromModel
+        v             v
+   compiled script -> executed by the runtime, which is what parses your script
+```
+
+The model that comes back is converted to the runtime's compiled representation - statements and
+expressions as C structs rather than objects - by `model.c`. Two resolution passes run once a
+statement list is complete:
 
 - **Jump resolution** turns each jump's label into a statement index.
 - **Slot resolution** collects a function's local variables - its declared arguments plus every
@@ -282,6 +342,41 @@ Two resolution passes run once a statement list is complete:
   a slot index, so a local read is an array load rather than a dictionary lookup. A slot holding
   the internal unset marker falls through to the globals object, matching the reference behavior
   where an unassigned local simply is not a key of the locals dictionary.
+
+`bsScriptToModel`, `bsStatementToModel`, and `bsExprToModel` convert back, which is how the linter
+receives a script and how `barescriptEvaluateExpression` works.
+
+
+### The Bundled Include Library
+
+The thirty scripts of the BareScript include library - `args.bare`, `markdown.bare`, `schema.bare`,
+`unittest.bare`, and the rest - are compiled to JSON script models and embedded in the library.
+Including one costs a JSON decode rather than a run of the parser.
+
+The models are dictionary compressed with the same scheme the JavaScript implementation uses for
+`includeSource.js`: a table of 61 phrases indexed by `[a-zA-Z0-9]`, where encoding replaces each
+phrase with `~` plus its index character and a literal `~` escapes to the one index past the last
+phrase. The phrase table itself is mined from the corpus - repeatedly taking the substring that
+saves the most bytes and removing it - so it tracks the JSON that BareScript's key-sorting
+`jsonStringify` actually emits. It compresses 1.58 MB of models to 590 KB.
+
+`src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
+fresh clone builds with no bootstrap. `make includes` regenerates them by running
+`bin/includeSource.bare` - itself a BareScript program - under a CLI built from the *existing*
+generated source, the same self-hosting cycle the JavaScript implementation uses.
+
+The generated header exports a stub accessor per include, returning its decoded JSON model:
+
+```c
+const char *bsIncludeSourceUnittest(void);      /* unittest.bare */
+const char *bsIncludeSourceMarkdownUp(void);    /* markdownUp.bare */
+/* ... one per bundled script ... */
+
+extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];   /* all of them, in order */
+```
+
+plus `bsIncludeCount`, `bsIncludeName`, and `bsIncludeSource` for lookup by name. A model decodes
+on first use and is cached, so a program that includes two of the thirty pays for two.
 
 
 ### JSON
@@ -308,7 +403,12 @@ BareScript's regex functions expose:
 | Flags      | `i` (case-insensitive), `m` (multi-line), `s` (dot matches newline)         |
 
 Matching is over Unicode code points, so match indexes agree with the string library's indexes.
-Three properties keep it well-behaved on real input:
+Four properties keep it well-behaved on real input - which matters more here than in the reference
+implementations, because the parser is itself regex-driven:
+
+- A pattern whose every alternative begins with `^` only tries the search start position. Every
+  pattern the parser uses is anchored this way, so this is the difference between a linear and a
+  quadratic scan of each line it parses.
 
 - A quantifier whose body matches exactly one code point - `\s*`, `[0-9]+`, `.*`, the overwhelming
   majority of real patterns - matches **iteratively**, so the C stack stays bounded on long
@@ -326,6 +426,8 @@ make test           # the C unit tests
 make cover          # the same tests with line coverage; fails under 100%
 make test-include   # the BareScript language test suite, run through the built CLI
 ```
+
+`make cover VERBOSE=1` lists every uncovered line.
 
 The C unit tests self-register, so adding one is a single `TEST(name) { ... }` block. Coverage is
 gathered with `gcov`/`llvm-cov` and summarized by `test/coverage.awk`, which honors
@@ -354,19 +456,34 @@ BARESCRIPT_INCLUDE_PATH=/path/to/bare-script/lib/include \
 `make perf` runs a suite written in plain BareScript - no include library dependencies - so the
 same file runs on all three implementations. Elapsed milliseconds, lower is better:
 
-| Test          |   C |  JS |  Py |
-| ------------- | ---:| ---:| ---:|
-| mandelbrot    |  98 | 282 |  98 |
-| arraySort     |  20 |  26 |  92 |
-| objectTree    |  28 |  38 |  36 |
-| stringBuild   |   9 |  10 |  17 |
-| jsonRoundTrip |  15 |  17 |  25 |
-| regexMatch    |  13 |   7 |  16 |
-| functionCall  |  47 | 110 |  53 |
+| Test          | C (`-O2`) | C (release) |  JS |
+| ------------- | ---------:| -----------:| ---:|
+| mandelbrot    |        87 |          59 | 278 |
+| arraySort     |        18 |          14 |  27 |
+| objectTree    |        28 |          26 |  39 |
+| stringBuild   |         9 |           7 |  11 |
+| jsonRoundTrip |        16 |          14 |  18 |
+| regexMatch    |        12 |          11 |   7 |
+| functionCall  |        40 |          31 | 113 |
+| **total**     |   **210** |     **162** | **493** |
 
+The release build is 1.3x the default build and 3.0x the JavaScript implementation on this suite.
 The regex benchmark is the one place JavaScript wins, against V8's JIT-compiled regular expression
-engine. (The Python implementation runs its own C extension for the runtime core, so its numbers
-are not a pure-Python baseline.)
+engine.
+
+Parsing is a separate story, because the parser is an interpreted BareScript script in every
+implementation. Running the reference include library's full test suite - which parses about
+200 KB of BareScript before it runs a single test:
+
+| Implementation | Time  |
+| -------------- | -----:|
+| C (release)    | 1.91s |
+| C (`-O2`)      | 2.12s |
+| JavaScript     | 1.47s |
+| Python         | 5.51s |
+
+(The Python implementation runs its own C extension for the runtime core, so its numbers are not a
+pure-Python baseline.)
 
 
 ## Compatibility
@@ -390,14 +507,16 @@ each other, it follows the one shown in bold.
 JavaScript additionally hoists integer-like keys to the front in ascending numeric order; this
 implementation does not, matching Python.
 
-Two capabilities of the reference implementations are out of scope here:
+One capability of the reference implementations is out of scope here:
 
 - **Asynchronous functions.** Like the Python implementation, every function executes
   synchronously; the `async` keyword parses and is recorded in the model, but imposes no
-  restriction. Scripts written for the JavaScript runtime run unchanged.
-- **Static analysis.** The reference `bare -s` runs a linter written in BareScript
-  (`barescriptLint.bare`), part of the include library. Here `-s` parses without executing, which
-  reports syntax errors but not lint warnings.
+  restriction. Scripts written for the JavaScript runtime run unchanged, and the linter's async
+  checks - which need to know which functions are async - are skipped, as they are in Python.
+
+An input nested more deeply than the evaluator's expression depth limit is reported as a parse
+error rather than crashing; the JavaScript implementation overflows its own stack on the same
+input.
 
 
 ## License

@@ -705,3 +705,14 @@ TEST(library_args_validate_api)
     bsRelease(regex);
     bsOptionsFree(options);
 }
+
+
+TEST(library_regex_many_groups)
+{
+    /* A match with more than ten capture groups exercises the multi-digit group keys */
+    bsTestExpr("objectKeys(objectGet(regexMatch(regexNew("
+               "'(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)'), 'abcdefghijkl'), 'groups'))",
+               "[\"0\",\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\",\"12\"]");
+    bsTestExpr("objectGet(objectGet(regexMatch(regexNew("
+               "'(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)'), 'abcdefghijkl'), 'groups'), '11')", "\"k\"");
+}

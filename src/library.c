@@ -1195,8 +1195,21 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
 {
     BSValue groups = bsObjectNew();
     for (size_t ix = 0; ix < match->groupCount; ix++) {
-        char key[16];
-        snprintf(key, sizeof(key), "%zu", ix);
+        /* The group's number, formatted without the cost of snprintf - this runs per group of
+           every match, and the parser matches once per token of every line it parses */
+        char key[8];
+        size_t keySize = 0;
+        size_t number = ix;
+        do {
+            key[keySize++] = (char) ('0' + number % 10);
+            number /= 10;
+        } while (number != 0);
+        key[keySize] = '\0';
+        for (size_t ixKey = 0; ixKey < keySize / 2; ixKey++) {
+            char swap = key[ixKey];
+            key[ixKey] = key[keySize - 1 - ixKey];
+            key[keySize - 1 - ixKey] = swap;
+        }
         BSValue text = bsNull();
         if (match->matched[ix]) {
             size_t begin = bsStringOffset(string, match->groups[ix].begin);

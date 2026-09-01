@@ -1,0 +1,263 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+# Generate the bundled include library source, "src/includeSource.c" and
+# "include/barescript/includeSource.h"
+#
+# Each include library script is embedded as its parser-compiled JSON script model - the runtime
+# JSON-parses any system include starting with "{", skipping the parser entirely - dictionary
+# compressed with the phrase table below and chunked into C string literal lines.
+#
+# Run with the built command-line interface:
+#
+#   bare bin/includeSource.bare -v vFiles "'<json array of paths>'" \
+#       -v vOutputC "'src/includeSource.c'" -v vOutputH "'include/barescript/includeSource.h'"
+
+include <barescriptParser.bare>
+
+
+# The include model compression phrase table
+#
+# Encoding replaces each phrase with "~" plus its index character, applying phrases longest-first
+# (see the sort below); a literal "~" escapes to "~" plus the index one past the last phrase. 61
+# phrases plus that escape fill the alphanumeric index set.
+#
+# The phrases were mined from the include library's own compiled models by repeatedly taking the
+# substring that saves the most bytes and removing it, so they track the JSON that BareScript's
+# key-sorting jsonStringify actually emits - statement and expression shapes, the long generated
+# "__barescript" names, and the include library's own identifier fragments. They compress the
+# corpus to 37% of its size. Re-mine them if the include library changes substantially.
+includeSourcePhrases = [ \
+    '{"function":{"args":[{"variable"', 'HighlightCreateWordListR', '{"function":{"args":', \
+    'binary":{"left":', '","statements":[', 'barescriptParser', '"},{"string":"', '"lineNumber"', \
+    '__barescript', '{"variable":', '"lineCount":', 'ataLineChart', '{"expr":{"', '","right":', \
+    '{"number":', '{"string":', 'variable":', '{"return":', '    # The ', '":{"args":', ',"name":"', \
+    '},"op":"', '"label":', '{"jump":', 'markdown', 'tatement', 'aragraph', 'unittest', 'unary":', \
+    '"null"}', 'expr":', 'object', 'Length', 'schema', 'script', 'array', 'Index', 'Value', 'tring', \
+    'Parse', 'match', 'error', 'value', '"}},', 'Done', '}},{', '"}}}', 'tion', 's"},', '"}}]', 'e"}]', \
+    'e"},', 'Loop', 'ment', 'roup', 's"}]', 'mber', 'egex', '"lin', 'type', 'Type' \
+]
+includeSourceIndexes = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+
+# The C string literal chunk length, and the number of chunks per literal
+#
+# ISO C99 requires compilers to support string literals of only 4095 characters, and adjacent
+# literals concatenate into one, so a compressed model is emitted as an array of literals rather
+# than a single one. A chunk never ends on "~", so a phrase escape never straddles a boundary.
+includeSourceChunkLength = 100
+includeSourceChunksPerLiteral = 38
+
+
+# Sort the phrase table longest-first, so encoding always applies the longest match
+function includeSourcePhraseCompare(phraseA, phraseB):
+    return stringLength(phraseB) - stringLength(phraseA)
+endfunction
+
+
+# Compress a model text with the phrase table
+function includeSourceEncode(text, tildeIndex):
+    encoded = stringReplace(text, '~', '~' + tildeIndex)
+    for phrase, ixPhrase in includeSourcePhrases:
+        encoded = stringReplace(encoded, phrase, '~' + stringCharAt(includeSourceIndexes, ixPhrase))
+    endfor
+    return encoded
+endfunction
+
+
+# Decompress a model text with the phrase table - the round-trip check
+function includeSourceDecode(text, tildeIndex):
+    parts = stringSplit(text, '~')
+    result = [arrayGet(parts, 0)]
+    for part, ixPart in parts:
+        if ixPart == 0:
+            continue
+        endif
+        index = stringCharAt(part, 0)
+        arrayPush(result, if(index == tildeIndex, '~', \
+            arrayGet(includeSourcePhrases, stringIndexOf(includeSourceIndexes, index))))
+        arrayPush(result, stringSlice(part, 1))
+    endfor
+    return arrayJoin(result, '')
+endfunction
+
+
+# Convert an include file name to its exported stub name suffix - "markdownUp.bare" is "MarkdownUp"
+function includeSourceExportName(includeName):
+    return stringUpper(stringCharAt(includeName, 0)) + stringSlice(includeName, 1)
+endfunction
+
+
+# Escape and chunk a compressed model into C string literal array elements
+function includeSourceChunks(encoded):
+    literals = []
+    lines = []
+    ixChunk = 0
+    encodedLength = stringLength(encoded)
+    while ixChunk < encodedLength:
+        chunkEnd = mathMin(ixChunk + includeSourceChunkLength, encodedLength)
+
+        # A chunk never ends on "~" - that would split a phrase escape across two literals
+        if chunkEnd < encodedLength && stringCharAt(encoded, chunkEnd - 1) == '~':
+            chunkEnd = chunkEnd + 1
+        endif
+        chunk = stringSlice(encoded, ixChunk, chunkEnd)
+
+        # Escape the C string literal metacharacters. The compressed model is JSON, so it contains
+        # no raw control characters; "?" is escaped to rule out trigraph sequences.
+        chunk = stringReplace(chunk, '\\', '\\\\')
+        chunk = stringReplace(chunk, '"', '\\"')
+        chunk = stringReplace(chunk, '?', '\\?')
+
+        arrayPush(lines, '    "' + chunk + '"')
+        ixChunk = chunkEnd
+
+        if arrayLength(lines) == includeSourceChunksPerLiteral:
+            arrayPush(literals, arrayJoin(lines, '\n'))
+            lines = []
+        endif
+    endwhile
+    if arrayLength(lines):
+        arrayPush(literals, arrayJoin(lines, '\n'))
+    endif
+    arrayPush(literals, '    NULL')
+    return literals
+endfunction
+
+
+async function main():
+    files = jsonParse(systemGlobalGet('vFiles', '[]'))
+    outputC = systemGlobalGet('vOutputC')
+    outputH = systemGlobalGet('vOutputH')
+    if !files || outputC == null || outputH == null:
+        systemLog('usage: bare bin/includeSource.bare -v vFiles "..." -v vOutputC "..." -v vOutputH "..."')
+        return 1
+    endif
+
+    # Sort the phrase table longest-first and compute the "~" escape index
+    arraySort(includeSourcePhrases, includeSourcePhraseCompare)
+    tildeIndex = stringCharAt(includeSourceIndexes, arrayLength(includeSourcePhrases))
+
+    licenseC = '/* Licensed under the MIT License\n' + \
+        '   https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE */\n'
+    generated = '/* This file is generated by "make includes" - do not edit */\n'
+
+    # The header - one accessor per bundled include, plus the registry
+    headerParts = [licenseC, '\n', generated, '\n', \
+        '/*\n' + \
+        ' * The bundled BareScript include library\n' + \
+        ' *\n' + \
+        ' * Each include is embedded as its parser-compiled JSON script model, dictionary compressed.\n' + \
+        " * An accessor decodes its include's model on first use and caches it; the decoded text is\n" + \
+        ' * released by bsIncludeCleanup.\n' + \
+        ' */\n\n' + \
+        '#ifndef BARESCRIPT_INCLUDE_SOURCE_H\n' + \
+        '#define BARESCRIPT_INCLUDE_SOURCE_H\n\n' + \
+        '#include <stddef.h>\n\n' + \
+        '#ifdef __cplusplus\nextern "C" {\n#endif\n\n\n' + \
+        '/* The number of bundled include library scripts */\n' + \
+        '#define BS_INCLUDE_COUNT ']
+
+    # The source
+    sourceParts = [licenseC, '\n', generated, '\n' + \
+        '#include "barescript/includeSource.h"\n\n' + \
+        '#include "includeSourceDecode.h"\n\n\n' + \
+        '/* The compressed include model phrase table, indexed by its encoding character */\n' + \
+        'const char *const bsIncludeSourcePhrases[] = {\n']
+
+    # The phrase table, in index order
+    phraseLines = []
+    for phrase in includeSourcePhrases:
+        escaped = stringReplace(stringReplace(phrase, '\\', '\\\\'), '"', '\\"')
+        arrayPush(phraseLines, '    "' + escaped + '"')
+    endfor
+    arrayPush(phraseLines, '    "~"')
+    arrayPush(sourceParts, arrayJoin(phraseLines, ',\n') + '\n};\n\n' + \
+        'const size_t bsIncludeSourcePhraseCount = ' + (arrayLength(includeSourcePhrases) + 1) + ';\n')
+
+    # Each include library script
+    accessors = []
+    registry = []
+    names = []
+    totalSource = 0
+    totalEncoded = 0
+    for file in files:
+        includeName = stringSlice(file, stringLastIndexOf(file, '/') + 1)
+        exportName = includeSourceExportName(stringSlice(includeName, 0, stringLength(includeName) - 5))
+
+        # Parse the include script into its model, dropping the script lines - a system include's
+        # lines are unused at runtime
+        text = systemFetch(file)
+        if text == null:
+            systemLog('error: failed to read "' + file + '"')
+            return 1
+        endif
+        parseResult = barescriptParseScriptEx(text, 1, includeName)
+        if objectHas(parseResult, 'error'):
+            systemLog(objectGet(objectGet(parseResult, 'error'), 'message'))
+            return 1
+        endif
+        model = objectGet(parseResult, 'result')
+        objectDelete(model, 'scriptLines')
+
+        # Compress the model and verify the round trip
+        modelText = jsonStringify(model)
+        encoded = includeSourceEncode(modelText, tildeIndex)
+        if includeSourceDecode(encoded, tildeIndex) != modelText:
+            systemLog('error: "' + includeName + '" compressed model round-trip failure')
+            return 1
+        endif
+        totalSource = totalSource + stringLength(text)
+        totalEncoded = totalEncoded + stringLength(encoded)
+
+        arrayPush(sourceParts, '\n\n/* ' + includeName + ' */\n' + \
+            'static const char *const bsIncludeSourceData' + exportName + '[] = {\n' + \
+            arrayJoin(includeSourceChunks(encoded), ',\n') + '\n};\n\n' + \
+            'const char *bsIncludeSource' + exportName + '(void)\n{\n' + \
+            '    return bsIncludeSourceDecode(&bsIncludeSources[' + arrayLength(names) + ']);\n}\n')
+        arrayPush(accessors, '/* ' + includeName + ' - the decoded JSON script model */\n' + \
+            'const char *bsIncludeSource' + exportName + '(void);')
+        arrayPush(registry, '    {"' + includeName + '", bsIncludeSourceData' + exportName + ', NULL}')
+        arrayPush(names, includeName)
+    endfor
+
+    # The include registry and the stub accessor table
+    stubs = []
+    for name in names:
+        arrayPush(stubs, '    bsIncludeSource' + \
+            includeSourceExportName(stringSlice(name, 0, stringLength(name) - 5)))
+    endfor
+    arrayPush(sourceParts, '\n\n/* The bundled include library registry */\n' + \
+        'BSIncludeSource bsIncludeSources[] = {\n' + arrayJoin(registry, ',\n') + '\n};\n\n\n' + \
+        '/* The bundled include library stub accessors, in registry order */\n' + \
+        'const BSIncludeSourceFn bsIncludeSourceStubs[] = {\n' + arrayJoin(stubs, ',\n') + '\n};\n')
+
+    arrayPush(headerParts, arrayLength(names) + '\n\n\n' + \
+        '/* A bundled include library script */\n' + \
+        'typedef struct BSIncludeSource {\n' + \
+        '    const char *name;\n' + \
+        '    const char *const *compressed;\n' + \
+        '    char *decoded;\n' + \
+        '} BSIncludeSource;\n\n' + \
+        '/* The bundled include library registry, in name order */\n' + \
+        'extern BSIncludeSource bsIncludeSources[BS_INCLUDE_COUNT];\n\n' + \
+        "/* A bundled include library stub accessor - returns its include's decoded JSON script model */\n" + \
+        'typedef const char *(*BSIncludeSourceFn)(void);\n\n' + \
+        '/* The bundled include library stub accessors, in registry order */\n' + \
+        'extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];\n\n' + \
+        '/* The compressed include model phrase table, indexed by its encoding character */\n' + \
+        'extern const char *const bsIncludeSourcePhrases[];\n' + \
+        'extern const size_t bsIncludeSourcePhraseCount;\n\n\n' + \
+        '/*\n * The bundled include library stub accessors\n */\n\n' + \
+        arrayJoin(accessors, '\n\n') + '\n\n\n' + \
+        '#ifdef __cplusplus\n}\n#endif\n\n#endif\n')
+
+    # Write the generated files
+    systemFetch({'url': outputH, 'body': arrayJoin(headerParts, '')})
+    systemFetch({'url': outputC, 'body': arrayJoin(sourceParts, '')})
+    systemLog('includeSource: ' + arrayLength(names) + ' includes, ' + totalSource + ' source bytes, ' + \
+        totalEncoded + ' compressed bytes (' + numberToFixed(100 * totalEncoded / totalSource, 1) + '%)')
+    return 0
+endfunction
+
+
+return main()

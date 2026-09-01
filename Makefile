@@ -50,6 +50,13 @@ ifneq '$(strip $(CURL_LIBS))' ''
 endif
 
 
+# The bundled BareScript include library
+INCLUDE_LIB_DIR := lib/include
+INCLUDE_LIB_SRCS := $(sort $(wildcard $(INCLUDE_LIB_DIR)/*.bare))
+INCLUDE_SOURCE_C := $(SRC_DIR)/includeSource.c
+INCLUDE_SOURCE_H := $(INC_DIR)/barescript/includeSource.h
+
+
 # Sources
 LIB_SRCS := $(sort $(wildcard $(SRC_DIR)/*.c))
 LIB_SRCS := $(filter-out $(SRC_DIR)/main.c,$(LIB_SRCS))
@@ -76,7 +83,7 @@ COVER_CLI := $(BUILD_DIR)/$(CLI_NAME)-cover-cli
 
 .PHONY: help
 help:
-	@echo "usage: make [compile|test|cover|test-include|perf|install|clean]"
+	@echo "usage: make [compile|test|cover|test-include|perf|release|install|clean]"
 	@echo
 	@echo "  compile       build the shared library and the command-line interface"
 	@echo "  test          build and run the unit tests"
@@ -84,6 +91,8 @@ help:
 	@echo "                VERBOSE=1 lists each uncovered line"
 	@echo "  test-include  run the BareScript language test suite with the built CLI"
 	@echo "  perf          run the performance suite"
+	@echo "  release       profile-guided optimization build in build/release"
+	@echo "  includes      regenerate the bundled include library source"
 	@echo "  install       install to \$$(PREFIX), default /usr/local"
 	@echo "  clean         remove the build directory"
 	@echo
@@ -94,6 +103,28 @@ help:
 .PHONY: clean
 clean:
 	rm -rf $(BUILD_DIR)
+
+
+#
+# The bundled include library source
+#
+# "src/includeSource.c" and "include/barescript/includeSource.h" are generated and checked in, so a
+# fresh clone builds without a bootstrap. Regenerating them runs a BareScript program under a
+# command-line interface built from the *existing* generated source - the same self-hosting cycle
+# the JavaScript implementation uses to regenerate lib/includeSource.js.
+#
+
+.PHONY: includes
+includes:
+	$(MAKE) $(CLI_BIN)
+	$(CLI_BIN) $(CURDIR)/bin/includeSource.bare \
+	    -v vFiles "'[$(subst $(SPACE),$(COMMA),$(patsubst %,\"$(CURDIR)/%\",$(INCLUDE_LIB_SRCS)))]'" \
+	    -v vOutputC "'$(CURDIR)/$(INCLUDE_SOURCE_C)'" \
+	    -v vOutputH "'$(CURDIR)/$(INCLUDE_SOURCE_H)'"
+
+COMMA := ,
+EMPTY :=
+SPACE := $(EMPTY) $(EMPTY)
 
 .PHONY: superclean
 superclean: clean
@@ -126,6 +157,60 @@ $(LIB_A): $(LIB_OBJS)
 $(CLI_BIN): $(OBJ_DIR)/main.o $(LIB_SO)
 	@mkdir -p $(dir $@)
 	$(CC) -o $@ $(OBJ_DIR)/main.o -L$(BUILD_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
+
+
+#
+# Release - a profile-guided optimization build
+#
+# PGO is a three-stage build: compile instrumented, run a training workload, then recompile with
+# the profile. See perf/train.bare for what the training workload covers and why.
+#
+
+RELEASE_DIR := $(BUILD_DIR)/release
+PROFILE_DIR := $(BUILD_DIR)/profile
+RELEASE_CFLAGS ?= -O3 -DNDEBUG -flto
+RELEASE_LIB_SO := $(RELEASE_DIR)/lib$(LIB_NAME).$(SO_EXT)
+RELEASE_LIB_A := $(RELEASE_DIR)/lib$(LIB_NAME).a
+RELEASE_CLI := $(RELEASE_DIR)/$(CLI_NAME)
+
+ifneq '$(filter-out 0,$(CC_IS_CLANG))' ''
+    PROFILE_DATA := $(PROFILE_DIR)/barescript.profdata
+    PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR)
+    PROFILE_USE = -fprofile-use=$(CURDIR)/$(PROFILE_DATA) -Wno-profile-instr-unprofiled \
+        -Wno-profile-instr-out-of-date
+    PROFILE_MERGE = xcrun llvm-profdata merge -output=$(PROFILE_DATA) $(PROFILE_DIR)/*.profraw
+else
+    PROFILE_DATA := $(PROFILE_DIR)
+    PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR) -fprofile-update=single
+    PROFILE_USE = -fprofile-use=$(PROFILE_DIR) -fprofile-correction -Wno-missing-profile
+    PROFILE_MERGE = :
+endif
+
+.PHONY: release
+release: $(RELEASE_CLI)
+	@echo
+	@echo "Release build: $(RELEASE_CLI)"
+
+# Stage 1 and 2 - build instrumented and run the training workload
+$(PROFILE_DATA): $(LIB_SRCS) $(SRC_DIR)/main.c $(PERF_DIR)/train.bare $(PERF_DIR)/test.bare
+	@rm -rf $(PROFILE_DIR) $(BUILD_DIR)/pgo
+	@mkdir -p $(PROFILE_DIR) $(BUILD_DIR)/pgo
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_GENERATE) -o $(BUILD_DIR)/pgo/$(CLI_NAME) \
+	    $(LIB_SRCS) $(SRC_DIR)/main.c $(LIBS)
+	$(BUILD_DIR)/pgo/$(CLI_NAME) $(CURDIR)/$(PERF_DIR)/train.bare \
+	    -v vIncludeDir "'$(CURDIR)/$(INCLUDE_LIB_DIR)'"
+	$(BUILD_DIR)/pgo/$(CLI_NAME) $(PERF_DIR)/test.bare > /dev/null
+	$(BUILD_DIR)/pgo/$(CLI_NAME) $(TEST_DIR)/include/runTests.bare > /dev/null
+	$(BUILD_DIR)/pgo/$(CLI_NAME) -s $(TEST_DIR)/include/testLibrary.bare > /dev/null
+	$(PROFILE_MERGE)
+
+# Stage 3 - rebuild with the profile
+$(RELEASE_CLI): $(PROFILE_DATA)
+	@mkdir -p $(RELEASE_DIR)
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -fPIC $(SO_LDFLAGS) \
+	    -o $(RELEASE_LIB_SO) $(LIB_SRCS) $(LIBS)
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -o $@ $(SRC_DIR)/main.c \
+	    -L$(RELEASE_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
 
 
 #

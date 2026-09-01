@@ -104,6 +104,7 @@ struct BSRegex {
     int32_t refcount;
     BSValue pattern;
     unsigned flags;
+    bool anchored; /* every alternative begins with "^", so only the start position can match */
     RxNode *root;
     size_t groupCount;
     BSValue groupNames[BS_REGEX_GROUPS_MAX];
@@ -798,6 +799,7 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, cons
     regex->refcount = 1;
     regex->pattern = bsStringNewSize(pattern, patternSize);
     regex->flags = flags;
+    regex->anchored = false;
     regex->root = NULL;
     regex->groupCount = 1;
     regex->nodes = NULL;
@@ -818,6 +820,23 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, cons
             RxNode *node = regex->nodes[ix];
             if (node->kind == RX_GROUP) {
                 node->u.group.close->next = node->next;
+            }
+        }
+
+        /*
+         * A pattern whose every alternative begins with "^" can only match at the search start, so
+         * the scan over later positions is skipped. Multi-line patterns still scan, since "^" also
+         * matches after a newline. The parser's patterns are all anchored, so this is the
+         * difference between a linear and a quadratic scan over every line it parses.
+         */
+        if ((flags & BS_REGEX_MULTILINE) == 0 && regex->root->kind == RX_ALT) {
+            regex->anchored = regex->root->u.alt.count != 0;
+            for (size_t ix = 0; ix < regex->root->u.alt.count; ix++) {
+                const RxNode *branch = regex->root->u.alt.branches[ix];
+                if (branch == NULL || branch->kind != RX_BOL) {
+                    regex->anchored = false;
+                    break;
+                }
             }
         }
 
@@ -1322,6 +1341,14 @@ void bsRegexSubjectInit(BSRegexSubject *subject, BSValue string)
     }
     uint32_t *codes = subject->owned != NULL ? subject->owned : subject->inline_;
 
+    /* An all-ASCII subject - the common case - widens without decoding */
+    if (length == size) {
+        for (size_t ix = 0; ix < size; ix++) {
+            codes[ix] = (unsigned char) data[ix];
+        }
+        return;
+    }
+
     size_t offset = 0;
     size_t index = 0;
     while (offset < size && index < length) {
@@ -1359,7 +1386,8 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     /* Only the pattern's own capture groups need clearing, not the whole capture array */
     size_t groupBytes = compiled->groupCount * sizeof(BSRegexSpan);
     size_t matchedBytes = compiled->groupCount * sizeof(bool);
-    for (size_t pos = start; pos <= subject->length; pos++) {
+    size_t last = compiled->anchored ? start : subject->length;
+    for (size_t pos = start; pos <= last; pos++) {
         memset(match->groups, 0, groupBytes);
         memset(match->matched, 0, matchedBytes);
         match->begin = 0;
