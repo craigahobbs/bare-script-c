@@ -116,7 +116,7 @@ help:
 	@echo "                VERBOSE=1 lists each uncovered line"
 	@echo "  test-include  run the BareScript include library test suite"
 	@echo "  test-language run this project's own BareScript language tests"
-	@echo "  perf          run the performance suite"
+	@echo "  perf          run the performance suite against the release build"
 	@echo "  release       profile-guided optimization build in build/release"
 	@echo "  includes      regenerate the bundled include library source"
 	@echo "  install       build the release and install it to \$$(PREFIX), default /usr/local"
@@ -242,7 +242,8 @@ $(RELEASE_LIB_SO): $(PROFILE_DATA)
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) $(SO_CFLAGS) $(SO_LDFLAGS) \
 	    -o $@ $(LIB_SRCS) $(LIBS)
 
-$(RELEASE_CLI): $(RELEASE_LIB_SO)
+$(RELEASE_CLI): $(RELEASE_LIB_SO) $(PROFILE_DATA)
+	@mkdir -p $(RELEASE_DIR)
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -o $@ $(SRC_DIR)/main.c \
 	    -L$(RELEASE_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
 
@@ -342,6 +343,11 @@ test-language: compile
 # results are directly comparable. Timings are written to a temporary CSV and moved into place on
 # success, so build/perf.csv is always a complete, valid CSV.
 #
+# This measures the release build, not the development one. The implementations it is compared
+# against are themselves optimized builds - Node ships as one, and CPython is built with profile-
+# guided and link-time optimization - so timing the "-O2 -g" build here would understate this
+# runtime by about 1.2x against them. The native baseline gets the same optimization level.
+#
 
 PERF_BARE_JS_DIR := ../bare-script
 PERF_BARE_PY_DIR := ../bare-script-py
@@ -353,12 +359,12 @@ PERF_RUNS := 2
 PERF_NATIVE := $(BUILD_DIR)/perf-native
 
 .PHONY: perf
-perf: compile $(PERF_NATIVE)
+perf: $(RELEASE_CLI) $(PERF_NATIVE)
 	mkdir -p $(dir $(PERF_CSV_TMP))
 	echo "language,test,runs,timeMs" > $(PERF_CSV_TMP)
 	set -e; for X in $$(seq 1 $(PERF_RUNS)); do \
 	    echo "Run $$X of $(PERF_RUNS) - BareScript (C)"; \
-	    $(CLI_BIN) $(PERF_DIR)/test.bare -v vLanguage "'BareScript (C)'"$(if $(TEST), -v vTest "'$(TEST)'") \
+	    $(RELEASE_CLI) $(PERF_DIR)/test.bare -v vLanguage "'BareScript (C)'"$(if $(TEST), -v vTest "'$(TEST)'") \
 	        >> $(PERF_CSV_TMP); \
 	    echo "Run $$X of $(PERF_RUNS) - C"; \
 	    $(PERF_NATIVE) "C"$(if $(TEST), "$(TEST)") >> $(PERF_CSV_TMP); \
@@ -375,13 +381,13 @@ endif
 endif
 	mv $(PERF_CSV_TMP) $(PERF_CSV)
 ifneq '$(PERF_REPORT)' ''
-	$(CLI_BIN) $(CURDIR)/bin/perfReport.bare -v vCSV "'$(CURDIR)/$(PERF_CSV)'"
+	$(RELEASE_CLI) $(CURDIR)/bin/perfReport.bare -v vCSV "'$(CURDIR)/$(PERF_CSV)'"
 endif
 
 # The native C baseline, for the tests it implements
 $(PERF_NATIVE): $(PERF_DIR)/test.c
 	@mkdir -p $(dir $@)
-	$(CC) $(BASE_CFLAGS) -O2 -o $@ $< -lm
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) -o $@ $< -lm
 
 
 #

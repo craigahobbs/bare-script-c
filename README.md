@@ -48,7 +48,7 @@ make test           # build and run the unit tests
 make cover          # run the unit tests and report line coverage; fails under 100%
 make test-include   # run the BareScript include library test suite
 make test-language  # run this project's own BareScript language tests
-make perf           # run the performance suite
+make perf           # run the performance suite against the release build
 make release        # profile-guided optimization build in build/release
 make includes       # regenerate the bundled include library source
 make clean          # remove the build directory
@@ -514,6 +514,11 @@ and Python implementations run - writes `build/perf.csv`, merges in the results 
 `../bare-script` and `../bare-script-py` when they are present, and prints the same report they
 print. `perf/test.c` is the native C baseline, the counterpart of their `test.js` and `test.py`.
 
+It measures the **release** build, and builds it first if needed. The implementations it is
+compared against are themselves optimized builds - Node ships as one, and CPython is built with
+profile-guided and link-time optimization - so timing the development build here would understate
+this runtime by about 1.2x against them.
+
 ```sh
 make perf
 make perf TEST=mandelbrot PERF_RUNS=5
@@ -523,19 +528,20 @@ Milliseconds per 1000 runs, best of two, on one machine - lower is better:
 
 | Test             | BareScript (C) | BareScript (JS) | BareScript (PyC) | BareScript (Py) |
 | ---------------- | --------------:| ---------------:| ----------------:| ---------------:|
-| mandelbrot       |    **104,000** |         306,000 |          109,000 |       3,492,000 |
-| markdownElements |          1,191 |             744 |          **672** |           5,255 |
-| markdownParse    |          5,924 |       **3,128** |            7,284 |          21,020 |
-| qrcodeMatrix     |      **7,567** |          13,033 |            9,067 |         124,567 |
-| schemaParse      |        **820** |           1,220 |            1,244 |           9,152 |
-| schemaValidate   |      **1,008** |           1,960 |            1,056 |          14,484 |
-| urlDecode        |         **47** |              92 |              133 |             692 |
-| urlEncode        |       **33.5** |              52 |               57 |             396 |
+| mandelbrot       |     **80,000** |         308,000 |          110,000 |       3,528,000 |
+| markdownElements |          1,254 |             746 |          **661** |           5,252 |
+| markdownParse    |          7,724 |       **3,120** |            7,380 |          21,080 |
+| qrcodeMatrix     |      **6,033** |          13,167 |            9,067 |         124,667 |
+| schemaParse      |        **732** |           1,216 |            1,252 |           9,156 |
+| schemaValidate   |        **828** |           1,968 |            1,060 |          14,412 |
+| urlDecode        |       **42.5** |              91 |              132 |             690 |
+| urlEncode        |         **30** |            51.5 |               57 |             394 |
 
-The C runtime is the fastest BareScript runtime on seven of the eight tests. (`BareScript (PyC)` is
+The C runtime is the fastest BareScript runtime on six of the eight tests. (`BareScript (PyC)` is
 the Python implementation running its C extension for the runtime core, so it is not a pure-Python
-baseline; `BareScript (Py)` is.) `markdownParse` is the one JavaScript wins, against V8's
-JIT-compiled regular expression engine - it is almost entirely regex work.
+baseline; `BareScript (Py)` is.) The two it loses are the markdown tests: `markdownParse` goes to
+JavaScript, against V8's JIT-compiled regular expression engine - it is almost entirely regex work
+- and `markdownElements` to the Python C extension.
 
 Two other numbers are worth having. The release build is 1.3x the default build:
 
