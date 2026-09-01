@@ -1063,24 +1063,11 @@ BSValue bsFunctionCall(BSValue function, const BSValue *args, size_t argCount, B
 
 BSValue bsRetain(BSValue value)
 {
-    switch (value.type) {
-    case BS_STRING:
-        value.u.string->refcount++;
-        break;
-    case BS_ARRAY:
-        value.u.array->refcount++;
-        break;
-    case BS_OBJECT:
-        value.u.object->refcount++;
-        break;
-    case BS_FUNCTION:
-        value.u.function->refcount++;
-        break;
-    case BS_REGEX:
+    /* Immediate values need no work. Heap objects all start with an int32_t refcount. */
+    if (value.type >= BS_STRING && value.type <= BS_FUNCTION) {
+        (*(int32_t *) value.u.ref)++;
+    } else if (value.type == BS_REGEX) {
         bsRegexRetain(value);
-        break;
-    default:
-        break;
     }
     return value;
 }
@@ -1088,44 +1075,44 @@ BSValue bsRetain(BSValue value)
 
 void bsRelease(BSValue value)
 {
+    if (value.type == BS_REGEX) {
+        bsRegexRelease(value);
+        return;
+    }
+    if (value.type < BS_STRING || value.type > BS_FUNCTION) {
+        return;
+    }
+    if (--(*(int32_t *) value.u.ref) != 0) {
+        return;
+    }
     switch (value.type) {
     case BS_STRING:
-        if (--value.u.string->refcount == 0) {
-            free(value.u.string);
+        free(value.u.string);
+        break;
+    case BS_ARRAY: {
+        BSArray *array = value.u.array;
+        for (size_t ix = 0; ix < array->count; ix++) {
+            bsRelease(array->values[ix]);
         }
+        free(array->values);
+        free(array);
         break;
-    case BS_ARRAY:
-        if (--value.u.array->refcount == 0) {
-            BSArray *array = value.u.array;
-            for (size_t ix = 0; ix < array->count; ix++) {
-                bsRelease(array->values[ix]);
-            }
-            free(array->values);
-            free(array);
+    }
+    case BS_OBJECT: {
+        BSObject *object = value.u.object;
+        bsObjectNodeFree(object->root);
+        free(object);
+        break;
+    }
+    default: {
+        BSFunction *function = value.u.function;
+        if (function->dataFree != NULL) {
+            function->dataFree(function->data);
         }
+        bsRelease(bsStringTake(function->name));
+        free(function);
         break;
-    case BS_OBJECT:
-        if (--value.u.object->refcount == 0) {
-            BSObject *object = value.u.object;
-            bsObjectNodeFree(object->root);
-            free(object);
-        }
-        break;
-    case BS_FUNCTION:
-        if (--value.u.function->refcount == 0) {
-            BSFunction *function = value.u.function;
-            if (function->dataFree != NULL) {
-                function->dataFree(function->data);
-            }
-            bsRelease(bsStringTake(function->name));
-            free(function);
-        }
-        break;
-    case BS_REGEX:
-        bsRegexRelease(value);
-        break;
-    default:
-        break;
+    }
     }
 }
 

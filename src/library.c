@@ -86,9 +86,12 @@ static bool bsArgLimit(double value, unsigned flags, double limit)
 bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSValue *args, size_t argCount,
                     BSValue *values, BSOptions *options, const char *functionName)
 {
+    /* LAST_ARRAY slots are released on failure; every slot must be a valid value first */
+    for (size_t ix = 0; ix < argModelCount; ix++) {
+        values[ix] = bsNull();
+    }
     for (size_t ix = 0; ix < argModelCount; ix++) {
         const BSArgModel *model = &argModel[ix];
-        values[ix] = bsNull();
 
         /* The last-argument array collects every remaining argument */
         if ((model->flags & BS_ARG_LAST_ARRAY) != 0) {
