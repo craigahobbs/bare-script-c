@@ -180,6 +180,16 @@ TEST(regex_quantifiers)
     ASSERT_VALUE_STRING(bsTestMatch("a{,2}", "a{,2}", 0), "a{,2}");
 
     /* Quantified groups and alternations backtrack */
+    /* Capture writes overflow the inline undo trail and then its first heap block */
+    ASSERT_VALUE_STRING(bsTestMatch("(a){40}",
+                                   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 0),
+                       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    ASSERT_VALUE_STRING(bsTestMatch("(a){70}",
+                                   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 0),
+                       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
     ASSERT_VALUE_STRING(bsTestMatch("(ab)+", "xababy", 0), "abab");
     ASSERT_VALUE_STRING(bsTestMatch("(ab)+?", "xababy", 0), "ab");
     ASSERT_VALUE_STRING(bsTestMatch("(?:a|b)+", "xabay", 0), "aba");

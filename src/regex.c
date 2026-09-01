@@ -1212,14 +1212,21 @@ typedef struct RxState {
     RxTrailEntry *trail;
     size_t trailCount;
     size_t trailCapacity;
+    RxTrailEntry trailInline[32];
 } RxState;
 
 
 static void rxTrailPush(RxState *state, size_t group)
 {
     if (state->trailCount == state->trailCapacity) {
-        state->trailCapacity = state->trailCapacity != 0 ? state->trailCapacity * 2 : 64;
-        state->trail = bsRealloc(state->trail, state->trailCapacity * sizeof(RxTrailEntry));
+        size_t capacity = state->trailCapacity * 2;
+        RxTrailEntry *trail = bsAlloc(capacity * sizeof(RxTrailEntry));
+        memcpy(trail, state->trail, state->trailCount * sizeof(RxTrailEntry));
+        if (state->trail != state->trailInline) {
+            free(state->trail);
+        }
+        state->trail = trail;
+        state->trailCapacity = capacity;
     }
     RxTrailEntry *entry = &state->trail[state->trailCount++];
     entry->group = group;
@@ -1291,6 +1298,16 @@ static bool rxClassMatch(const RxState *state, const RxNode *node, uint32_t ch)
         }
     }
     return node->u.cls.negate ? !matched : matched;
+}
+
+
+/* An alternation of one single-code-point atom, or that atom itself */
+static const RxNode *rxSimpleAtom(const RxNode *node)
+{
+    if (node != NULL && node->kind == RX_ALT && node->u.alt.count == 1 && node->next == NULL) {
+        node = node->u.alt.branches[0];
+    }
+    return (node != NULL && rxIsSimple(node)) ? node : NULL;
 }
 
 
@@ -1533,6 +1550,16 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
     }
 
     case RX_LOOKAHEAD: {
+        const RxNode *atom = rxSimpleAtom(node->u.look.sub);
+        if (atom != NULL) {
+            bool matched = rxMatchOne(state, atom, pos);
+            if (node->u.look.negate) {
+                result = !matched && rxMatchNode(state, node->next, cont, pos);
+            } else {
+                result = matched && rxMatchNode(state, node->next, cont, pos);
+            }
+            break;
+        }
         RxCont stop = {RX_CONT_STOP, NULL, 0, 0, NULL};
         size_t mark = state->trailCount;
         bool matched = rxMatchNode(state, node->u.look.sub, &stop, pos);
@@ -1556,12 +1583,9 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
          * A lookbehind whose body is one code point - "(?<!\\)", "(?<=a)", "(?<![A-Za-z])" -
          * is a single membership test, the form markdown span matching uses on every candidate.
          */
-        const RxNode *atom = node->u.look.sub;
-        if (atom->kind == RX_ALT && atom->u.alt.count == 1 && atom->next == NULL) {
-            atom = atom->u.alt.branches[0];
-        }
-        if (node->u.look.minLength == 1 && node->u.look.maxLength == 1 && atom != NULL &&
-            rxIsSimple(atom)) {
+        const RxNode *atom = (node->u.look.minLength == 1 && node->u.look.maxLength == 1) ?
+            rxSimpleAtom(node->u.look.sub) : NULL;
+        if (atom != NULL) {
             bool matched = pos >= 1 && rxMatchOne(state, atom, pos - 1);
             if (node->u.look.negate) {
                 result = !matched && rxMatchNode(state, node->next, cont, pos);
@@ -1653,9 +1677,9 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     state.end = 0;
     state.depth = 0;
     state.steps = 0;
-    state.trail = NULL;
+    state.trail = state.trailInline;
     state.trailCount = 0;
-    state.trailCapacity = 0;
+    state.trailCapacity = sizeof(state.trailInline) / sizeof(state.trailInline[0]);
 
     /* Only the pattern's own capture groups need clearing, not the whole capture array */
     size_t groupBytes = compiled->groupCount * sizeof(BSRegexSpan);
@@ -1690,11 +1714,15 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
             match->groups[0].begin = pos;
             match->groups[0].end = state.end;
             match->matched[0] = true;
-            free(state.trail);
+            if (state.trail != state.trailInline) {
+                free(state.trail);
+            }
             return true;
         }
     }
-    free(state.trail);
+    if (state.trail != state.trailInline) {
+        free(state.trail);
+    }
     return false;
 }
 
