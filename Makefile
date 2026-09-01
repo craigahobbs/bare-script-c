@@ -81,10 +81,23 @@ COVER_BIN := $(BUILD_DIR)/$(CLI_NAME)-cover
 COVER_CLI := $(BUILD_DIR)/$(CLI_NAME)-cover-cli
 
 
+#
+# The pre-commit gate
+#
+# Everything that must pass before a commit, as it is in the JavaScript and Python
+# implementations: the unit tests under coverage, the include library suite - which includes its
+# static analysis run - and this project's own language tests.
+#
+
+.PHONY: commit
+commit: test cover test-include test-language
+
+
 .PHONY: help
 help:
 	@echo "usage: make [compile|test|cover|test-include|perf|release|install|clean]"
 	@echo
+	@echo "  commit        everything that must pass before a commit"
 	@echo "  compile       build the shared library and the command-line interface"
 	@echo "  test          build and run the unit tests"
 	@echo "  cover         run the unit tests and report coverage (fails under 100%)"
