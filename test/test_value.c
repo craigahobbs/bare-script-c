@@ -762,6 +762,20 @@ TEST(value_object_iterate_deep)
 }
 
 
+TEST(value_object_node_pool)
+{
+    /* Overflow the recycled-node pool so further frees go to the allocator */
+    BSValue object = bsObjectNew();
+    char key[16];
+    for (int ix = 0; ix < 1100; ix++) {
+        snprintf(key, sizeof(key), "p%04d", ix);
+        bsObjectSet(object, key, bsNumber(ix));
+    }
+    ASSERT_INT_EQ(bsObjectCount(object), 1100);
+    bsRelease(object);
+}
+
+
 TEST(value_object_delete_rotations)
 {
     /*

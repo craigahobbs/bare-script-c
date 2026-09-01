@@ -713,6 +713,33 @@ size_t bsObjectCount(BSValue value)
  */
 static uint32_t bsObjectPriorityState = 0x9E3779B9u;
 
+/* Recycled treap nodes - BareScript allocates and frees objects constantly */
+static BSObjectNode *bsObjectNodePool;
+static unsigned bsObjectNodePoolCount;
+#define BS_OBJECT_NODE_POOL_MAX 1024
+
+static BSObjectNode *bsObjectNodeAlloc(void)
+{
+    if (bsObjectNodePool != NULL) {
+        BSObjectNode *node = bsObjectNodePool;
+        bsObjectNodePool = node->left;
+        bsObjectNodePoolCount--;
+        return node;
+    }
+    return bsAlloc(sizeof(BSObjectNode));
+}
+
+static void bsObjectNodeRecycle(BSObjectNode *node)
+{
+    if (bsObjectNodePoolCount >= BS_OBJECT_NODE_POOL_MAX) {
+        free(node);
+        return;
+    }
+    node->left = bsObjectNodePool;
+    bsObjectNodePool = node;
+    bsObjectNodePoolCount++;
+}
+
 static uint32_t bsObjectPriority(void)
 {
     uint32_t state = bsObjectPriorityState;
@@ -758,7 +785,7 @@ static BSObjectNode *bsObjectRotateLeft(BSObjectNode *node)
 static BSObjectNode *bsObjectInsert(BSObjectNode *node, BSValue key, BSValue item, BSObject *object)
 {
     if (node == NULL) {
-        BSObjectNode *created = bsAlloc(sizeof(BSObjectNode));
+        BSObjectNode *created = bsObjectNodeAlloc();
         created->left = NULL;
         created->right = NULL;
         created->priority = bsObjectPriority();
@@ -862,7 +889,7 @@ static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t 
         }
         bsRelease(bsStringTake(node->key));
         bsRelease(node->value);
-        free(node);
+        bsObjectNodeRecycle(node);
         object->count--;
         object->generation++;
         *removed = true;
@@ -886,7 +913,7 @@ static void bsObjectNodeFree(BSObjectNode *node)
         bsObjectNodeFree(node->left);
         bsRelease(bsStringTake(node->key));
         bsRelease(node->value);
-        free(node);
+        bsObjectNodeRecycle(node);
         node = right;
     }
 }
