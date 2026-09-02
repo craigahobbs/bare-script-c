@@ -1202,6 +1202,7 @@ typedef struct RxTrailEntry {
 
 typedef struct RxState {
     const uint32_t *codes;
+    const unsigned char *bytes;
     size_t length;
     unsigned flags;
     BSRegex *regex;
@@ -1214,6 +1215,12 @@ typedef struct RxState {
     size_t trailCapacity;
     RxTrailEntry trailInline[32];
 } RxState;
+
+
+static inline uint32_t rxCode(const RxState *state, size_t pos)
+{
+    return state->codes != NULL ? state->codes[pos] : (uint32_t) state->bytes[pos];
+}
 
 
 static void rxTrailPush(RxState *state, size_t group)
@@ -1317,7 +1324,7 @@ static bool rxMatchOne(const RxState *state, const RxNode *node, size_t pos)
     if (pos >= state->length) {
         return false;
     }
-    uint32_t ch = state->codes[pos];
+    uint32_t ch = rxCode(state, pos);
     switch (node->kind) {
     case RX_CHAR:
         return (state->flags & BS_REGEX_IGNORECASE) != 0 ? rxFold(ch) == node->u.ch : ch == node->u.ch;
@@ -1446,22 +1453,22 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         break;
 
     case RX_BOL:
-        if (pos == 0 || ((state->flags & BS_REGEX_MULTILINE) != 0 && state->codes[pos - 1] == '\n')) {
+        if (pos == 0 || ((state->flags & BS_REGEX_MULTILINE) != 0 && rxCode(state, pos - 1) == '\n')) {
             result = rxMatchNode(state, node->next, cont, pos);
         }
         break;
 
     case RX_EOL:
         if (pos == state->length ||
-            ((state->flags & BS_REGEX_MULTILINE) != 0 && state->codes[pos] == '\n')) {
+            ((state->flags & BS_REGEX_MULTILINE) != 0 && rxCode(state, pos) == '\n')) {
             result = rxMatchNode(state, node->next, cont, pos);
         }
         break;
 
     case RX_WORD_BOUNDARY:
     case RX_NOT_WORD_BOUNDARY: {
-        bool before = pos > 0 && rxIsWordCode(state->codes[pos - 1]);
-        bool after = pos < state->length && rxIsWordCode(state->codes[pos]);
+        bool before = pos > 0 && rxIsWordCode(rxCode(state, pos - 1));
+        bool after = pos < state->length && rxIsWordCode(rxCode(state, pos));
         bool boundary = (before != after);
         if (boundary == (node->kind == RX_WORD_BOUNDARY)) {
             result = rxMatchNode(state, node->next, cont, pos);
@@ -1538,8 +1545,8 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         }
         bool equal = true;
         for (size_t ix = 0; ix < size && equal; ix++) {
-            uint32_t expected = state->codes[span.begin + ix];
-            uint32_t actual = state->codes[pos + ix];
+            uint32_t expected = rxCode(state, span.begin + ix);
+            uint32_t actual = rxCode(state, pos + ix);
             equal = (state->flags & BS_REGEX_IGNORECASE) != 0 ?
                 rxFold(expected) == rxFold(actual) : expected == actual;
         }
@@ -1630,23 +1637,23 @@ void bsRegexSubjectInit(BSRegexSubject *subject, BSValue string)
     size_t size = bsStringSize(string);
     size_t length = bsStringLength(string);
     subject->length = length;
+    subject->owned = NULL;
+
+    /* ASCII: match the original bytes; code point i is bytes[i] */
+    if (length == size) {
+        subject->codes = NULL;
+        subject->bytes = (const unsigned char *) data;
+        return;
+    }
+
+    subject->bytes = NULL;
     if (length <= sizeof(subject->inline_) / sizeof(subject->inline_[0])) {
-        subject->owned = NULL;
         subject->codes = subject->inline_;
     } else {
         subject->owned = bsAlloc(length * sizeof(uint32_t));
         subject->codes = subject->owned;
     }
     uint32_t *codes = subject->owned != NULL ? subject->owned : subject->inline_;
-
-    /* An all-ASCII subject - the common case - widens without decoding */
-    if (length == size) {
-        for (size_t ix = 0; ix < size; ix++) {
-            codes[ix] = (unsigned char) data[ix];
-        }
-        return;
-    }
-
     size_t offset = 0;
     size_t index = 0;
     while (offset < size && index < length) {
@@ -1662,6 +1669,7 @@ void bsRegexSubjectFree(BSRegexSubject *subject)
     free(subject->owned);
     subject->owned = NULL;
     subject->codes = NULL;
+    subject->bytes = NULL;
 }
 
 
@@ -1670,6 +1678,7 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     BSRegex *compiled = regex.u.regex;
     RxState state;
     state.codes = subject->codes;
+    state.bytes = subject->bytes;
     state.length = subject->length;
     state.flags = compiled->flags;
     state.regex = compiled;
@@ -1689,7 +1698,8 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
         /* Skip positions whose code point cannot begin a match */
         if (compiled->firstUsable) {
             while (pos < subject->length) {
-                uint32_t code = subject->codes[pos];
+                uint32_t code = subject->codes != NULL ? subject->codes[pos] :
+                    (uint32_t) subject->bytes[pos];
                 if (code >= 256 ? compiled->first.high : compiled->first.codes[code]) {
                     break;
                 }

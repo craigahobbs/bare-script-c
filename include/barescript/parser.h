@@ -203,6 +203,17 @@ struct BSScript {
     BSFunctionDef **functions;
     size_t functionCount;
     bool system;            /* true if this is a system include script */
+
+    /*
+     * Coverage recording cache. Hits are counted in a line-indexed array of pointers into the
+     * coverage object's per-line count values, so a loop does not format line keys or search the
+     * covered object on every statement. coverageOwner is the coverage global's identity;
+     * coverageCovered is borrowed from it.
+     */
+    BSObject *coverageOwner;
+    BSValue coverageCovered;
+    BSValue **coverageCounts;
+    int coverageLineCap;
 };
 
 

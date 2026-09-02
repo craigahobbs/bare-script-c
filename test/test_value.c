@@ -137,6 +137,10 @@ TEST(value_string)
 
     ASSERT_VALUE_STRING(bsStringNewSize("abcdef", 3), "abc");
     ASSERT_VALUE_STRING(bsStringNewFormat("%s-%d", "x", 5), "x-5");
+    /* Word-at-a-time ASCII length for strings of 8 bytes or more */
+    BSValue ascii = bsStringNew("abcdefghijkl");
+    ASSERT_INT_EQ(bsStringLength(ascii), 12);
+    bsRelease(ascii);
 
     /* A non-string value has no string data */
     ASSERT_STR_EQ(bsStringData(bsNumber(1)), "");
@@ -156,6 +160,9 @@ TEST(value_string_unicode)
     ASSERT_INT_EQ(bsStringOffset(value, 3), 6);
     ASSERT_INT_EQ(bsStringOffset(value, 5), 11);
     ASSERT_INT_EQ(bsStringOffset(value, 99), 11);
+    ASSERT_INT_EQ(bsStringOffset(value, 4), 10);
+    ASSERT_INT_EQ(bsStringOffset(value, 1), 1);
+    ASSERT_INT_EQ(bsStringOffset(value, 1), 1);
     ASSERT_INT_EQ(bsStringCodePoint(value, 0), 'a');
     ASSERT_INT_EQ(bsStringCodePoint(value, 1), 0xE9);
     ASSERT_INT_EQ(bsStringCodePoint(value, 3), 0x1F600);
@@ -170,6 +177,29 @@ TEST(value_string_unicode)
 
     /* A non-string value */
     ASSERT_INT_EQ(bsStringOffset(bsNumber(1), 0), 0);
+
+    /* Format a non-ASCII string so length walks UTF-8 */
+    BSValue formatted = bsStringNewFormat("%s", "\xc3\xa9");
+    ASSERT_INT_EQ(bsStringLength(formatted), 1);
+    ASSERT_INT_EQ(bsStringSize(formatted), 2);
+    bsRelease(formatted);
+
+    /* A long non-ASCII string builds a sparse index on a backward lookup */
+    BSStringBuilder sb;
+    bsSBInit(&sb);
+    for (int ix = 0; ix < 40; ix++) {
+        bsSBAppendString(&sb, "\xc3\xa9");
+    }
+    BSValue longUnicode = bsSBToValue(&sb);
+    ASSERT_INT_EQ(bsStringOffset(longUnicode, 0), 0);
+    ASSERT_INT_EQ(bsStringOffset(longUnicode, 1), 2);
+    ASSERT_INT_EQ(bsStringOffset(longUnicode, 39), 78);
+    ASSERT_INT_EQ(bsStringOffset(longUnicode, 40), 80);
+    ASSERT_INT_EQ(bsStringOffset(longUnicode, 99), 80);
+    ASSERT_INT_EQ(bsStringOffset(longUnicode, 1), 2);
+    ASSERT_INT_EQ(bsStringOffset(longUnicode, 20), 40);
+    ASSERT_INT_EQ(bsStringOffset(longUnicode, 16), 32);
+    bsRelease(longUnicode);
 }
 
 
@@ -320,6 +350,8 @@ TEST(value_object)
     ASSERT_STR_EQ(bsValueTypeString(object), "object");
     ASSERT_INT_EQ(bsObjectCount(object), 0);
     ASSERT_TRUE(bsValueBoolean(object));
+    ASSERT_FALSE(bsObjectHas(object, "z"));
+    ASSERT_FALSE(bsObjectHas(object, "this-key-is-longer-than-sixty-four-bytes-so-it-is-not-interned-xx"));
 
     bsObjectSet(object, "b", bsNumber(2));
     bsObjectSet(object, "a", bsNumber(1));
@@ -367,6 +399,38 @@ TEST(value_object)
     ASSERT_INT_EQ(bsObjectGetString(bsNumber(1), key).type, BS_NULL);
     ASSERT_FALSE(bsObjectHasString(bsNumber(1), key));
     bsRelease(key);
+}
+
+
+TEST(value_object_intern)
+{
+    /* Enough unique short keys to grow the intern table (32 slots, grow at 75%) */
+    BSValue object = bsObjectNew();
+    char key[16];
+    for (int ix = 0; ix < 40; ix++) {
+        snprintf(key, sizeof(key), "k%d", ix);
+        bsObjectSet(object, key, bsNumber(ix));
+    }
+    ASSERT_INT_EQ(bsObjectCount(object), 40);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k0").u.number, 0);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
+    ASSERT_FALSE(bsObjectHas(object, "k40"));
+    ASSERT_FALSE(bsObjectDelete(object, "k40"));
+
+    /* A key longer than the intern limit still round-trips, on both small and large objects */
+    char longKey[80];
+    memset(longKey, 'a', 70);
+    longKey[70] = '\0';
+    BSValue small = bsObjectNew();
+    bsObjectSet(small, longKey, bsNumber(1));
+    ASSERT_TRUE(bsObjectHas(small, longKey));
+    bsRelease(small);
+    bsObjectSet(object, longKey, bsNumber(70));
+    ASSERT_TRUE(bsObjectHas(object, longKey));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, longKey).u.number, 70);
+    ASSERT_TRUE(bsObjectDelete(object, longKey));
+    ASSERT_FALSE(bsObjectHas(object, longKey));
+    bsRelease(object);
 }
 
 

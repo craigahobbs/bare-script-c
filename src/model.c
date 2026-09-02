@@ -146,6 +146,7 @@ void bsScriptRelease(BSScript *script)
     free(script->functions);
     bsRelease(script->scriptName);
     bsRelease(script->scriptLines);
+    free(script->coverageCounts);
     free(script);
 }
 

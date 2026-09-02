@@ -250,10 +250,36 @@ static BSString *bsStringAlloc(size_t size)
 {
     BSString *string = bsAlloc(sizeof(BSString) + size);
     string->refcount = 1;
+    string->interned = 0;
     string->size = size;
     string->length = 0;
+    string->offsets = NULL;
+    string->cursorIndex = 0;
+    string->cursorOffset = 0;
     string->data[size] = '\0';
     return string;
+}
+
+
+static bool bsUtf8IsAscii(const char *data, size_t size)
+{
+    const unsigned char *bytes = (const unsigned char *) data;
+    size_t ix = 0;
+    while (ix + 8 <= size) {
+        uint64_t word;
+        memcpy(&word, bytes + ix, 8);
+        if (word & 0x8080808080808080ULL) {
+            return false;
+        }
+        ix += 8;
+    }
+    while (ix < size) {
+        if (bytes[ix] & 0x80) {
+            return false;
+        }
+        ix++;
+    }
+    return true;
 }
 
 
@@ -261,8 +287,12 @@ BSValue bsStringNewSize(const char *text, size_t size)
 {
     BSString *string = bsStringAlloc(size);
     memcpy(string->data, text, size);
-    size_t length = bsUTF8Length(string->data, size);
-    string->length = (length != SIZE_MAX ? length : size);
+    if (bsUtf8IsAscii(text, size)) {
+        string->length = size;
+    } else {
+        size_t length = bsUTF8Length(string->data, size);
+        string->length = (length != SIZE_MAX ? length : size);
+    }
 
     BSValue value;
     value.type = BS_STRING;
@@ -300,8 +330,12 @@ BSValue bsStringNewVFormat(const char *format, va_list args)
 
     BSString *string = bsStringAlloc((size_t) size);
     vsnprintf(string->data, (size_t) size + 1, format, args);
-    size_t length = bsUTF8Length(string->data, (size_t) size);
-    string->length = (length != SIZE_MAX ? length : (size_t) size);
+    if (bsUtf8IsAscii(string->data, (size_t) size)) {
+        string->length = (size_t) size;
+    } else {
+        size_t length = bsUTF8Length(string->data, (size_t) size);
+        string->length = (length != SIZE_MAX ? length : (size_t) size);
+    }
     return bsStringTake(string);
 }
 
@@ -401,24 +435,74 @@ size_t bsStringLength(BSValue value)
 }
 
 
-size_t bsStringOffset(BSValue value, size_t index)
+#define BS_STRING_INDEX_STRIDE 16
+
+static void bsStringIndexBuild(BSString *string)
 {
-    if (value.type != BS_STRING) {
-        return 0;
-    }
-    BSString *string = value.u.string;
-    if (string->length == string->size) {
-        return index < string->size ? index : string->size;
-    }
+    size_t length = string->length;
+    size_t markCount = length / BS_STRING_INDEX_STRIDE + 1;
+    uint32_t *offsets = bsAlloc(markCount * sizeof(uint32_t));
     size_t offset = 0;
     size_t position = 0;
+    size_t mark = 1;
+    size_t next = BS_STRING_INDEX_STRIDE;
+    offsets[0] = 0;
+    while (position < length && mark < markCount) {
+        size_t codeSize;
+        bsUTF8Decode(string->data, string->size, offset, &codeSize);
+        offset += codeSize;
+        position++;
+        if (position == next) {
+            offsets[mark++] = (uint32_t) offset;
+            next += BS_STRING_INDEX_STRIDE;
+        }
+    }
+    string->offsets = offsets;
+}
+
+
+size_t bsStringOffsetSlow(BSValue value, size_t index)
+{
+    BSString *string = value.u.string;
+    size_t length = string->length;
+    if (index >= length) {
+        string->cursorIndex = (uint32_t) length;
+        string->cursorOffset = (uint32_t) string->size;
+        return string->size;
+    }
+
+    size_t position;
+    size_t offset;
+    if (index >= string->cursorIndex) {
+        position = string->cursorIndex;
+        offset = string->cursorOffset;
+    } else {
+        position = 0;
+        offset = 0;
+        if (length >= BS_STRING_INDEX_STRIDE * 2) {
+            if (string->offsets == NULL) {
+                bsStringIndexBuild(string);
+            }
+            size_t mark = index / BS_STRING_INDEX_STRIDE;
+            position = mark * BS_STRING_INDEX_STRIDE;
+            offset = string->offsets[mark];
+        }
+    }
     while (offset < string->size && position < index) {
         size_t codeSize;
         bsUTF8Decode(string->data, string->size, offset, &codeSize);
         offset += codeSize;
         position++;
     }
+    string->cursorIndex = (uint32_t) position;
+    string->cursorOffset = (uint32_t) offset;
     return offset;
+}
+
+
+size_t bsStringOffset(BSValue value, size_t index)
+{
+    return bsStringOffsetFast(value, index);
 }
 
 
@@ -806,8 +890,113 @@ static uint32_t bsObjectPriority(void)
 }
 
 
+/*
+ * Interned object keys
+ *
+ * Short keys are interned so lookup can compare BSString pointers instead of memcmp. The intern
+ * table holds one reference; interned strings live until process exit.
+ */
+#define BS_INTERN_MAX 64
+#define BS_INTERN_INITIAL 32
+
+static BSString **bsInternSlots;
+static size_t bsInternMask;
+static size_t bsInternCount;
+
+static uint32_t bsInternHash(const char *data, size_t size)
+{
+    uint32_t hash = 2166136261u;
+    for (size_t ix = 0; ix < size; ix++) {
+        hash ^= (unsigned char) data[ix];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static void bsInternEnsure(void)
+{
+    if (bsInternSlots != NULL) {
+        return;
+    }
+    size_t capacity = BS_INTERN_INITIAL;
+    bsInternMask = capacity - 1;
+    bsInternSlots = bsAlloc(capacity * sizeof(BSString *));
+    memset(bsInternSlots, 0, capacity * sizeof(BSString *));
+}
+
+static void bsInternGrow(void)
+{
+    size_t oldCapacity = bsInternMask + 1;
+    BSString **old = bsInternSlots;
+    size_t capacity = oldCapacity * 2;
+    bsInternMask = capacity - 1;
+    bsInternSlots = bsAlloc(capacity * sizeof(BSString *));
+    memset(bsInternSlots, 0, capacity * sizeof(BSString *));
+    for (size_t ix = 0; ix < oldCapacity; ix++) {
+        BSString *string = old[ix];
+        if (string == NULL) {
+            continue;
+        }
+        uint32_t hash = bsInternHash(string->data, string->size);
+        for (size_t probe = 0;; probe++) {
+            size_t slot = (hash + probe) & bsInternMask;
+            if (bsInternSlots[slot] == NULL) {
+                bsInternSlots[slot] = string;
+                break;
+            }
+        }
+    }
+    free(old);
+}
+
+static BSString *bsInternLookup(const char *data, size_t size)
+{
+    bsInternEnsure();
+    uint32_t hash = bsInternHash(data, size);
+    for (size_t probe = 0;; probe++) {
+        size_t slot = (hash + probe) & bsInternMask;
+        BSString *string = bsInternSlots[slot];
+        if (string == NULL) {
+            return NULL;
+        }
+        if (string->size == size && (size == 0 || memcmp(string->data, data, size) == 0)) {
+            return string;
+        }
+    }
+}
+
+static BSValue bsStringIntern(const char *data, size_t size)
+{
+    if (size > BS_INTERN_MAX) {
+        return bsStringNewSize(data, size);
+    }
+    BSString *found = bsInternLookup(data, size);
+    if (found != NULL) {
+        found->refcount++;
+        return bsStringTake(found);
+    }
+    if ((bsInternCount + 1) * 4 >= (bsInternMask + 1) * 3) {
+        bsInternGrow();
+    }
+    BSValue value = bsStringNewSize(data, size);
+    value.u.string->interned = 1;
+    value.u.string->refcount++;
+    uint32_t hash = bsInternHash(data, size);
+    for (size_t probe = 0;; probe++) {
+        size_t slot = (hash + probe) & bsInternMask;
+        if (bsInternSlots[slot] == NULL) {
+            bsInternSlots[slot] = value.u.string;
+            bsInternCount++;
+            return value;
+        }
+    }
+}
+
 static int bsKeyCompare(const BSString *key1, const char *key2, size_t size2)
 {
+    if (key1->data == key2) {
+        return 0;
+    }
     size_t size1 = key1->size;
     size_t size = size1 < size2 ? size1 : size2;
     int result = size != 0 ? memcmp(key1->data, key2, size) : 0;
@@ -839,6 +1028,12 @@ static BSObjectNode *bsObjectRotateLeft(BSObjectNode *node)
 /* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created. */
 static BSObjectNode *bsObjectInsert(BSObjectNode *node, BSValue key, BSValue item, BSObject *object)
 {
+    if (key.type == BS_STRING && !key.u.string->interned && key.u.string->size <= BS_INTERN_MAX) {
+        BSValue interned = bsStringIntern(key.u.string->data, key.u.string->size);
+        BSObjectNode *result = bsObjectInsert(node, interned, item, object);
+        bsRelease(interned);
+        return result;
+    }
     if (node == NULL) {
         BSObjectNode *created = bsObjectNodeAlloc();
         created->left = NULL;
@@ -902,9 +1097,21 @@ static BSObjectNode *bsObjectFind(BSObjectNode *node, const char *key, size_t si
 
 static BSObjectNode *bsObjectFindKey(const BSObject *object, const char *key, size_t size)
 {
+    BSString *interned = NULL;
+    if (size <= BS_INTERN_MAX) {
+        interned = bsInternLookup(key, size);
+        if (interned == NULL) {
+            return NULL;
+        }
+        key = interned->data;
+    }
     if (object->count <= BS_OBJECT_SMALL) {
         for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
-            if (node->key->size == size && (size == 0 || memcmp(node->key->data, key, size) == 0)) {
+            if (interned != NULL) {
+                if (node->key == interned) {
+                    return node;
+                }
+            } else if (node->key->size == size && (size == 0 || memcmp(node->key->data, key, size) == 0)) {
                 return node;
             }
         }
@@ -983,7 +1190,7 @@ void bsObjectSetString(BSValue value, BSValue key, BSValue item)
 
 void bsObjectSet(BSValue value, const char *key, BSValue item)
 {
-    BSValue keyValue = bsStringNew(key);
+    BSValue keyValue = bsStringIntern(key, strlen(key));
     bsObjectSetString(value, keyValue, item);
     bsRelease(keyValue);
 }
@@ -1000,6 +1207,12 @@ bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out)
     }
     *out = node->value;
     return true;
+}
+
+
+BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size)
+{
+    return &bsObjectFindKey(object.u.object, key, size)->value;
 }
 
 
@@ -1033,8 +1246,17 @@ bool bsObjectHas(BSValue value, const char *key)
 bool bsObjectDelete(BSValue value, const char *key)
 {
     BSObject *object = value.u.object;
+    size_t size = strlen(key);
+    if (size <= BS_INTERN_MAX) {
+        BSString *interned = bsInternLookup(key, size);
+        if (interned == NULL) {
+            return false;
+        }
+        key = interned->data;
+        size = interned->size;
+    }
     bool removed = false;
-    object->root = bsObjectRemove(object->root, key, strlen(key), &removed, object);
+    object->root = bsObjectRemove(object->root, key, size, &removed, object);
     return removed;
 }
 
@@ -1176,6 +1398,7 @@ void bsReleaseDestroyed(BSValue value)
 {
     switch (value.type) {
     case BS_STRING:
+        free(value.u.string->offsets);
         free(value.u.string);
         break;
     case BS_ARRAY: {

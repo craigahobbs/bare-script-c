@@ -661,6 +661,10 @@ TEST(runtime_coverage)
     ASSERT_TRUE(bsObjectCount(covered) > 0);
     BSValue line1 = bsObjectGet(covered, "1");
     ASSERT_DOUBLE_EQ(bsObjectGet(line1, "count").u.number, 1);
+
+    /* A second parse of the same name increments the existing covered line */
+    ASSERT_VALUE(bsTestExecuteOptions("a = 1\nif a:\n    a = 2\nendif\nreturn a", options), "2");
+    ASSERT_DOUBLE_EQ(bsObjectGet(line1, "count").u.number, 2);
     bsOptionsFree(options);
 
     /* Coverage is not recorded for system scripts */
@@ -707,7 +711,88 @@ TEST(runtime_coverage_jump)
     ASSERT_VALUE(bsTestExecuteOptions("i = 0\nwhile i < 3:\n    i = i + 1\nendwhile\nreturn i", options), "3");
     BSValue covered = bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), "test.bare"), "covered");
     ASSERT_TRUE(bsObjectCount(covered) >= 4);
+    ASSERT_TRUE(bsObjectGet(bsObjectGet(covered, "3"), "count").u.number >= 3);
     bsOptionsFree(options);
+}
+
+
+TEST(runtime_coverage_cache)
+{
+    /* Reusing a script with a new coverage object resets the line-index cache */
+    BSScript *script = bsParseScript("a = 1\nreturn a", strlen("a = 1\nreturn a"), 1, "cache.bare", NULL);
+    BSOptions *options = bsTestOptions();
+    BSValue coverage = bsObjectNew();
+    bsObjectSet(coverage, "enabled", bsBoolean(true));
+    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    bsRelease(bsExecuteScript(script, options));
+    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"),
+        "cache.bare"), "covered"), "1"), "count").u.number, 1);
+
+    BSValue coverage2 = bsObjectNew();
+    bsObjectSet(coverage2, "enabled", bsBoolean(true));
+    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage2);
+    bsRelease(bsExecuteScript(script, options));
+    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(coverage2, "scripts"),
+        "cache.bare"), "covered"), "1"), "count").u.number, 1);
+    bsScriptRelease(script);
+    bsOptionsFree(options);
+
+    /* A high line number grows the line-index array past its initial cap */
+    options = bsTestOptions();
+    coverage = bsObjectNew();
+    bsObjectSet(coverage, "enabled", bsBoolean(true));
+    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    static const char *highModel =
+        "{\"scriptName\":\"high.bare\",\"statements\":[{\"expr\":{\"name\":\"a\","
+        "\"expr\":{\"number\":1},\"lineNumber\":40}}]}";
+    BSValue model = bsJSONDecode(highModel, strlen(highModel), NULL);
+    script = bsScriptFromModel(model, "high.bare");
+    bsRelease(model);
+    bsRelease(bsExecuteScript(script, options));
+    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"),
+        "high.bare"), "covered"), "40"), "count").u.number, 1);
+    bsScriptRelease(script);
+    bsOptionsFree(options);
+
+    /* A statement at line 0 is not recorded */
+    options = bsTestOptions();
+    coverage = bsObjectNew();
+    bsObjectSet(coverage, "enabled", bsBoolean(true));
+    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    static const char *zeroModel =
+        "{\"scriptName\":\"zero.bare\",\"statements\":[{\"expr\":{\"name\":\"a\","
+        "\"expr\":{\"number\":1}}}]}";
+    model = bsJSONDecode(zeroModel, strlen(zeroModel), NULL);
+    script = bsScriptFromModel(model, "zero.bare");
+    bsRelease(model);
+    bsRelease(bsExecuteScript(script, options));
+    ASSERT_FALSE(bsObjectHas(coverage, "scripts"));
+    bsScriptRelease(script);
+    bsOptionsFree(options);
+}
+
+
+TEST(runtime_eval_borrow)
+{
+    /* A later operand can reassign a borrowed string; the left side keeps the original */
+    ASSERT_VALUE(bsTestExecute(
+        "function mutate():\n    s = 'b'\n    return 'x'\nendfunction\n"
+        "s = 'a'\nreturn s + mutate()"), "\"ax\"");
+    ASSERT_VALUE(bsTestExecute(
+        "function mutate():\n    s = 'b'\n    return 'x'\nendfunction\n"
+        "s = 'a'\nreturn s + (mutate())"), "\"ax\"");
+    ASSERT_VALUE(bsTestExecute(
+        "function mutate():\n    s = 'b'\n    return 'z'\nendfunction\n"
+        "s = 'a'\nreturn s + (mutate() + '!')"), "\"az!\"");
+    ASSERT_VALUE(bsTestExecute(
+        "function mutate():\n    s = 'b'\n    return 'z'\nendfunction\n"
+        "s = 'a'\nt = 'y'\nreturn s + (t + mutate())"), "\"ayz\"");
+
+    /* Pure right-hand sides keep the left side borrowed */
+    ASSERT_VALUE(bsTestExecute("s = 'a'\nt = 'b'\nreturn s + t"), "\"ab\"");
+    ASSERT_VALUE(bsTestExecute("s = 'a'\nt = 'b'\nreturn s + (t)"), "\"ab\"");
+    ASSERT_VALUE(bsTestExecute("s = 'a'\nt = 'b'\nu = 'c'\nreturn s + (t + u)"), "\"abc\"");
+    ASSERT_VALUE(bsTestExecute("s = 'a'\nreturn s + (!false)"), "\"atrue\"");
 }
 
 

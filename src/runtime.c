@@ -236,8 +236,74 @@ static BSValue bsArithmetic(double result)
 }
 
 
-static BSValue bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
-                          BSScript *script, BSStatement *statement, int depth);
+/*
+ * An evaluated value. Leaves (literals and variable lookups) are borrowed from the AST or a
+ * slot/global; the caller retains only if the value must outlive the next evaluation. Heap
+ * results (concat, calls) are owned.
+ */
+typedef struct {
+    BSValue value;
+    bool owned;
+} BSEval;
+
+static inline BSEval bsEvalBorrowed(BSValue value)
+{
+    BSEval eval;
+    eval.value = value;
+    eval.owned = false;
+    return eval;
+}
+
+static inline BSEval bsEvalOwned(BSValue value)
+{
+    BSEval eval;
+    eval.value = value;
+    eval.owned = true;
+    return eval;
+}
+
+static inline void bsEvalDrop(BSEval eval)
+{
+    if (eval.owned) {
+        bsRelease(eval.value);
+    }
+}
+
+static inline BSValue bsEvalTake(BSEval eval)
+{
+    return eval.owned ? eval.value : bsRetain(eval.value);
+}
+
+
+static BSEval bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
+                         BSScript *script, BSStatement *statement, int depth);
+
+
+static bool bsExprPure(const BSExpr *expr)
+{
+    for (;;) {
+        switch (expr->type) {
+        case BS_EXPR_NUMBER:
+        case BS_EXPR_STRING:
+        case BS_EXPR_VARIABLE:
+            return true;
+        case BS_EXPR_FUNCTION:
+            return false;
+        case BS_EXPR_BINARY:
+            if (!bsExprPure(expr->u.binary.left)) {
+                return false;
+            }
+            expr = expr->u.binary.right;
+            break;
+        case BS_EXPR_UNARY:
+            expr = expr->u.unary.expr;
+            break;
+        default:
+            expr = expr->u.group;
+            break;
+        }
+    }
+}
 
 
 /* Look up a variable's value - returns a borrowed reference */
@@ -299,18 +365,18 @@ static BSValue bsLookupFunction(BSExpr *expr, BSOptions *options, BSScope *scope
 }
 
 
-static BSValue bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
-                              BSScript *script, BSStatement *statement, int depth)
+static BSEval bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
+                             BSScript *script, BSStatement *statement, int depth)
 {
     /* The built-in "if" function evaluates only the selected branch */
     if (expr->u.function.isIf) {
         size_t argCount = expr->u.function.argCount;
         bool test = false;
         if (argCount >= 1) {
-            BSValue value = bsEvalExpr(expr->u.function.args[0], options, scope, builtins, script,
-                                       statement, depth);
-            test = bsValueBoolean(value);
-            bsRelease(value);
+            BSEval value = bsEvalExpr(expr->u.function.args[0], options, scope, builtins, script,
+                                      statement, depth);
+            test = bsValueBoolean(value.value);
+            bsEvalDrop(value);
         }
         BSExpr *branch = NULL;
         if (test) {
@@ -319,7 +385,7 @@ static BSValue bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, 
             branch = argCount >= 3 ? expr->u.function.args[2] : NULL;
         }
         return branch != NULL ?
-            bsEvalExpr(branch, options, scope, builtins, script, statement, depth) : bsNull();
+            bsEvalExpr(branch, options, scope, builtins, script, statement, depth) : bsEvalBorrowed(bsNull());
     }
 
     /* Evaluate the function arguments */
@@ -327,8 +393,8 @@ static BSValue bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, 
     BSValue argsInline[8];
     BSValue *args = argCount <= 8 ? argsInline : bsAlloc(argCount * sizeof(BSValue));
     for (size_t ix = 0; ix < argCount; ix++) {
-        args[ix] = bsEvalExpr(expr->u.function.args[ix], options, scope, builtins, script, statement,
-                              depth);
+        args[ix] = bsEvalTake(bsEvalExpr(expr->u.function.args[ix], options, scope, builtins, script,
+                                         statement, depth));
     }
 
     /* Resolve the function value */
@@ -372,112 +438,126 @@ static BSValue bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, 
     if (args != argsInline) {
         free(args);
     }
-    return result;
+    return bsEvalOwned(result);
 }
 
 
-static BSValue bsEvalBinary(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
-                            BSScript *script, BSStatement *statement, int depth)
+static BSEval bsEvalBinary(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
+                           BSScript *script, BSStatement *statement, int depth)
 {
     BSBinaryOp op = expr->u.binary.op;
-    BSValue left = bsEvalExpr(expr->u.binary.left, options, scope, builtins, script, statement, depth);
+    BSEval left = bsEvalExpr(expr->u.binary.left, options, scope, builtins, script, statement, depth);
 
     /* The short-circuiting logical operators */
     if (op == BS_BINARY_LAND) {
-        if (!bsValueBoolean(left)) {
+        if (!bsValueBoolean(left.value)) {
             return left;
         }
-        bsRelease(left);
+        bsEvalDrop(left);
         return bsEvalExpr(expr->u.binary.right, options, scope, builtins, script, statement, depth);
     }
     if (op == BS_BINARY_LOR) {
-        if (bsValueBoolean(left)) {
+        if (bsValueBoolean(left.value)) {
             return left;
         }
-        bsRelease(left);
+        bsEvalDrop(left);
         return bsEvalExpr(expr->u.binary.right, options, scope, builtins, script, statement, depth);
     }
 
-    BSValue right = bsEvalExpr(expr->u.binary.right, options, scope, builtins, script, statement, depth);
-    bool bothNumber = (left.type == BS_NUMBER && right.type == BS_NUMBER);
+    /* A later operand can reassign the slot a borrowed heap value came from */
+    if (!left.owned && left.value.type >= BS_STRING && !bsExprPure(expr->u.binary.right)) {
+        left.value = bsRetain(left.value);
+        left.owned = true;
+    }
+
+    BSEval right = bsEvalExpr(expr->u.binary.right, options, scope, builtins, script, statement, depth);
+    bool bothNumber = (left.value.type == BS_NUMBER && right.value.type == BS_NUMBER);
     BSValue result = bsNull();
+    bool owned = false;
 
     switch (op) {
     case BS_BINARY_ADD:
         if (bothNumber) {
-            result = bsArithmetic(left.u.number + right.u.number);
-        } else if (left.type == BS_STRING || right.type == BS_STRING) {
-            result = bsStringConcat(left, right);
-        } else if (left.type == BS_DATETIME && right.type == BS_NUMBER) {
-            double value = (double) left.u.datetime + right.u.number;
+            result = bsArithmetic(left.value.u.number + right.value.u.number);
+        } else if (left.value.type == BS_STRING || right.value.type == BS_STRING) {
+            result = bsStringConcat(left.value, right.value);
+            owned = true;
+        } else if (left.value.type == BS_DATETIME && right.value.type == BS_NUMBER) {
+            double value = (double) left.value.u.datetime + right.value.u.number;
             result = (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
-        } else if (left.type == BS_NUMBER && right.type == BS_DATETIME) {
-            double value = left.u.number + (double) right.u.datetime;
+        } else if (left.value.type == BS_NUMBER && right.value.type == BS_DATETIME) {
+            double value = left.value.u.number + (double) right.value.u.datetime;
             result = (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
         }
         break;
 
     case BS_BINARY_SUB:
         if (bothNumber) {
-            result = bsArithmetic(left.u.number - right.u.number);
-        } else if (left.type == BS_DATETIME && right.type == BS_DATETIME) {
-            result = bsNumber((double) (left.u.datetime - right.u.datetime));
+            result = bsArithmetic(left.value.u.number - right.value.u.number);
+        } else if (left.value.type == BS_DATETIME && right.value.type == BS_DATETIME) {
+            result = bsNumber((double) (left.value.u.datetime - right.value.u.datetime));
         }
         break;
 
     case BS_BINARY_MUL:
         if (bothNumber) {
-            result = bsArithmetic(left.u.number * right.u.number);
+            result = bsArithmetic(left.value.u.number * right.value.u.number);
         }
         break;
 
     case BS_BINARY_DIV:
         if (bothNumber) {
-            result = bsArithmetic(left.u.number / right.u.number);
+            result = bsArithmetic(left.value.u.number / right.value.u.number);
         }
         break;
 
     case BS_BINARY_MOD:
         if (bothNumber) {
-            result = bsArithmetic(fmod(left.u.number, right.u.number));
+            result = bsArithmetic(fmod(left.value.u.number, right.value.u.number));
         }
         break;
 
     case BS_BINARY_EXP:
         if (bothNumber) {
-            result = bsArithmetic(pow(left.u.number, right.u.number));
+            result = bsArithmetic(pow(left.value.u.number, right.value.u.number));
         }
         break;
 
     case BS_BINARY_LT:
-        result = bsBoolean(bothNumber ? left.u.number < right.u.number : bsValueCompare(left, right) < 0);
+        result = bsBoolean(bothNumber ? left.value.u.number < right.value.u.number :
+                           bsValueCompare(left.value, right.value) < 0);
         break;
 
     case BS_BINARY_LTE:
-        result = bsBoolean(bothNumber ? left.u.number <= right.u.number : bsValueCompare(left, right) <= 0);
+        result = bsBoolean(bothNumber ? left.value.u.number <= right.value.u.number :
+                           bsValueCompare(left.value, right.value) <= 0);
         break;
 
     case BS_BINARY_GT:
-        result = bsBoolean(bothNumber ? left.u.number > right.u.number : bsValueCompare(left, right) > 0);
+        result = bsBoolean(bothNumber ? left.value.u.number > right.value.u.number :
+                           bsValueCompare(left.value, right.value) > 0);
         break;
 
     case BS_BINARY_GTE:
-        result = bsBoolean(bothNumber ? left.u.number >= right.u.number : bsValueCompare(left, right) >= 0);
+        result = bsBoolean(bothNumber ? left.value.u.number >= right.value.u.number :
+                           bsValueCompare(left.value, right.value) >= 0);
         break;
 
     case BS_BINARY_EQ:
-        result = bsBoolean(bothNumber ? left.u.number == right.u.number : bsValueCompare(left, right) == 0);
+        result = bsBoolean(bothNumber ? left.value.u.number == right.value.u.number :
+                           bsValueCompare(left.value, right.value) == 0);
         break;
 
     case BS_BINARY_NE:
-        result = bsBoolean(bothNumber ? left.u.number != right.u.number : bsValueCompare(left, right) != 0);
+        result = bsBoolean(bothNumber ? left.value.u.number != right.value.u.number :
+                           bsValueCompare(left.value, right.value) != 0);
         break;
 
     default:
         /* The bitwise operators - these coerce to 32-bit integers, as JavaScript does */
-        if (bsIsInteger(left) && bsIsInteger(right)) {
-            int32_t leftInt = bsToInt32(left.u.number);
-            int32_t rightInt = bsToInt32(right.u.number);
+        if (bsIsInteger(left.value) && bsIsInteger(right.value)) {
+            int32_t leftInt = bsToInt32(left.value.u.number);
+            int32_t rightInt = bsToInt32(right.value.u.number);
             uint32_t shift = ((uint32_t) rightInt) & 31u;
             switch (op) {
             case BS_BINARY_AND:
@@ -500,80 +580,85 @@ static BSValue bsEvalBinary(BSExpr *expr, BSOptions *options, BSScope *scope, bo
         break;
     }
 
-    bsRelease(left);
-    bsRelease(right);
-    return result;
+    bsEvalDrop(left);
+    bsEvalDrop(right);
+    return owned ? bsEvalOwned(result) : bsEvalBorrowed(result);
 }
 
 
-static BSValue bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
-                          BSScript *script, BSStatement *statement, int depth)
+static BSEval bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
+                         BSScript *script, BSStatement *statement, int depth)
 {
-    switch (expr->type) {
-    case BS_EXPR_NUMBER:
-        return bsNumber(expr->u.number);
+    for (;;) {
+        switch (expr->type) {
+        case BS_EXPR_NUMBER:
+            return bsEvalBorrowed(bsNumber(expr->u.number));
 
-    case BS_EXPR_STRING:
-        return bsRetain(expr->u.string);
+        case BS_EXPR_STRING:
+            return bsEvalBorrowed(expr->u.string);
 
-    case BS_EXPR_VARIABLE:
-        switch (expr->u.variable.special) {
-        case BS_SPECIAL_NULL:
-            return bsNull();
-        case BS_SPECIAL_TRUE:
-            return bsBoolean(true);
-        case BS_SPECIAL_FALSE:
-            return bsBoolean(false);
+        case BS_EXPR_VARIABLE:
+            switch (expr->u.variable.special) {
+            case BS_SPECIAL_NULL:
+                return bsEvalBorrowed(bsNull());
+            case BS_SPECIAL_TRUE:
+                return bsEvalBorrowed(bsBoolean(true));
+            case BS_SPECIAL_FALSE:
+                return bsEvalBorrowed(bsBoolean(false));
+            default:
+                return bsEvalBorrowed(bsLookup(expr->u.variable.name, expr->u.variable.slot, options,
+                                               scope));
+            }
+
         default:
-            return bsRetain(bsLookup(expr->u.variable.name, expr->u.variable.slot, options, scope));
+            break;
         }
 
-    default:
-        break;
-    }
-
-    /* The recursive expression kinds are depth-guarded */
-    if (depth >= options->depthMax) {
-        bsErrorSetStatement(options, script, statement, "Maximum expression depth exceeded");
-        return bsNull();
-    }
-    depth++;
-
-    switch (expr->type) {
-    case BS_EXPR_FUNCTION:
-        return bsEvalFunction(expr, options, scope, builtins, script, statement, depth);
-
-    case BS_EXPR_BINARY:
-        return bsEvalBinary(expr, options, scope, builtins, script, statement, depth);
-
-    case BS_EXPR_UNARY: {
-        BSValue value = bsEvalExpr(expr->u.unary.expr, options, scope, builtins, script, statement,
-                                   depth);
-        BSValue result;
-        switch (expr->u.unary.op) {
-        case BS_UNARY_NOT:
-            result = bsBoolean(!bsValueBoolean(value));
-            break;
-        case BS_UNARY_NEG:
-            result = value.type == BS_NUMBER ? bsNumber(-value.u.number) : bsNull();
-            break;
-        default:
-            result = bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull();
-            break;
+        /* The recursive expression kinds are depth-guarded */
+        if (depth >= options->depthMax) {
+            bsErrorSetStatement(options, script, statement, "Maximum expression depth exceeded");
+            return bsEvalBorrowed(bsNull());
         }
-        bsRelease(value);
-        return result;
-    }
+        depth++;
 
-    default:
-        return bsEvalExpr(expr->u.group, options, scope, builtins, script, statement, depth);
+        switch (expr->type) {
+        case BS_EXPR_GROUP:
+            expr = expr->u.group;
+            continue;
+
+        case BS_EXPR_FUNCTION:
+            return bsEvalFunction(expr, options, scope, builtins, script, statement, depth);
+
+        case BS_EXPR_BINARY:
+            return bsEvalBinary(expr, options, scope, builtins, script, statement, depth);
+
+        default: {
+            BSEval value = bsEvalExpr(expr->u.unary.expr, options, scope, builtins, script, statement,
+                                      depth);
+            BSValue result;
+            switch (expr->u.unary.op) {
+            case BS_UNARY_NOT:
+                result = bsBoolean(!bsValueBoolean(value.value));
+                break;
+            case BS_UNARY_NEG:
+                result = value.value.type == BS_NUMBER ? bsNumber(-value.value.u.number) : bsNull();
+                break;
+            default:
+                result = bsIsInteger(value.value) ? bsNumber((double) ~bsToInt32(value.value.u.number)) :
+                    bsNull();
+                break;
+            }
+            bsEvalDrop(value);
+            return bsEvalBorrowed(result);
+        }
+        }
     }
 }
 
 
 BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins)
 {
-    return bsEvalExpr(expr, options, scope, builtins, NULL, NULL, options->depth);
+    return bsEvalTake(bsEvalExpr(expr, options, scope, builtins, NULL, NULL, options->depth));
 }
 
 
@@ -586,7 +671,7 @@ BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue
     BSScope scope;
     bsScopeInit(&scope);
     scope.object = locals;
-    BSValue result = bsEvalExpr(expr, options, &scope, builtins, NULL, NULL, options->depth);
+    BSValue result = bsEvalTake(bsEvalExpr(expr, options, &scope, builtins, NULL, NULL, options->depth));
     bsExprFree(expr);
     return result;
 }
@@ -597,9 +682,52 @@ BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue
  */
 
 
-static void bsRecordCoverage(BSScript *script, BSStatement *statement, BSValue coverage)
+static void bsLineKey(int line, char *buf)
 {
-    if (script->scriptName.type != BS_STRING || statement->lineNumber == 0) {
+    char digits[16];
+    size_t n = 0;
+    unsigned v = (unsigned) line;
+    do {
+        digits[n++] = (char) ('0' + (v % 10));
+        v /= 10;
+    } while (v != 0);
+    for (size_t ix = 0; ix < n; ix++) {
+        buf[ix] = digits[n - 1 - ix];
+    }
+    buf[n] = '\0';
+}
+
+
+static void bsCoverageReset(BSScript *script)
+{
+    free(script->coverageCounts);
+    script->coverageCounts = NULL;
+    script->coverageLineCap = 0;
+    script->coverageCovered = bsNull();
+}
+
+
+static void bsCoverageGrow(BSScript *script, int line)
+{
+    int cap = script->coverageLineCap;
+    int needed = line + 1;
+    int newCap = cap == 0 ? 32 : cap;
+    while (newCap < needed) {
+        newCap *= 2;
+    }
+    script->coverageCounts = bsRealloc(script->coverageCounts, (size_t) newCap * sizeof(BSValue *));
+    memset(script->coverageCounts + cap, 0, (size_t) (newCap - cap) * sizeof(BSValue *));
+    script->coverageLineCap = newCap;
+}
+
+
+static void bsCoverageEnsure(BSScript *script, BSValue coverage)
+{
+    if (script->coverageOwner != coverage.u.object) {
+        bsCoverageReset(script);
+        script->coverageOwner = coverage.u.object;
+    }
+    if (script->coverageCovered.type == BS_OBJECT) {
         return;
     }
 
@@ -615,19 +743,43 @@ static void bsRecordCoverage(BSScript *script, BSStatement *statement, BSValue c
         bsObjectSet(scriptCoverage, "covered", bsObjectNew());
         bsObjectSetString(scripts, script->scriptName, scriptCoverage);
     }
+    script->coverageCovered = bsObjectGet(scriptCoverage, "covered");
+}
 
-    BSValue covered = bsObjectGet(scriptCoverage, "covered");
-    char lineKey[16];
-    snprintf(lineKey, sizeof(lineKey), "%d", statement->lineNumber);
-    BSValue coveredStatement = bsObjectGet(covered, lineKey);
-    if (coveredStatement.type != BS_OBJECT) {
-        coveredStatement = bsObjectNew();
-        bsObjectSet(coveredStatement, "statement", bsStatementToModel(statement));
-        bsObjectSet(coveredStatement, "count", bsNumber(0));
-        bsObjectSet(covered, lineKey, coveredStatement);
+
+static void bsRecordCoverage(BSScript *script, BSStatement *statement, BSValue coverage)
+{
+    int line = statement->lineNumber;
+    if (line <= 0 || script->scriptName.type != BS_STRING) {
+        return;
     }
-    BSValue count = bsObjectGet(coveredStatement, "count");
-    bsObjectSet(coveredStatement, "count", bsNumber(count.u.number + 1));
+
+    if (script->coverageOwner == coverage.u.object &&
+        line < script->coverageLineCap &&
+        script->coverageCounts[line] != NULL) {
+        script->coverageCounts[line]->u.number += 1;
+        return;
+    }
+
+    bsCoverageEnsure(script, coverage);
+    if (line >= script->coverageLineCap) {
+        bsCoverageGrow(script, line);
+    }
+
+    char lineKey[16];
+    bsLineKey(line, lineKey);
+    BSValue coveredStatement = bsObjectGet(script->coverageCovered, lineKey);
+    if (coveredStatement.type == BS_OBJECT) {
+        script->coverageCounts[line] = bsObjectValuePtr(coveredStatement, "count", 5);
+        script->coverageCounts[line]->u.number += 1;
+        return;
+    }
+
+    coveredStatement = bsObjectNew();
+    bsObjectSet(coveredStatement, "statement", bsStatementToModel(statement));
+    bsObjectSet(coveredStatement, "count", bsNumber(1));
+    bsObjectSet(script->coverageCovered, lineKey, coveredStatement);
+    script->coverageCounts[line] = bsObjectValuePtr(coveredStatement, "count", 5);
 }
 
 
@@ -722,13 +874,14 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
 
         switch (statement->type) {
         case BS_STMT_EXPR: {
-            BSValue value = bsEvalExpr(statement->u.expr.expr, options, scope, false, script, statement,
-                                       options->depth);
+            BSEval eval = bsEvalExpr(statement->u.expr.expr, options, scope, false, script, statement,
+                                     options->depth);
             if (statement->u.expr.name.type == BS_STRING) {
                 /*
                  * A function body always has a slot for every name it assigns, so an assignment
                  * either targets a slot or - at the script's top level - a global
                  */
+                BSValue value = bsEvalTake(eval);
                 if (scope != NULL && statement->u.expr.slot >= 0) {
                     BSValue previous = scope->slots[statement->u.expr.slot];
                     scope->slots[statement->u.expr.slot] = value;
@@ -739,7 +892,7 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
                     bsObjectSetString(options->globals, statement->u.expr.name, value);
                 }
             } else {
-                bsRelease(value);
+                bsEvalDrop(eval);
             }
             break;
         }
@@ -747,10 +900,10 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
         case BS_STMT_JUMP: {
             bool jump = true;
             if (statement->u.jump.expr != NULL) {
-                BSValue value = bsEvalExpr(statement->u.jump.expr, options, scope, false, script, statement,
-                                           options->depth);
-                jump = bsValueBoolean(value);
-                bsRelease(value);
+                BSEval eval = bsEvalExpr(statement->u.jump.expr, options, scope, false, script, statement,
+                                         options->depth);
+                jump = bsValueBoolean(eval.value);
+                bsEvalDrop(eval);
             }
             if (jump) {
                 if (statement->u.jump.index < 0) {
@@ -767,10 +920,9 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
         }
 
         case BS_STMT_RETURN: {
-            BSValue result = statement->u.ret.expr != NULL ?
-                bsEvalExpr(statement->u.ret.expr, options, scope, false, script, statement,
-                           options->depth) : bsNull();
-            return result;
+            return statement->u.ret.expr != NULL ?
+                bsEvalTake(bsEvalExpr(statement->u.ret.expr, options, scope, false, script, statement,
+                                      options->depth)) : bsNull();
         }
 
         case BS_STMT_FUNCTION: {

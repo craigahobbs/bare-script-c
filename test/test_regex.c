@@ -291,7 +291,7 @@ TEST(regex_search_start)
 
 TEST(regex_subject_long)
 {
-    /* A subject longer than the inline buffer allocates */
+    /* ASCII subjects match the original bytes and do not allocate a code-point buffer */
     BSStringBuilder sb;
     bsSBInit(&sb);
     for (int ix = 0; ix < 200; ix++) {
@@ -301,7 +301,9 @@ TEST(regex_subject_long)
     BSValue string = bsSBToValue(&sb);
     BSRegexSubject subject;
     bsRegexSubjectInit(&subject, string);
-    ASSERT_NOT_NULL(subject.owned);
+    ASSERT_NULL(subject.codes);
+    ASSERT_NULL(subject.owned);
+    ASSERT_NOT_NULL(subject.bytes);
     ASSERT_INT_EQ(subject.length, 206);
     BSValue regex = bsRegexNew("target", 6, 0, NULL, 0);
     BSRegexMatch match;
@@ -310,6 +312,26 @@ TEST(regex_subject_long)
     bsRegexSubjectFree(&subject);
     bsRelease(string);
     bsRelease(regex);
+
+    /* A long non-ASCII subject still widens into a heap code-point buffer */
+    BSStringBuilder unicode;
+    bsSBInit(&unicode);
+    for (int ix = 0; ix < 70; ix++) {
+        bsSBAppendString(&unicode, "\xc3\xa9");
+    }
+    BSValue unicodeString = bsSBToValue(&unicode);
+    BSRegexSubject unicodeSubject;
+    bsRegexSubjectInit(&unicodeSubject, unicodeString);
+    ASSERT_NOT_NULL(unicodeSubject.codes);
+    ASSERT_NOT_NULL(unicodeSubject.owned);
+    ASSERT_NULL(unicodeSubject.bytes);
+    ASSERT_INT_EQ(unicodeSubject.length, 70);
+    BSValue unicodeRegex = bsRegexNew("\xc3\xa9", 2, 0, NULL, 0);
+    ASSERT_TRUE(bsRegexSearch(unicodeRegex, &unicodeSubject, 0, &match));
+    ASSERT_INT_EQ(match.begin, 0);
+    bsRegexSubjectFree(&unicodeSubject);
+    bsRelease(unicodeString);
+    bsRelease(unicodeRegex);
 }
 
 

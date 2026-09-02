@@ -271,8 +271,9 @@ The reference counting rules are uniform:
 - Container accessors (`bsArrayGet`, `bsObjectGet`) return *borrowed* references.
 
 **Strings** are immutable, reference-counted UTF-8 buffers that cache their code point length, so
-an all-ASCII string - the common case - indexes by byte. String library functions index by Unicode
-code point.
+an all-ASCII string - the common case - indexes by byte. Construction skips the UTF-8 walk when
+the buffer has no high bit. Non-ASCII indexing keeps a cursor and, after a backward lookup, a
+sparse stride-16 offset table. String library functions index by Unicode code point.
 
 **Arrays** are vectors of values with amortized growth.
 
@@ -283,7 +284,10 @@ matters because BareScript code routinely inserts keys in sorted order - the wor
 plain binary search tree. Nodes are additionally threaded on a doubly-linked list in insertion
 order, so objects iterate in insertion order (matching the reference implementations, whose
 objects are JavaScript objects and Python dictionaries) while the tree still provides the sorted
-traversal that JSON encoding and value comparison are defined over.
+traversal that JSON encoding and value comparison are defined over. Keys of at most 64 bytes are
+interned, so a missing short key is an intern-table miss and a hit can compare interned
+`BSString` pointers instead of `memcmp`. The intern table holds one reference; interned strings
+live until process exit.
 
 Allocation failure is fatal: there is no useful way for a script runtime to continue without
 memory, and threading an out-of-memory result through every value operation would obscure the code
@@ -389,6 +393,10 @@ statement list is complete:
   the internal unset marker falls through to the globals object, matching the reference behavior
   where an unassigned local simply is not a key of the locals dictionary.
 
+When `__barescriptCoverage` is enabled, each compiled script keeps a line-indexed array of
+pointers into the coverage object's per-line counts, so a loop increments a number instead of
+formatting a line key and searching the covered object on every statement.
+
 `bsScriptToModel`, `bsStatementToModel`, and `bsExprToModel` convert back, which is how the linter
 receives a script and how `barescriptEvaluateExpression` works.
 
@@ -451,8 +459,9 @@ BareScript's regex functions expose:
 | Flags      | `i` (case-insensitive), `m` (multi-line), `s` (dot matches newline)         |
 
 Matching is over Unicode code points, so match indexes agree with the string library's indexes.
-Four properties keep it well-behaved on real input - which matters more here than in the reference
-implementations, because the parser is itself regex-driven:
+ASCII subjects match the original bytes without widening to a `uint32_t` buffer. Four properties
+keep it well-behaved on real input - which matters more here than in the reference implementations,
+because the parser is itself regex-driven:
 
 - A pattern whose every alternative begins with `^` only tries the search start position. Every
   pattern the parser uses is anchored this way, so this is the difference between a linear and a

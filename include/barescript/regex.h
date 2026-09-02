@@ -82,9 +82,10 @@ const char *bsRegexGroupName(BSValue regex, size_t group);
  * re-decoding UTF-8 for every match of a global search.
  */
 typedef struct BSRegexSubject {
-    const uint32_t *codes;
+    const uint32_t *codes;       /* widened code points, or NULL for an ASCII subject */
+    const unsigned char *bytes;  /* original bytes; for ASCII, code point i is bytes[i] */
     size_t length;
-    uint32_t *owned; /* the heap buffer to free, or NULL if the inline buffer is used */
+    uint32_t *owned; /* the heap buffer to free, or NULL if codes is NULL or inline */
     uint32_t inline_[64];
 } BSRegexSubject;
 

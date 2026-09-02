@@ -112,6 +112,28 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
  */
 bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out);
 
+/* Pointer to the stored value for key, or NULL if absent. Valid until the object is mutated. */
+BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size);
+
+/* Non-ASCII code-point index to byte offset; ASCII is handled by bsStringOffsetFast */
+size_t bsStringOffsetSlow(BSValue value, size_t index);
+
+static inline size_t bsStringOffsetFast(BSValue value, size_t index)
+{
+    if (value.type != BS_STRING) {
+        return 0;
+    }
+    BSString *string = value.u.string;
+    if (string->length == string->size) {
+        return index < string->size ? index : string->size;
+    }
+    return bsStringOffsetSlow(value, index);
+}
+
+#ifndef BARESCRIPT_VALUE_IMPL
+#define bsStringOffset bsStringOffsetFast
+#endif
+
 
 /*
  * Library function fast-path identifiers, stored on BSFunction.intrinsic
