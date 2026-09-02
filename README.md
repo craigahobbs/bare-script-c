@@ -395,26 +395,23 @@ receives a script and how `barescriptEvaluateExpression` works.
 
 ### The Bundled Include Library
 
-The thirty scripts of the BareScript include library - `args.bare`, `markdown.bare`, `schema.bare`,
-`unittest.bare`, and the rest - are compiled to JSON script models and embedded in the library.
-Including one costs a JSON decode rather than a run of the parser.
+The thirty-two scripts of the BareScript include library - `args.bare`, `markdown.bare`,
+`schema.bare`, `unittest.bare`, `gzip.bare`, `base64.bare`, and the rest - are compiled to JSON
+script models and embedded in the library. Including one costs a JSON decode rather than a run of
+the parser.
 
-The models are dictionary compressed with the same scheme, and the same phrase table, that the
-JavaScript and Python implementations use for `includeSource.js` and `include_source.py`: 61
-phrases indexed by `[a-zA-Z0-9]`, where encoding replaces each phrase with `~` plus its index
-character and a literal `~` escapes to the one index past the last phrase. It compresses 574 KB of
-include library source to 530 KB of compressed models, and the compressed bytes are **identical**
-to the ones the JavaScript implementation embeds.
-
-That table is tuned for the key order the parser creates its model objects in, which BareScript's
-`jsonStringify` does not preserve - it sorts. So `bin/includeSource.bare` serializes the object and
-array structure itself, in `objectKeys` (insertion) order, and delegates only leaf values to
-`jsonStringify` so number formatting and string escaping stay exactly what the runtime produces.
+The models are gzip-compressed at level 9 by `gzip.bare` (`gzipCompress` / `gzipUncompress`, byte
+arrays in and out) and base64-encoded by `base64.bare` (`base64Encode` / `base64Decode`) for
+embedding as C string literals. That compresses about 598 KB of include library source to 267 KB
+of embedded text (45%). `bin/includeSource.bare` serializes the object and array structure itself,
+in `objectKeys` (insertion) order, and delegates only leaf values to `jsonStringify` so number
+formatting and string escaping stay exactly what the runtime produces.
 
 `src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
 fresh clone builds with no bootstrap. `make includes` regenerates them by running
 `bin/includeSource.bare` - itself a BareScript program - under a CLI built from the *existing*
-generated source, the same self-hosting cycle the JavaScript implementation uses.
+generated source, with `BARESCRIPT_INCLUDE_PATH` pointing at `lib/include` so `gzip.bare` and
+`base64.bare` are available before they are bundled.
 
 The generated header exports a stub accessor per include, returning its decoded JSON model:
 
@@ -427,7 +424,7 @@ extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];   /* all 
 ```
 
 plus `bsIncludeCount`, `bsIncludeName`, and `bsIncludeSource` for lookup by name. A model decodes
-on first use and is cached, so a program that includes two of the thirty pays for two.
+on first use and is cached, so a program that includes two of the thirty-two pays for two.
 
 
 ### JSON

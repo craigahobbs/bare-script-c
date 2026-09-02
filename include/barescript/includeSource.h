@@ -6,9 +6,9 @@
 /*
  * The bundled BareScript include library
  *
- * Each include is embedded as its parser-compiled JSON script model, dictionary compressed.
- * An accessor decodes its include's model on first use and caches it; the decoded text is
- * released by bsIncludeCleanup.
+ * Each include is embedded as its parser-compiled JSON script model, gzip-compressed and
+ * base64-encoded. An accessor decodes its include's model on first use and caches it; the
+ * decoded text is released by bsIncludeCleanup.
  */
 
 #ifndef BARESCRIPT_INCLUDE_SOURCE_H
@@ -22,7 +22,7 @@ extern "C" {
 
 
 /* The number of bundled include library scripts */
-#define BS_INCLUDE_COUNT 30
+#define BS_INCLUDE_COUNT 32
 
 
 /* A bundled include library script */
@@ -40,10 +40,6 @@ typedef const char *(*BSIncludeSourceFn)(void);
 
 /* The bundled include library stub accessors, in registry order */
 extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];
-
-/* The compressed include model phrase table, indexed by its encoding character */
-extern const char *const bsIncludeSourcePhrases[];
-extern const size_t bsIncludeSourcePhraseCount;
 
 
 /*
@@ -68,6 +64,9 @@ const char *bsIncludeSourceBarescriptModel(void);
 /* barescriptParser.bare - the decoded JSON script model */
 const char *bsIncludeSourceBarescriptParser(void);
 
+/* base64.bare - the decoded JSON script model */
+const char *bsIncludeSourceBase64(void);
+
 /* data.bare - the decoded JSON script model */
 const char *bsIncludeSourceData(void);
 
@@ -91,6 +90,9 @@ const char *bsIncludeSourceElementModel(void);
 
 /* forms.bare - the decoded JSON script model */
 const char *bsIncludeSourceForms(void);
+
+/* gzip.bare - the decoded JSON script model */
+const char *bsIncludeSourceGzip(void);
 
 /* markdown.bare - the decoded JSON script model */
 const char *bsIncludeSourceMarkdown(void);

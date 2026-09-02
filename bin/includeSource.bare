@@ -5,8 +5,9 @@
 # "include/barescript/includeSource.h"
 #
 # Each include library script is embedded as its parser-compiled JSON script model - the runtime
-# JSON-parses any system include starting with "{", skipping the parser entirely - dictionary
-# compressed with the phrase table below and chunked into C string literal lines.
+# JSON-parses any system include starting with "{", skipping the parser entirely - gzip-compressed
+# at level 9 with gzip.bare and base64-encoded with base64.bare, then chunked into C string literal
+# lines.
 #
 # Run with the built command-line interface:
 #
@@ -14,70 +15,24 @@
 #       -v vOutputC "'src/includeSource.c'" -v vOutputH "'include/barescript/includeSource.h'"
 
 include <barescriptParser.bare>
+include <base64.bare>
+include <gzip.bare>
 
-
-# The include model compression phrase table - statement/expression shapes, common builtins,
-# leftover JSON fragments, and parser-generated "__barescript" name prefixes. Encoding replaces
-# each phrase with "~" plus its index character, applying phrases longest-first (see the sort
-# below); a literal "~" escapes to "~" plus the index one past the last phrase. 61 phrases plus
-# that escape fill the alphanumeric index set.
-#
-# This is the table the JavaScript and Python implementations use, listed in their index order, so
-# all three runtimes embed byte-identical compressed models. It is tuned for the key order the
-# parser creates its model objects in, which is why includeSourceJSON below serializes in
-# insertion order rather than calling jsonStringify.
-includeSourcePhrases = [ \
-    '{"function":{"name":"markdownHighlightCreateWordListRegex","args":[', \
-    '{"function":{"name":"dataLineChartSvgValue","args":[', \
-    '{"function":{"name":"barescriptParserError","args":[', \
-    '{"function":{"name":"barescriptLintWarning","args":[', \
-    '{"function":{"name":"drawGetCurrentDrawing","args":[', \
-    '{"function":{"name":"stringFromCharCode","args":[', \
-    '{"function":{"name":"schemaMemberError","args":[', \
-    '{"function":{"name":"stringStartsWith","args":[', '{"function":{"name":"systemLogDebug","args":[', \
-    '{"function":{"name":"markdownEscape","args":[', '{"function":{"name":"markdownPrint","args":[', \
-    '{"function":{"name":"stringReplace","args":[', '{"function":{"name":"numberToFixed","args":[', \
-    '{"function":{"name":"jsonStringify","args":[', '{"function":{"name":"objectAssign","args":[', \
-    '{"function":{"name":"stringLength","args":[', '{"function":{"name":"arrayLength","args":[', \
-    '{"function":{"name":"arrayExtend","args":[', '{"function":{"name":"stringSlice","args":[', \
-    '{"function":{"name":"objectKeys","args":[', '{"function":{"name":"regexMatch","args":[', \
-    '{"function":{"name":"systemType","args":[', '{"function":{"name":"objectGet","args":[', \
-    '{"function":{"name":"objectSet","args":[', '{"function":{"name":"objectNew","args":[', \
-    '{"function":{"name":"objectHas","args":[', '{"function":{"name":"arrayPush","args":[', \
-    '{"function":{"name":"arrayJoin","args":[', '{"function":{"name":"arraySort","args":[', \
-    '{"function":{"name":"arrayNew","args":[', '{"function":{"name":"arrayGet","args":[', \
-    '{"function":{"name":"regexNew","args":[', '{"jump":{"label":"__barescriptContinue', \
-    '{"jump":{"label":"__barescriptDone', '{"jump":{"label":"__barescriptLoop', \
-    '{"function":{"name":"if","args":[', '{"jump":{"label":"__barescriptIf', \
-    '{"label":{"name":"__barescript', '{"expr":{"name":"__barescript', '{"variable":"__barescript', \
-    '{"function":{"name":"', '{"expr":{"name":"', '{"binary":{"op":"', '{"expr":{"expr":', \
-    '{"unary":{"op":"', '"statements":[', ',"lineNumber":', '"},{"string":"', '"lineNumber":', \
-    '{"variable":"', '"lineCount":', '{"string":"', '{"return":{', '{"number":', ',"args":[', \
-    '","expr":', ',"right":', ',"expr":', ',"left":', '"}]}}]}}', '"}]}}' \
-]
-includeSourceIndexes = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 
 # The C string literal chunk length, and the number of chunks per literal
 #
 # ISO C99 requires compilers to support string literals of only 4095 characters, and adjacent
 # literals concatenate into one, so a compressed model is emitted as an array of literals rather
-# than a single one. A chunk never ends on "~", so a phrase escape never straddles a boundary.
+# than a single one.
 includeSourceChunkLength = 100
 includeSourceChunksPerLiteral = 38
 
 
-# Sort the phrase table longest-first, so encoding always applies the longest match
-function includeSourcePhraseCompare(phraseA, phraseB):
-    return stringLength(phraseB) - stringLength(phraseA)
-endfunction
-
-
 # Serialize a value as JSON with object keys in insertion order
 #
-# jsonStringify sorts object keys, but the phrase table above is tuned for the order the parser
-# creates them in - the order JavaScript's JSON.stringify and Python's json.dumps preserve. Only
-# the object and array structure is walked here; leaf values delegate to jsonStringify, so number
-# formatting and string escaping stay exactly what the runtime produces.
+# jsonStringify sorts object keys; walking objectKeys keeps the order the parser creates them in,
+# which gzip then compresses. Leaf values delegate to jsonStringify, so number formatting and
+# string escaping stay exactly what the runtime produces.
 function includeSourceJSON(value):
     valueType = systemType(value)
     if valueType == 'object':
@@ -97,33 +52,6 @@ function includeSourceJSON(value):
 endfunction
 
 
-# Compress a model text with the phrase table
-function includeSourceEncode(text, tildeIndex):
-    encoded = stringReplace(text, '~', '~' + tildeIndex)
-    for phrase, ixPhrase in includeSourcePhrases:
-        encoded = stringReplace(encoded, phrase, '~' + stringCharAt(includeSourceIndexes, ixPhrase))
-    endfor
-    return encoded
-endfunction
-
-
-# Decompress a model text with the phrase table - the round-trip check
-function includeSourceDecode(text, tildeIndex):
-    parts = stringSplit(text, '~')
-    result = [arrayGet(parts, 0)]
-    for part, ixPart in parts:
-        if ixPart == 0:
-            continue
-        endif
-        index = stringCharAt(part, 0)
-        arrayPush(result, if(index == tildeIndex, '~', \
-            arrayGet(includeSourcePhrases, stringIndexOf(includeSourceIndexes, index))))
-        arrayPush(result, stringSlice(part, 1))
-    endfor
-    return arrayJoin(result, '')
-endfunction
-
-
 # Convert an include file name to its exported stub name suffix - "markdownUp.bare" is "MarkdownUp"
 function includeSourceExportName(includeName):
     return stringUpper(stringCharAt(includeName, 0)) + stringSlice(includeName, 1)
@@ -139,14 +67,10 @@ function includeSourceChunks(encoded):
     while ixChunk < encodedLength:
         chunkEnd = mathMin(ixChunk + includeSourceChunkLength, encodedLength)
 
-        # A chunk never ends on "~" - that would split a phrase escape across two literals
-        if chunkEnd < encodedLength && stringCharAt(encoded, chunkEnd - 1) == '~':
-            chunkEnd = chunkEnd + 1
-        endif
         chunk = stringSlice(encoded, ixChunk, chunkEnd)
 
-        # Escape the C string literal metacharacters. The compressed model is JSON, so it contains
-        # no raw control characters; "?" is escaped to rule out trigraph sequences.
+        # Escape the C string literal metacharacters. The compressed model is base64, so it
+        # contains no raw control characters; "?" is escaped to rule out trigraph sequences.
         chunk = stringReplace(chunk, '\\', '\\\\')
         chunk = stringReplace(chunk, '"', '\\"')
         chunk = stringReplace(chunk, '?', '\\?')
@@ -176,10 +100,6 @@ async function main():
         return 1
     endif
 
-    # Sort the phrase table longest-first and compute the "~" escape index
-    arraySort(includeSourcePhrases, includeSourcePhraseCompare)
-    tildeIndex = stringCharAt(includeSourceIndexes, arrayLength(includeSourcePhrases))
-
     licenseC = '/* Licensed under the MIT License\n' + \
         '   https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE */\n'
     generated = '/* This file is generated by "make includes" - do not edit */\n'
@@ -189,9 +109,9 @@ async function main():
         '/*\n' + \
         ' * The bundled BareScript include library\n' + \
         ' *\n' + \
-        ' * Each include is embedded as its parser-compiled JSON script model, dictionary compressed.\n' + \
-        " * An accessor decodes its include's model on first use and caches it; the decoded text is\n" + \
-        ' * released by bsIncludeCleanup.\n' + \
+        ' * Each include is embedded as its parser-compiled JSON script model, gzip-compressed and\n' + \
+        " * base64-encoded. An accessor decodes its include's model on first use and caches it; the\n" + \
+        ' * decoded text is released by bsIncludeCleanup.\n' + \
         ' */\n\n' + \
         '#ifndef BARESCRIPT_INCLUDE_SOURCE_H\n' + \
         '#define BARESCRIPT_INCLUDE_SOURCE_H\n\n' + \
@@ -203,19 +123,7 @@ async function main():
     # The source
     sourceParts = [licenseC, '\n', generated, '\n' + \
         '#include "barescript/includeSource.h"\n\n' + \
-        '#include "includeSourceDecode.h"\n\n\n' + \
-        '/* The compressed include model phrase table, indexed by its encoding character */\n' + \
-        'const char *const bsIncludeSourcePhrases[] = {\n']
-
-    # The phrase table, in index order
-    phraseLines = []
-    for phrase in includeSourcePhrases:
-        escaped = stringReplace(stringReplace(phrase, '\\', '\\\\'), '"', '\\"')
-        arrayPush(phraseLines, '    "' + escaped + '"')
-    endfor
-    arrayPush(phraseLines, '    "~"')
-    arrayPush(sourceParts, arrayJoin(phraseLines, ',\n') + '\n};\n\n' + \
-        'const size_t bsIncludeSourcePhraseCount = ' + (arrayLength(includeSourcePhrases) + 1) + ';\n')
+        '#include "includeSourceDecode.h"\n']
 
     # Each include library script
     accessors = []
@@ -242,10 +150,12 @@ async function main():
         model = objectGet(parseResult, 'result')
         objectDelete(model, 'scriptLines')
 
-        # Compress the model and verify the round trip
+        # Compress the model at gzip level 9 (max) and verify the round trip
         modelText = includeSourceJSON(model)
-        encoded = includeSourceEncode(modelText, tildeIndex)
-        if includeSourceDecode(encoded, tildeIndex) != modelText:
+        modelBytes = stringEncode(modelText)
+        compressed = gzipCompress(modelBytes, 9)
+        encoded = base64Encode(compressed)
+        if gzipUncompress(base64Decode(encoded)) != modelBytes:
             systemLog('error: "' + includeName + '" compressed model round-trip failure')
             return 1
         endif
@@ -286,10 +196,7 @@ async function main():
         "/* A bundled include library stub accessor - returns its include's decoded JSON script model */\n" + \
         'typedef const char *(*BSIncludeSourceFn)(void);\n\n' + \
         '/* The bundled include library stub accessors, in registry order */\n' + \
-        'extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];\n\n' + \
-        '/* The compressed include model phrase table, indexed by its encoding character */\n' + \
-        'extern const char *const bsIncludeSourcePhrases[];\n' + \
-        'extern const size_t bsIncludeSourcePhraseCount;\n\n\n' + \
+        'extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];\n\n\n' + \
         '/*\n * The bundled include library stub accessors\n */\n\n' + \
         arrayJoin(accessors, '\n\n') + '\n\n\n' + \
         '#ifdef __cplusplus\n}\n#endif\n\n#endif\n')

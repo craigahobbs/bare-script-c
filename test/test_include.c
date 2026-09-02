@@ -6,9 +6,18 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "test.h"
+#include "../src/includeSourceDecode.h"
+
+
+static const char *bsTestGzipDecode(const char *const *chunks)
+{
+    BSIncludeSource source = {"test.bare", chunks, NULL};
+    return bsIncludeSourceDecode(&source);
+}
 
 
 TEST(include_registry)
@@ -78,6 +87,8 @@ TEST(include_stub_accessors)
     ASSERT_TRUE(bsIncludeSourceSchema() == bsIncludeSource("schema.bare"));
     ASSERT_TRUE(bsIncludeSourceUrl() == bsIncludeSource("url.bare"));
     ASSERT_TRUE(bsIncludeSourceQrcode() == bsIncludeSource("qrcode.bare"));
+    ASSERT_TRUE(bsIncludeSourceGzip() == bsIncludeSource("gzip.bare"));
+    ASSERT_TRUE(bsIncludeSourceBase64() == bsIncludeSource("base64.bare"));
 }
 
 
@@ -100,15 +111,111 @@ TEST(include_system_include)
     ASSERT_VALUE(bsTestExecute("include <args.bare>\ninclude <markdown.bare>\n"
                                "return [systemType(argsParse), systemType(markdownParse)]"),
                  "[\"function\",\"function\"]");
+
+    ASSERT_VALUE(bsTestExecute("include <gzip.bare>\n"
+                               "return gzipUncompress(gzipCompress([104, 105]))"),
+                 "[104,105]");
 }
 
 
-TEST(include_phrase_table)
+TEST(include_gzip_decode)
 {
-    /* The phrase table is complete - 61 phrases plus the "~" escape */
-    ASSERT_INT_EQ(bsIncludeSourcePhraseCount, 62);
-    for (size_t ix = 0; ix < bsIncludeSourcePhraseCount; ix++) {
-        ASSERT_NOT_NULL(bsIncludeSourcePhrases[ix]);
+    static const char *const hello[] = {"H4sIAAAAAAAC/8tIzcnJBwCGphA2BQAAAA==", NULL};
+    static const char *const helloChunks[] = {"H4sIAAAAAAAC/8tIzcnJB", "wCGphA2BQAAAA==", NULL};
+    static const char *const empty[] = {"H4sIAAAAAAAA/wMAAAAAAAAAAAA=", NULL};
+    static const char *const stored[] = {"H4sIAAAAAAAE/wEFAPr/aGVsbG+GphA2BQAAAA==", NULL};
+    static const char *const fname[] = {"H4sICAAAAAAA/3gAAwAAAAAAAAAAAA==", NULL};
+    static const char *const fextra[] = {"H4sIBAAAAAAA/wIAQUIDAAAAAAAAAAAA", NULL};
+    static const char *const fcomment[] = {"H4sIEAAAAAAA/2hpAAMAAAAAAAAAAAA=", NULL};
+    static const char *const fhcrc[] = {"H4sIAgAAAAAA/5DJAwAAAAAAAAAAAA==", NULL};
+    static const char *const ftext[] = {"H4sIAQAAAAAA/wMAAAAAAAAAAAA=", NULL};
+    static const char *const twoBlocks[] = {"H4sIAAAAAAAA/wAAAP//AwAAAAAAAAAAAA==", NULL};
+
+    BSIncludeSource src = {"t.bare", hello, NULL};
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "hello");
+    ASSERT_TRUE(bsIncludeSourceDecode(&src) == src.decoded);
+    free(src.decoded);
+
+    src.compressed = helloChunks;
+    src.decoded = NULL;
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "hello");
+    free(src.decoded);
+
+    src.compressed = empty;
+    src.decoded = NULL;
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
+    free(src.decoded);
+
+    src.compressed = stored;
+    src.decoded = NULL;
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "hello");
+    free(src.decoded);
+
+    src.compressed = fname;
+    src.decoded = NULL;
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
+    free(src.decoded);
+
+    src.compressed = fextra;
+    src.decoded = NULL;
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
+    free(src.decoded);
+
+    src.compressed = fcomment;
+    src.decoded = NULL;
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
+    free(src.decoded);
+
+    src.compressed = fhcrc;
+    src.decoded = NULL;
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
+    free(src.decoded);
+
+    src.compressed = ftext;
+    src.decoded = NULL;
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
+    free(src.decoded);
+
+    src.compressed = twoBlocks;
+    src.decoded = NULL;
+    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
+    free(src.decoded);
+}
+
+
+TEST(include_gzip_invalid)
+{
+    static const char *const invalid[][3] = {
+        {"!!!!", NULL},
+        {"AAA", NULL},
+        {"AAA*", NULL},
+        {"AA==AAAA", NULL},
+        {"AA=A", NULL},
+        {"YWJj", NULL},
+        {"H4sIAAAAAAAC/8tIzcnJBwCGphA3BQAAAA==", NULL},
+        {"H4sIAAAAAAAC/8tIzcnJBwCGphA2BQAAAQ==", NULL},
+        {"H4sIAAAAAAAA/wcAAAAAAAAAAA==", NULL},
+        {"H4sIAAAAAAAA//UAAAAAAAAAAAAA", NULL},
+        {"H4sIIAAAAAAA/wMAAAAAAAAAAAA=", NULL},
+        {"H4sAAAAAAAAA/wMAAAAAAAAAAAA=", NULL},
+        {"HosIAAAAAAAA/wMAAAAAAAAAAAA=", NULL},
+        {"H4sIBAAAAAAA/wA=", NULL},
+        {"H4sICAAAAAAA/2Fi", NULL},
+        {"H4sIEAAAAAAA/2E=", NULL},
+        {"H4sIAgAAAAAA/wA=", NULL},
+        {"H4sIAAAAAAAA/wMAAAA=", NULL},
+        {"H4sIAAAAAAAA/wMAAAAAAAAAAA==", NULL},
+        {"H4sIAAAAAAAA/wEBAP//AAAAAAAAAAA=", NULL},
+        {"H4sIAAAAAAAA/wEFAPr/YQAAAAAAAAAA", NULL},
+        {"H4sIAAAAAAAA/8tIzcnJBwAAAAAAAAAAAA==", NULL},
+        {"H4sIAAAAAAAA/wAAAAAAAAAA", NULL},
+        {"H4sIBAAAAAAA/wA=", NULL},
+        {"H4sICAAAAAAA/2FiAAAAAAAAAAA=", NULL},
+        {"H4sIEAAAAAAA/wEBAQEB", NULL},
+        {"H4sIAgAAAAAA/wE=", NULL},
+        {NULL}
+    };
+    for (size_t ix = 0; invalid[ix][0] != NULL; ix++) {
+        ASSERT_NULL(bsTestGzipDecode(invalid[ix]));
     }
-    ASSERT_STR_EQ(bsIncludeSourcePhrases[bsIncludeSourcePhraseCount - 1], "~");
 }

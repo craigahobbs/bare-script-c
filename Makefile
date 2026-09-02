@@ -143,7 +143,7 @@ clean:
 .PHONY: includes
 includes:
 	$(MAKE) $(CLI_BIN)
-	$(CLI_BIN) $(CURDIR)/bin/includeSource.bare \
+	BARESCRIPT_INCLUDE_PATH=$(CURDIR)/$(INCLUDE_LIB_DIR) $(CLI_BIN) $(CURDIR)/bin/includeSource.bare \
 	    -v vFiles "'[$(subst $(SPACE),$(COMMA),$(patsubst %,\"$(CURDIR)/%\",$(INCLUDE_LIB_SRCS)))]'" \
 	    -v vOutputC "'$(CURDIR)/$(INCLUDE_SOURCE_C)'" \
 	    -v vOutputH "'$(CURDIR)/$(INCLUDE_SOURCE_H)'"

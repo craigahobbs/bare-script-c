@@ -4,6 +4,7 @@
 
 # Include all system includes
 include <args.bare>
+include <base64.bare>
 include <baredoc.bare>
 include <baredocCLI.bare>
 include <barescriptLint.bare>
@@ -17,6 +18,7 @@ include <diff.bare>
 include <draw.bare>
 include <elementModel.bare>
 include <forms.bare>
+include <gzip.bare>
 include <markdown.bare>
 include <markdownElements.bare>
 include <markdownHighlight.bare>
@@ -38,6 +40,7 @@ unittestCoverageStart()
 
 # Override all system includes
 include '../args.bare'
+include '../base64.bare'
 include '../baredoc.bare'
 include '../baredocCLI.bare'
 include '../barescriptLint.bare'
@@ -51,6 +54,7 @@ include '../diff.bare'
 include '../draw.bare'
 include '../elementModel.bare'
 include '../forms.bare'
+include '../gzip.bare'
 include '../markdown.bare'
 include '../markdownElements.bare'
 include '../markdownHighlight.bare'
@@ -69,6 +73,7 @@ include '../url.bare'
 
 # Run markdownUp include library unit tests
 include 'testArgs.bare'
+include 'testBase64.bare'
 include 'testBaredoc.bare'
 include 'testBaredocCLI.bare'
 include 'testBarescriptLint.bare'
@@ -82,6 +87,7 @@ include 'testDiff.bare'
 include 'testDraw.bare'
 include 'testElementModel.bare'
 include 'testForms.bare'
+include 'testGzip.bare'
 include 'testMarkdown.bare'
 include 'testMarkdownElements.bare'
 include 'testMarkdownHighlight.bare'

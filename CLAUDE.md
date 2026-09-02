@@ -19,7 +19,7 @@ make commit         # the pre-commit gate: test + cover + test-include + test-la
 make compile        # build build/libbarescript.{so,dylib}, build/libbarescript.a, build/bare
 make test           # C unit tests
 make cover          # C unit tests with line coverage; FAILS THE BUILD under 100%
-make test-include   # the BareScript include library suite (1372 tests, 16754 assertions)
+make test-include   # the BareScript include library suite (1407 tests, 100% coverage)
 make test-language  # this project's own BareScript language tests
 make perf           # performance suite -> build/perf.csv
 make release        # three-stage PGO+LTO build in build/release
@@ -49,8 +49,8 @@ perf` merges their results when present.
   once.
 - `lib/include/*.bare` and `lib/include/test/*` are **vendored from the reference** - do not edit
   them to make a test pass; fix the C instead.
-- The include model compression phrase table in `bin/includeSource.bare` must stay exactly the
-  reference table, so the embedded bytes stay identical to `includeSource.js`.
+- Bundled include models are gzip-compressed by `gzip.bare` and base64-encoded by `base64.bare`;
+  regenerate with `make includes` after changing `lib/include/` or `bin/includeSource.bare`.
 - `jsonParse` and `regexNew` messages match CPython's `json` and `re` exactly, including
   positions. Where they cannot, it is because BareScript specifies *JavaScript* regular
   expressions; those divergences are tabulated in README's **Compatibility** section. Verify
@@ -83,14 +83,14 @@ statement list is complete: **jump resolution** (label -> statement index) and *
 
 ### The bundled include library
 
-The thirty include library scripts are compiled to JSON models, dictionary-compressed, and
-embedded in `src/includeSource.c`, which is **generated and checked in** so a fresh clone builds
-with no bootstrap. `make includes` regenerates it by running `bin/includeSource.bare` - itself a
-BareScript program - under a CLI built from the *existing* generated source.
+The include library scripts are compiled to JSON models, gzip-compressed at level 9 with
+`gzip.bare`, base64-encoded with `base64.bare`, and embedded in `src/includeSource.c`, which is
+**generated and checked in** so a fresh clone builds with no bootstrap. `make includes`
+regenerates it by running `bin/includeSource.bare` - itself a BareScript program - under a CLI
+built from the *existing* generated source.
 
 `bin/includeSource.bare` serializes objects in insertion order itself, delegating only leaf values
-to `jsonStringify`, because the phrase table is tuned for the parser's key insertion order and
-`jsonStringify` sorts keys.
+to `jsonStringify`.
 
 ### Values and reference counting
 
