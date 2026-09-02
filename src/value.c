@@ -468,8 +468,8 @@ BSValue bsStringConcat(BSValue left, BSValue right)
         string->flags |= BS_STR_ASCII;
     }
 
-    bsRelease(leftText);
-    bsRelease(rightText);
+    bsReleaseInline(leftText);
+    bsReleaseInline(rightText);
     return bsStringTake(string);
 }
 
@@ -663,7 +663,7 @@ void bsSBAppendValue(BSStringBuilder *sb, BSValue value)
     size_t length;
     BSValue text = bsStringBytes(value, buffer, sizeof(buffer), &data, &size, &length);
     bsSBAppend(sb, data, size);
-    bsRelease(text);
+    bsReleaseInline(text);
 }
 
 
@@ -814,7 +814,7 @@ void bsArrayPush(BSValue value, BSValue item)
 void bsArraySet(BSValue value, size_t index, BSValue item)
 {
     BSArray *array = value.u.array;
-    bsRelease(array->values[index]);
+    bsReleaseInline(array->values[index]);
     array->values[index] = item;
 }
 
@@ -832,7 +832,7 @@ void bsArrayInsert(BSValue value, size_t index, BSValue item)
 void bsArrayDelete(BSValue value, size_t index)
 {
     BSArray *array = value.u.array;
-    bsRelease(array->values[index]);
+    bsReleaseInline(array->values[index]);
     memmove(array->values + index, array->values + index + 1, (array->count - index - 1) * sizeof(BSValue));
     array->count--;
 }
@@ -843,7 +843,7 @@ BSValue bsArrayCopy(BSValue value)
     size_t count = bsArrayCount(value);
     BSValue copy = bsArrayNewCapacity(count);
     for (size_t ix = 0; ix < count; ix++) {
-        bsArrayPush(copy, bsRetain(value.u.array->values[ix]));
+        bsArrayPush(copy, bsRetainInline(value.u.array->values[ix]));
     }
     return copy;
 }
@@ -1335,7 +1335,7 @@ static void bsObjectSpill(BSObject *object)
     for (size_t ix = 0; ix < n; ix++) {
         BSValue key = bsStringTake(keys[ix]);
         bsObjectNodeCreate(key, values[ix], object);
-        bsRelease(key);
+        bsReleaseInline(key);
     }
 }
 
@@ -1345,7 +1345,7 @@ static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *obj
     created->left = NULL;
     created->right = NULL;
     created->priority = bsObjectPriority();
-    created->key = bsRetain(key).u.string;
+    created->key = bsRetainInline(key).u.string;
     created->value = item;
     if (key.type != BS_STRING || (key.u.string->flags & BS_STR_INTERNED) == 0) {
         object->uninterned = 1;
@@ -1460,7 +1460,7 @@ static void bsObjectTreapInsert(BSObject *object, BSValue key, BSValue item)
     for (;;) {
         int compare = bsKeyCompare(node->key, keyData, keySize);
         if (compare == 0) {
-            bsRelease(node->value);
+            bsReleaseInline(node->value);
             node->value = item;
             return;
         }
@@ -1532,7 +1532,7 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
         size_t keySize = bsStringSize(key);
         int found = bsObjectPackedFind(object, keyData, keySize, interned);
         if (found >= 0) {
-            bsRelease(object->u.small.values[found]);
+            bsReleaseInline(object->u.small.values[found]);
             object->u.small.values[found] = item;
             return;
         }
@@ -1540,7 +1540,7 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
             if (key.type != BS_STRING || (key.u.string->flags & BS_STR_INTERNED) == 0) {
                 object->uninterned = 1;
             }
-            object->u.small.keys[object->count] = bsRetain(key).u.string;
+            object->u.small.keys[object->count] = bsRetainInline(key).u.string;
             object->u.small.values[object->count] = item;
             object->count++;
             object->generation++;
@@ -1562,7 +1562,7 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
         /* Every key is interned, so the table is definitive */
         BSObjectNode *node = bsObjectLookupGet(object, interned);
         if (node != NULL) {
-            bsRelease(node->value);
+            bsReleaseInline(node->value);
             node->value = item;
             return;
         }
@@ -1573,7 +1573,7 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
     size_t keySize = bsStringSize(key);
     for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
         if (bsObjectKeyEqual(node->key, keyData, keySize, interned)) {
-            bsRelease(node->value);
+            bsReleaseInline(node->value);
             node->value = item;
             return;
         }
@@ -1591,7 +1591,7 @@ void bsObjectAppend(BSValue value, BSValue key, BSValue item)
             if (key.type != BS_STRING || (key.u.string->flags & BS_STR_INTERNED) == 0) {
                 object->uninterned = 1;
             }
-            object->u.small.keys[object->count] = bsRetain(key).u.string;
+            object->u.small.keys[object->count] = bsRetainInline(key).u.string;
             object->u.small.values[object->count] = item;
             object->count++;
             object->generation++;
@@ -1683,8 +1683,8 @@ static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t 
             object->u.tree.insertTail = node->insertPrev;
         }
         bsObjectLookupDel(object, node->key);
-        bsRelease(bsStringTake(node->key));
-        bsRelease(node->value);
+        bsReleaseInline(bsStringTake(node->key));
+        bsReleaseInline(node->value);
         bsObjectNodeRecycle(node);
         object->count--;
         object->generation++;
@@ -1706,16 +1706,16 @@ static void bsObjectNodesFree(BSObject *object)
 {
     if (object->packed) {
         for (size_t ix = 0; ix < object->count; ix++) {
-            bsRelease(bsStringTake(object->u.small.keys[ix]));
-            bsRelease(object->u.small.values[ix]);
+            bsReleaseInline(bsStringTake(object->u.small.keys[ix]));
+            bsReleaseInline(object->u.small.values[ix]);
         }
         return;
     }
     BSObjectNode *node = object->u.tree.insertHead;
     while (node != NULL) {
         BSObjectNode *next = node->insertNext;
-        bsRelease(bsStringTake(node->key));
-        bsRelease(node->value);
+        bsReleaseInline(bsStringTake(node->key));
+        bsReleaseInline(node->value);
         bsObjectNodeRecycle(node);
         node = next;
     }
@@ -1743,7 +1743,7 @@ void bsObjectSet(BSValue value, const char *key, BSValue item)
 {
     BSValue keyValue = bsStringIntern(key, strlen(key));
     bsObjectSetString(value, keyValue, item);
-    bsRelease(keyValue);
+    bsReleaseInline(keyValue);
 }
 
 
@@ -1836,8 +1836,8 @@ bool bsObjectDelete(BSValue value, const char *key)
         if (found < 0) {
             return false;
         }
-        bsRelease(bsStringTake(object->u.small.keys[found]));
-        bsRelease(object->u.small.values[found]);
+        bsReleaseInline(bsStringTake(object->u.small.keys[found]));
+        bsReleaseInline(object->u.small.values[found]);
         object->count--;
         for (size_t ix = (size_t) found; ix < object->count; ix++) {
             object->u.small.keys[ix] = object->u.small.keys[ix + 1];
@@ -1867,8 +1867,8 @@ bool bsObjectDelete(BSValue value, const char *key)
         object->u.tree.insertTail = node->insertPrev;
     }
     bsObjectLookupDel(object, node->key);
-    bsRelease(bsStringTake(node->key));
-    bsRelease(node->value);
+    bsReleaseInline(bsStringTake(node->key));
+    bsReleaseInline(node->value);
     bsObjectNodeRecycle(node);
     object->count--;
     object->generation++;
@@ -2002,7 +2002,7 @@ bool bsObjectIter(BSValue value, BSObjectIterFn iter, void *data)
 static bool bsObjectKeysIter(BSValue key, BSValue item, void *data)
 {
     (void) item;
-    bsArrayPush(*((BSValue *) data), bsRetain(key));
+    bsArrayPush(*((BSValue *) data), bsRetainInline(key));
     return true;
 }
 
@@ -2025,7 +2025,7 @@ BSValue bsObjectKeysSorted(BSValue value)
 
 static bool bsObjectCopyIter(BSValue key, BSValue item, void *data)
 {
-    bsObjectSetString(*((BSValue *) data), key, bsRetain(item));
+    bsObjectSetString(*((BSValue *) data), key, bsRetainInline(item));
     return true;
 }
 
@@ -2096,7 +2096,7 @@ void bsReleaseDestroyed(BSValue value)
     case BS_ARRAY: {
         BSArray *array = value.u.array;
         for (size_t ix = 0; ix < array->count; ix++) {
-            bsRelease(array->values[ix]);
+            bsReleaseInline(array->values[ix]);
         }
         if (array->values != NULL) {
             bsArrayBufFree(array->values, array->capacity);
@@ -2115,7 +2115,7 @@ void bsReleaseDestroyed(BSValue value)
         if (function->dataFree != NULL) {
             function->dataFree(function->data);
         }
-        bsRelease(bsStringTake(function->name));
+        bsReleaseInline(bsStringTake(function->name));
         free(function);
         break;
     }
@@ -2143,7 +2143,7 @@ void bsAssign(BSValue *target, BSValue value)
 {
     BSValue previous = *target;
     *target = value;
-    bsRelease(previous);
+    bsReleaseInline(previous);
 }
 
 
@@ -2705,7 +2705,7 @@ BSValue bsValueString(BSValue value)
                                  parts.second, parts.millisecond, tzSign, tzAbs / 60, tzAbs % 60);
     }
     case BS_STRING:
-        return bsRetain(value);
+        return bsRetainInline(value);
     case BS_ARRAY:
     case BS_OBJECT:
         return bsJSONEncode(value, 0);
@@ -2817,15 +2817,15 @@ int bsValueCompare(BSValue left, BSValue right)
                 result = bsValueCompare(bsObjectGetString(left, leftKey), bsObjectGetString(right, rightKey));
             }
         }
-        bsRelease(leftKeys);
-        bsRelease(rightKeys);
+        bsReleaseInline(leftKeys);
+        bsReleaseInline(rightKeys);
         if (result != 0) {
             return result;
         }
         return leftCount < rightCount ? -1 : (leftCount == rightCount ? 0 : 1);
     }
 
-    /* Values of different types compare by type name */
-    int typeCompare = strcmp(bsValueTypeString(left), bsValueTypeString(right));
-    return typeCompare < 0 ? -1 : (typeCompare == 0 ? 0 : 1);
+    /* Values of different types compare by type name - the ranks are the names' sorted order */
+    static const signed char rank[] = {4, 1, 5, 2, 8, 0, 6, 3, 7};
+    return rank[left.type] < rank[right.type] ? -1 : 1;
 }

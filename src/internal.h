@@ -37,7 +37,6 @@ void bsRegexRelease(BSValue value);
 /* Destroy a heap value whose refcount has reached zero */
 void bsReleaseDestroyed(BSValue value);
 
-#ifndef BARESCRIPT_VALUE_IMPL
 /*
  * Fast-path retain/release for implementation files. Immediate values are a no-op the compiler
  * can see; the public functions in value.c remain the library ABI.
@@ -67,6 +66,7 @@ static inline void bsReleaseInline(BSValue value)
     bsReleaseDestroyed(value);
 }
 
+#ifndef BARESCRIPT_VALUE_IMPL
 #define bsRetain bsRetainInline
 #define bsRelease bsReleaseInline
 #endif
