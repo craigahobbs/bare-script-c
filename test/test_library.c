@@ -119,12 +119,18 @@ TEST(library_array)
     ASSERT_VALUE(bsTestExecute("function cmpBad(a, b):\n    return 'x'\nendfunction\n"
                                "return arraySort([1, 3, 2], cmpBad)"), "[1,3,2]");
 
-    /* A runtime error inside a match function stops the search and halts the script */
+    /* A runtime error inside a compare function halts the script; later compares do not run */
+    ASSERT_VALUE(bsTestExecute("function cmpErr(a, b):\n    undefinedFunc()\nendfunction\n"
+                               "return arraySort([1, 3, 2], cmpErr)"), "null");
+    ASSERT_NOT_NULL(bsTestErrorText());
+
+    /* A runtime error inside a match function stops the search and halts the script - the return
+       statement never completes, as with the reference implementations' exceptions */
     ASSERT_VALUE(bsTestExecute("function bad(v):\n    undefinedFunc()\nendfunction\n"
-                               "return arrayIndexOf([1, 2], bad)"), "-1");
+                               "return arrayIndexOf([1, 2], bad)"), "null");
     ASSERT_NOT_NULL(bsTestErrorText());
     ASSERT_VALUE(bsTestExecute("function bad(v):\n    undefinedFunc()\nendfunction\n"
-                               "return arrayLastIndexOf([1, 2], bad)"), "-1");
+                               "return arrayLastIndexOf([1, 2], bad)"), "null");
     ASSERT_NOT_NULL(bsTestErrorText());
 }
 
@@ -766,6 +772,8 @@ TEST(library_direct_call)
     args[1] = bsNumber(1);
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayGet"), args, 2, options), "2");
     ASSERT_VALUE(bsFunctionInvoke(bsLibraryScriptFunction("arrayGet"), args, 2, options), "2");
+    /* Off the happy path, invoke runs the full function, which validates the arguments */
+    ASSERT_VALUE(bsFunctionInvoke(bsLibraryScriptFunction("arrayGet"), args, 1, options), "null");
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayLength"), args, 1, options), "2");
     ASSERT_VALUE(bsFunctionInvoke(bsLibraryScriptFunction("arrayLength"), args, 1, options), "2");
     args[1] = bsNumber(0);

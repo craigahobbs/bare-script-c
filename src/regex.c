@@ -74,6 +74,7 @@ struct RxNode {
             size_t rangeCount;
             unsigned classes;
             bool negate;
+            uint8_t ascii[16]; /* membership of the code points 0 - 127, with flags and negation applied */
         } cls;
         struct {
             RxNode **branches;
@@ -379,6 +380,7 @@ static unsigned rxEscape(RxCompiler *compiler, uint32_t *literal)
 
 
 static RxNode *rxParseAlternation(RxCompiler *compiler);
+static void rxClassFinish(RxNode *node, unsigned flags);
 
 
 static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
@@ -394,11 +396,13 @@ static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
         char ch = compiler->pattern[compiler->offset];
         if (ch == ']' && !first) {
             compiler->offset++;
+            rxClassFinish(node, compiler->flags);
             return node;
         }
         if (ch == ']' && first) {
             /* An empty class - "[]" - matches nothing */
             compiler->offset++;
+            rxClassFinish(node, compiler->flags);
             return node;
         }
         first = false;
@@ -680,6 +684,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         if (classes != 0) {
             RxNode *node = rxNodeNew(compiler, RX_CLASS);
             node->u.cls.classes = classes;
+            rxClassFinish(node, compiler->flags);
             return node;
         }
         RxNode *node = rxNodeNew(compiler, RX_CHAR);
@@ -1206,6 +1211,16 @@ const char *bsRegexGroupName(BSValue regex, size_t group)
 }
 
 
+BSValue bsRegexGroupNameValue(BSValue regex, size_t group)
+{
+    BSValue *names = regex.u.regex->groupNames;
+    if (names == NULL || group >= regex.u.regex->groupCount) {
+        return bsNull();
+    }
+    return names[group];
+}
+
+
 /*
  * Match
  */
@@ -1338,16 +1353,40 @@ static bool rxClassMatchOne(const RxNode *node, uint32_t ch)
 }
 
 
-static bool rxClassMatch(const RxState *state, const RxNode *node, uint32_t ch)
+static bool rxClassMatchSlow(const RxNode *node, unsigned flags, uint32_t ch)
 {
     bool matched = rxClassMatchOne(node, ch);
-    if (!matched && (state->flags & BS_REGEX_IGNORECASE) != 0) {
+    if (!matched && (flags & BS_REGEX_IGNORECASE) != 0) {
         uint32_t other = rxSwapCase(ch);
         if (other != ch) {
             matched = rxClassMatchOne(node, other);
         }
     }
     return node->u.cls.negate ? !matched : matched;
+}
+
+
+/*
+ * Precompute a class's membership for the code points 0 - 127, with the case-insensitivity flag
+ * and negation applied, so an ASCII subject tests one bit instead of walking the ranges
+ */
+static void rxClassFinish(RxNode *node, unsigned flags)
+{
+    memset(node->u.cls.ascii, 0, sizeof(node->u.cls.ascii));
+    for (uint32_t ch = 0; ch < 128; ch++) {
+        if (rxClassMatchSlow(node, flags, ch)) {
+            node->u.cls.ascii[ch >> 3] |= (uint8_t) (1u << (ch & 7));
+        }
+    }
+}
+
+
+static inline bool rxClassMatch(const RxState *state, const RxNode *node, uint32_t ch)
+{
+    if (ch < 128) {
+        return (node->u.cls.ascii[ch >> 3] >> (ch & 7)) & 1u;
+    }
+    return rxClassMatchSlow(node, state->flags, ch);
 }
 
 
@@ -1392,7 +1431,7 @@ static bool rxMatchOneByte(const RxState *state, const RxNode *node, size_t pos)
     case RX_ANY:
         return (state->flags & BS_REGEX_DOTALL) != 0 || (ch != '\n' && ch != '\r');
     default:
-        return rxClassMatch(state, node, ch);
+        return (node->u.cls.ascii[ch >> 3] >> (ch & 7)) & 1u;
     }
 }
 

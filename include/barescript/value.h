@@ -131,7 +131,7 @@ struct BSObject {
     uint8_t packed;      /* 1 = smallKeys/smallValues, 0 = insertion list + treap */
     uint8_t uninterned;  /* 1 if any key is not interned; interned hash miss then walks the treap */
     size_t count;
-    uint32_t generation; /* incremented on every insert, update, or delete */
+    uint32_t generation; /* incremented when a key is added or removed - value slots then move */
     BSString *smallKeys[4];
     BSValue smallValues[4];
     BSObjectNode *root;

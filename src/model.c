@@ -137,7 +137,12 @@ typedef struct {
     BSInclude *includes;
     size_t includeCount;
     size_t includeCap;
+    uint32_t *callNames;  /* per CALL_NAME site, the name's constant index */
     size_t callCount;
+    size_t callCap;
+    int depth;            /* the value stack depth after the last emitted instruction */
+    int maxDepth;
+    size_t targetAt;      /* the instruction index a jump was most recently patched to target */
     BSValue *slotNames;
     size_t slotCount;
     size_t slotCap;
@@ -151,7 +156,52 @@ typedef struct {
 } BSEmit;
 
 
-static uint32_t bsEmitInst(BSEmit *e, uint8_t op, uint32_t arg)
+/* An instruction's net effect on the value stack depth. A call's effect lands on its ARGC word. */
+static int bsOpStackEffect(uint8_t op, uint32_t arg)
+{
+    switch (op) {
+    case BS_OP_LOAD_NULL:
+    case BS_OP_LOAD_TRUE:
+    case BS_OP_LOAD_FALSE:
+    case BS_OP_LOAD_CONST:
+    case BS_OP_LOAD_SLOT:
+    case BS_OP_LOAD_NAME:
+    case BS_OP_DUP:
+        return 1;
+    case BS_OP_STORE_SLOT:
+    case BS_OP_STORE_NAME:
+    case BS_OP_POP:
+    case BS_OP_JUMP_FALSE:
+    case BS_OP_JUMP_TRUE:
+    case BS_OP_RETURN:
+    case BS_OP_ADD:
+    case BS_OP_SUB:
+    case BS_OP_MUL:
+    case BS_OP_DIV:
+    case BS_OP_MOD:
+    case BS_OP_POW:
+    case BS_OP_EQ:
+    case BS_OP_NE:
+    case BS_OP_LT:
+    case BS_OP_LE:
+    case BS_OP_GT:
+    case BS_OP_GE:
+    case BS_OP_BAND:
+    case BS_OP_BOR:
+    case BS_OP_BXOR:
+    case BS_OP_SHL:
+    case BS_OP_SHR:
+        return -1;
+    case BS_OP_ARGC:
+        return 1 - (int) arg;
+    default:
+        return 0;
+    }
+}
+
+
+/* Append a code word without stack accounting - for data words the interpreter never dispatches */
+static uint32_t bsEmitWord(BSEmit *e, uint8_t op, uint32_t arg)
 {
     if (e->count == e->cap) {
         e->cap = e->cap != 0 ? e->cap * 2 : 32;
@@ -159,6 +209,17 @@ static uint32_t bsEmitInst(BSEmit *e, uint8_t op, uint32_t arg)
     }
     uint32_t pc = (uint32_t) e->count;
     e->inst[e->count++] = BS_INST(op, arg);
+    return pc;
+}
+
+
+static uint32_t bsEmitInst(BSEmit *e, uint8_t op, uint32_t arg)
+{
+    uint32_t pc = bsEmitWord(e, op, arg);
+    e->depth += bsOpStackEffect(op, arg);
+    if (e->depth > e->maxDepth) {
+        e->maxDepth = e->depth;
+    }
     return pc;
 }
 
@@ -211,6 +272,12 @@ static void bsSlotAdd(BSEmit *e, BSValue name)
 
 static void bsEmitJump(BSEmit *e, uint8_t op, BSValue label)
 {
+    /* "jumpif (!expr)" - fold the NOT into the jump, unless another jump lands between them */
+    if (op == BS_OP_JUMP_TRUE && e->count != 0 && BS_OP(e->inst[e->count - 1]) == BS_OP_NOT &&
+        e->targetAt != e->count) {
+        e->count--;
+        op = op == BS_OP_JUMP_TRUE ? BS_OP_JUMP_FALSE : BS_OP_JUMP_TRUE;
+    }
     BSValue interned = bsStringIntern(bsStringData(label), bsStringSize(label));
     BSValue pc = e->labels.type == BS_OBJECT ? bsObjectGetString(e->labels, interned) : bsNull();
     if (pc.type == BS_NUMBER) {
@@ -237,6 +304,7 @@ static void bsEmitLabel(BSEmit *e, BSValue name)
     BSValue interned = bsStringIntern(bsStringData(name), bsStringSize(name));
     bsObjectSetString(e->labels, interned, bsNumber((double) e->count));
     bsRelease(interned);
+    e->targetAt = e->count;
 }
 
 
@@ -285,6 +353,8 @@ static bool bsEmitIf(BSEmit *e, BSValue args)
     }
     uint32_t jumpEnd = bsEmitInst(e, BS_OP_JUMP, 0xffffffu);
     e->inst[jumpElse] = BS_INST(BS_OP_JUMP_FALSE, (uint32_t) e->count);
+    e->targetAt = e->count;
+    e->depth--; /* the else branch starts without the then branch's value */
     if (argCount >= 3) {
         if (!bsEmitExpr(e, bsArrayGet(args, 2))) {
             return false;
@@ -293,6 +363,7 @@ static bool bsEmitIf(BSEmit *e, BSValue args)
         bsEmitInst(e, BS_OP_LOAD_NULL, 0);
     }
     e->inst[jumpEnd] = BS_INST(BS_OP_JUMP, (uint32_t) e->count);
+    e->targetAt = e->count;
     return true;
 }
 
@@ -360,7 +431,13 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
         if (slot >= 0) {
             bsEmitInst(e, BS_OP_CALL_SLOT, (uint32_t) slot);
         } else {
-            bsEmitInst(e, BS_OP_CALL_NAME, bsEmitConst(e, interned));
+            /* The operand is the call site's cache index; the cache carries the name */
+            if (e->callCount == e->callCap) {
+                e->callCap = e->callCap != 0 ? e->callCap * 2 : 8;
+                e->callNames = bsRealloc(e->callNames, e->callCap * sizeof(uint32_t));
+            }
+            e->callNames[e->callCount] = bsEmitConst(e, interned);
+            bsEmitInst(e, BS_OP_CALL_NAME, (uint32_t) e->callCount);
             e->callCount++;
         }
         /* The following word is the argument count (never dispatched) */
@@ -387,6 +464,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
                 return false;
             }
             e->inst[jump] = BS_INST(BS_OP_JUMP_FALSE, (uint32_t) e->count);
+            e->targetAt = e->count;
             return true;
         }
         if (strcmp(opText, "||") == 0) {
@@ -400,6 +478,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
                 return false;
             }
             e->inst[jump] = BS_INST(BS_OP_JUMP_TRUE, (uint32_t) e->count);
+            e->targetAt = e->count;
             return true;
         }
         uint8_t opcode = bsBinaryOpcode(opText);
@@ -596,6 +675,19 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
 }
 
 
+/* The line number of the statement containing an instruction - the nearest preceding STMT */
+static int bsEmitLine(const BSEmit *e, size_t pc)
+{
+    while (pc > 0) {
+        uint32_t inst = e->inst[--pc];
+        if (BS_OP(inst) == BS_OP_STMT) {
+            return e->coverLines[BS_ARG(inst)];
+        }
+    }
+    return 0; /* GCOV_EXCL_LINE - a jump statement always follows its STMT */
+}
+
+
 static void bsEmitFinish(BSEmit *e, BSCode *code)
 {
     for (size_t ix = 0; ix < e->patchCount; ix++) {
@@ -610,8 +702,13 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
             if (op == BS_OP_JUMP) {
                 e->inst[e->patches[ix].pc] = BS_INST(BS_OP_JUMP_UNDEF, name);
             } else {
-                /* A jumpif to a missing label only errors if the jump is taken */
+                /*
+                 * A jumpif to a missing label only errors if the jump is taken. The trap sits past
+                 * the chunk's return, so it carries the jump statement's line in a data word.
+                 */
+                int line = bsEmitLine(e, e->patches[ix].pc);
                 uint32_t trap = bsEmitInst(e, BS_OP_JUMP_UNDEF, name);
+                bsEmitWord(e, BS_OP_ARGC, (uint32_t) line);
                 e->inst[e->patches[ix].pc] = BS_INST(op, trap);
             }
         }
@@ -624,6 +721,7 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
     memset(code, 0, sizeof(*code));
     code->inst = e->inst;
     code->count = e->count;
+    code->stackMax = (size_t) e->maxDepth;
     code->constants = e->constants;
     code->constantCount = e->constCount;
     code->includes = e->includes;
@@ -634,10 +732,14 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
     code->slotNames = e->slotNames;
     code->slotCount = e->slotCount;
     if (e->callCount != 0) {
-        code->caches = bsAlloc(e->count * sizeof(BSCallCache));
-        memset(code->caches, 0, e->count * sizeof(BSCallCache));
-        code->cacheCount = e->count;
+        code->caches = bsAlloc(e->callCount * sizeof(BSCallCache));
+        memset(code->caches, 0, e->callCount * sizeof(BSCallCache));
+        for (size_t ix = 0; ix < e->callCount; ix++) {
+            code->caches[ix].nameIndex = e->callNames[ix];
+        }
+        code->cacheCount = e->callCount;
     }
+    free(e->callNames);
 }
 
 
@@ -654,6 +756,7 @@ static void bsEmitDiscard(BSEmit *e)
     free(e->includes);
     free(e->cover);
     free(e->coverLines);
+    free(e->callNames);
     for (size_t ix = 0; ix < e->slotCount; ix++) {
         bsRelease(e->slotNames[ix]);
     }
@@ -709,6 +812,7 @@ static bool bsEmitFunction(BSEmit *e, BSValue model, int lineNumber, int lineCou
     memset(&body, 0, sizeof(body));
     body.script = e->script;
     body.functionCap = e->functionCap;
+    body.targetAt = SIZE_MAX;
     for (size_t ix = 0; ix < def->argCount; ix++) {
         bsSlotAdd(&body, def->argNames[ix]);
     }
@@ -743,6 +847,7 @@ BSExpr *bsExprFromModel(BSValue model)
     }
     BSEmit e;
     memset(&e, 0, sizeof(e));
+    e.targetAt = SIZE_MAX;
     if (!bsEmitExpr(&e, model)) {
         bsEmitDiscard(&e);
         return NULL;
@@ -783,6 +888,7 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
     memset(&e, 0, sizeof(e));
     e.script = script;
     e.functionCap = &functionCap;
+    e.targetAt = SIZE_MAX;
     if (!bsEmitStatements(&e, statements)) {
         bsEmitDiscard(&e);
         bsScriptRelease(script);

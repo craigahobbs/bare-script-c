@@ -1235,8 +1235,14 @@ static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t s
 
 static int bsObjectKeyEqual(const BSString *stored, const char *key, size_t size, BSString *interned)
 {
-    if (interned != NULL && stored == interned) {
-        return 1;
+    if (interned != NULL) {
+        /* The intern table holds one string per content, so two distinct interned strings differ */
+        if (stored == interned) {
+            return 1;
+        }
+        if ((stored->flags & BS_STR_INTERNED) != 0) {
+            return 0;
+        }
     }
     return stored->size == size && (size == 0 || memcmp(stored->data, key, size) == 0);
 }
@@ -1407,7 +1413,6 @@ static void bsObjectTreapInsert(BSObject *object, BSValue key, BSValue item)
         if (compare == 0) {
             bsRelease(node->value);
             node->value = item;
-            object->generation++;
             return;
         }
         /* GCOV_EXCL_START */
@@ -1468,7 +1473,6 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
         if (found >= 0) {
             bsRelease(object->smallValues[found]);
             object->smallValues[found] = item;
-            object->generation++;
             return;
         }
         if (object->count < BS_OBJECT_PACKED) {
@@ -1491,7 +1495,6 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
             if (bsObjectKeyEqual(node->key, keyData, keySize, interned)) {
                 bsRelease(node->value);
                 node->value = item;
-                object->generation++;
                 return;
             }
         }
@@ -1674,6 +1677,13 @@ bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out)
 BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size)
 {
     return bsObjectFindValue(object.u.object, key, size, NULL);
+}
+
+
+BSValue *bsObjectValuePtrString(BSValue object, BSValue key)
+{
+    BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
+    return bsObjectFindValue(object.u.object, bsStringData(key), bsStringSize(key), interned);
 }
 
 

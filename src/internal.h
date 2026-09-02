@@ -8,6 +8,9 @@
 #ifndef BARESCRIPT_INTERNAL_H
 #define BARESCRIPT_INTERNAL_H
 
+#include <math.h>
+#include <string.h>
+
 #include "barescript/parser.h"
 #include "barescript/runtime.h"
 #include "barescript/value.h"
@@ -170,8 +173,9 @@ bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out);
 /* Lookup by a string value. An interned key skips intern-table hashing. */
 bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out);
 
-/* Pointer to the stored value for key, or NULL if absent. Valid until the object is mutated. */
+/* Pointer to the stored value for key, or NULL if absent. Valid until a key is added or removed. */
 BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size);
+BSValue *bsObjectValuePtrString(BSValue object, BSValue key);
 
 /* Intern a short string. Strings longer than 64 bytes are not interned. Returns an owned value. */
 BSValue bsStringIntern(const char *data, size_t size);
@@ -242,6 +246,226 @@ BSValue bsFunctionInvoke(BSValue function, const BSValue *args, size_t argCount,
 
 /* Happy-path regexMatch; the argument types must already be regex and string */
 BSValue bsRegexMatchImpl(BSValue regex, BSValue string);
+
+/* A value's interned type name string - "array", "boolean", ... - as an owned value */
+BSValue bsSystemTypeName(BSValue value);
+
+
+/*
+ * The library intrinsic fast paths
+ *
+ * Returns true with "*result" set to the owned return value when the arguments are the happy-path
+ * shape; false means the caller runs the full library function, which validates the arguments and
+ * reports the error. Inline so the evaluator's call path and bsFunctionInvoke share one switch.
+ */
+static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
+{
+    if (value.type != BS_NUMBER) {
+        return false;
+    }
+    double number = value.u.number;
+    if (!isfinite(number) || trunc(number) != number || number < 0) {
+        return false;
+    }
+    *index = (size_t) number;
+    return true;
+}
+
+static inline bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCount, BSValue *result)
+{
+    switch (id) {
+    case BS_INTRIN_ARRAY_COPY:
+        if (argCount == 1 && args[0].type == BS_ARRAY) {
+            *result = bsArrayCopy(args[0]);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_ARRAY_GET: {
+        size_t index;
+        if (argCount == 2 && args[0].type == BS_ARRAY && bsIntrinsicIndex(args[1], &index) &&
+            index < args[0].u.array->count) {
+            *result = bsRetain(args[0].u.array->values[index]);
+            return true;
+        }
+        return false;
+    }
+    case BS_INTRIN_ARRAY_LENGTH:
+        if (argCount == 1 && args[0].type == BS_ARRAY) {
+            *result = bsNumber((double) args[0].u.array->count);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_ARRAY_POP:
+        if (argCount == 1 && args[0].type == BS_ARRAY && args[0].u.array->count != 0) {
+            size_t index = args[0].u.array->count - 1;
+            *result = bsRetain(args[0].u.array->values[index]);
+            bsArrayDelete(args[0], index);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_ARRAY_PUSH:
+        if (argCount >= 1 && args[0].type == BS_ARRAY) {
+            for (size_t ix = 1; ix < argCount; ix++) {
+                bsArrayPush(args[0], bsRetain(args[ix]));
+            }
+            *result = bsRetain(args[0]);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_ARRAY_SET: {
+        size_t index;
+        if (argCount == 3 && args[0].type == BS_ARRAY && bsIntrinsicIndex(args[1], &index) &&
+            index < args[0].u.array->count) {
+            bsArraySet(args[0], index, bsRetain(args[2]));
+            *result = bsRetain(args[2]);
+            return true;
+        }
+        return false;
+    }
+    case BS_INTRIN_ARRAY_NEW: {
+        BSValue array = bsArrayNewCapacity(argCount);
+        for (size_t ix = 0; ix < argCount; ix++) {
+            bsArrayPush(array, bsRetain(args[ix]));
+        }
+        *result = array;
+        return true;
+    }
+    case BS_INTRIN_MATH_ABS:
+        if (argCount == 1 && args[0].type == BS_NUMBER) {
+            *result = bsNumber(fabs(args[0].u.number));
+            return true;
+        }
+        return false;
+    case BS_INTRIN_MATH_CEIL:
+        if (argCount == 1 && args[0].type == BS_NUMBER) {
+            *result = bsNumber(ceil(args[0].u.number));
+            return true;
+        }
+        return false;
+    case BS_INTRIN_MATH_FLOOR:
+        if (argCount == 1 && args[0].type == BS_NUMBER) {
+            *result = bsNumber(floor(args[0].u.number));
+            return true;
+        }
+        return false;
+    case BS_INTRIN_MATH_SIGN:
+        if (argCount == 1 && args[0].type == BS_NUMBER) {
+            double x = args[0].u.number;
+            *result = bsNumber(x < 0 ? -1 : (x == 0 ? 0 : 1));
+            return true;
+        }
+        return false;
+    case BS_INTRIN_MATH_SQRT:
+        if (argCount == 1 && args[0].type == BS_NUMBER && args[0].u.number >= 0) {
+            *result = bsNumber(sqrt(args[0].u.number));
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_COPY:
+        if (argCount == 1 && args[0].type == BS_OBJECT) {
+            *result = bsObjectCopy(args[0]);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_DELETE:
+        if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            bsObjectDelete(args[0], bsStringData(args[1]));
+            *result = bsNull();
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_GET:
+        if (argCount >= 2 && argCount <= 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            BSValue found;
+            if (bsObjectLookupString(args[0], args[1], &found)) {
+                *result = bsRetain(found);
+            } else {
+                *result = argCount >= 3 ? bsRetain(args[2]) : bsNull();
+            }
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_HAS:
+        if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            *result = bsBoolean(bsObjectHasString(args[0], args[1]));
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_KEYS:
+        if (argCount == 1 && args[0].type == BS_OBJECT) {
+            *result = bsObjectKeys(args[0]);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_SET:
+        if (argCount == 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            bsObjectSetString(args[0], args[1], bsRetain(args[2]));
+            *result = bsRetain(args[2]);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_NEW: {
+        for (size_t ix = 0; ix < argCount; ix += 2) {
+            if (args[ix].type != BS_STRING) {
+                return false;
+            }
+        }
+        BSValue object = bsObjectNew();
+        for (size_t ix = 0; ix < argCount; ix += 2) {
+            bsObjectSetString(object, args[ix], bsRetain(ix + 1 < argCount ? args[ix + 1] : bsNull()));
+        }
+        *result = object;
+        return true;
+    }
+    case BS_INTRIN_STRING_ENDS_WITH:
+        if (argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING) {
+            size_t searchSize = args[1].u.string->size;
+            size_t size = args[0].u.string->size;
+            *result = bsBoolean(searchSize <= size &&
+                                memcmp(args[0].u.string->data + (size - searchSize),
+                                       args[1].u.string->data, searchSize) == 0);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_STRING_LENGTH:
+        if (argCount == 1 && args[0].type == BS_STRING) {
+            *result = bsNumber((double) args[0].u.string->length);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_STRING_STARTS_WITH:
+        if (argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING) {
+            size_t searchSize = args[1].u.string->size;
+            *result = bsBoolean(searchSize <= args[0].u.string->size &&
+                                memcmp(args[0].u.string->data, args[1].u.string->data, searchSize) == 0);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_SYSTEM_BOOLEAN:
+        if (argCount == 1) {
+            *result = bsBoolean(bsValueBoolean(args[0]));
+            return true;
+        }
+        return false;
+    case BS_INTRIN_SYSTEM_TYPE:
+        if (argCount == 1) {
+            *result = bsSystemTypeName(args[0]);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_REGEX_MATCH:
+        if (argCount == 2 && args[0].type == BS_REGEX && args[1].type == BS_STRING) {
+            *result = bsRegexMatchImpl(args[0], args[1]);
+            return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+/* A capture group's interned name string value (borrowed), or a null value if the group is unnamed */
+BSValue bsRegexGroupNameValue(BSValue regex, size_t group);
 
 
 #endif

@@ -219,7 +219,7 @@ void bsSystemIncludeClear(void)
  */
 
 
-#define BS_STACK_INLINE 8
+#define BS_STACK_INLINE 16
 #define BS_SLOTS_INLINE 32
 
 
@@ -243,19 +243,6 @@ static bool bsIsInteger(BSValue value)
 static BSValue bsArithmetic(double result)
 {
     return isfinite(result) ? bsNumber(result) : bsNull();
-}
-
-
-static BSValue *bsStackGrow(BSValue *stack, BSValue *inlineBuf, size_t *cap)
-{
-    size_t old = *cap;
-    *cap = old * 2;
-    if (stack == inlineBuf) {
-        BSValue *heap = bsAlloc(*cap * sizeof(BSValue));
-        memcpy(heap, inlineBuf, old * sizeof(BSValue));
-        return heap;
-    }
-    return bsRealloc(stack, *cap * sizeof(BSValue));
 }
 
 
@@ -308,6 +295,22 @@ static BSValue bsBitwise(uint8_t op, BSValue left, BSValue right)
     default:
         return bsNumber((double) (leftInt >> shift));
     }
+}
+
+
+/*
+ * The line number of the statement containing the instruction at "pc" - the nearest preceding
+ * STMT. Only error paths need a line, so the interpreter loop does not track one.
+ */
+static int bsCodeLine(const BSCode *code, size_t pc)
+{
+    while (pc > 0) {
+        uint32_t inst = code->inst[--pc];
+        if (BS_OP(inst) == BS_OP_STMT) {
+            return code->coverLines[BS_ARG(inst)];
+        }
+    }
+    return 0;
 }
 
 
@@ -491,181 +494,74 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
 
 
 /*
- * Happy-path library calls that dominate the include-test profile. Returns true if *result is the
- * owned return value; false means the caller should run the full invoke (validation, overrides).
+ * Call the function named by a CALL_NAME or CALL_SLOT instruction. "pc" is the call instruction's
+ * index, for error line numbers. Returns the owned result.
  */
-static bool bsCallIntrinsic(unsigned char id, const BSValue *args, size_t argCount, BSValue *result)
-{
-    switch (id) {
-    case BS_INTRIN_ARRAY_GET:
-        if (argCount == 2 && args[0].type == BS_ARRAY && args[1].type == BS_NUMBER) {
-            double number = args[1].u.number;
-            if (isfinite(number) && trunc(number) == number && number >= 0) {
-                size_t index = (size_t) number;
-                if (index < args[0].u.array->count) {
-                    *result = bsRetain(args[0].u.array->values[index]);
-                    return true;
-                }
-            }
-        }
-        return false;
-    case BS_INTRIN_OBJECT_GET:
-        if (argCount >= 2 && argCount <= 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
-            BSValue found;
-            if (bsObjectLookupString(args[0], args[1], &found)) {
-                *result = bsRetain(found);
-            } else {
-                *result = argCount >= 3 ? bsRetain(args[2]) : bsNull();
-            }
-            return true;
-        }
-        return false;
-    case BS_INTRIN_ARRAY_NEW: {
-        BSValue array = bsArrayNewCapacity(argCount);
-        for (size_t ix = 0; ix < argCount; ix++) {
-            bsArrayPush(array, bsRetain(args[ix]));
-        }
-        *result = array;
-        return true;
-    }
-    case BS_INTRIN_OBJECT_NEW:
-        for (size_t ix = 0; ix < argCount; ix += 2) {
-            if (args[ix].type != BS_STRING) {
-                return false;
-            }
-        }
-        {
-            BSValue object = bsObjectNew();
-            for (size_t ix = 0; ix < argCount; ix += 2) {
-                bsObjectSetString(object, args[ix],
-                                  bsRetain(ix + 1 < argCount ? args[ix + 1] : bsNull()));
-            }
-            *result = object;
-            return true;
-        }
-    case BS_INTRIN_ARRAY_LENGTH:
-        if (argCount == 1 && args[0].type == BS_ARRAY) {
-            *result = bsNumber((double) args[0].u.array->count);
-            return true;
-        }
-        return false;
-    case BS_INTRIN_STRING_LENGTH:
-        if (argCount == 1 && args[0].type == BS_STRING) {
-            *result = bsNumber((double) args[0].u.string->length);
-            return true;
-        }
-        return false;
-    case BS_INTRIN_OBJECT_HAS:
-        if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
-            *result = bsBoolean(bsObjectHasString(args[0], args[1]));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_ARRAY_PUSH:
-        if (argCount >= 1 && args[0].type == BS_ARRAY) {
-            for (size_t ix = 1; ix < argCount; ix++) {
-                bsArrayPush(args[0], bsRetain(args[ix]));
-            }
-            *result = bsRetain(args[0]);
-            return true;
-        }
-        return false;
-    case BS_INTRIN_OBJECT_KEYS:
-        if (argCount == 1 && args[0].type == BS_OBJECT) {
-            *result = bsObjectKeys(args[0]);
-            return true;
-        }
-        return false;
-    case BS_INTRIN_OBJECT_SET:
-        if (argCount == 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
-            bsObjectSetString(args[0], args[1], bsRetain(args[2]));
-            *result = bsRetain(args[2]);
-            return true;
-        }
-        return false;
-    case BS_INTRIN_REGEX_MATCH:
-        if (argCount == 2 && args[0].type == BS_REGEX && args[1].type == BS_STRING) {
-            *result = bsRegexMatchImpl(args[0], args[1]);
-            return true;
-        }
-        return false;
-    default:
-        return false;
-    }
-}
-
-
-static BSValue bsCall(const BSCode *code, size_t callPc, uint8_t op, uint32_t arg, BSValue *args,
+static BSValue bsCall(const BSCode *code, size_t pc, uint8_t op, uint32_t arg, const BSValue *args,
                       size_t argCount, BSScript *script, BSOptions *options, BSScope *scope,
-                      bool builtins, int stmtLine)
+                      bool builtins)
 {
     BSValue name;
     BSValue function = bsNull();
     if (op == BS_OP_CALL_SLOT) {
-        uint32_t slot = arg;
-        if (scope != NULL && scope->slots != NULL && slot < scope->slotCount) {
-            BSValue value = scope->slots[slot];
+        name = code->slotNames[arg];
+        if (scope != NULL && scope->slots != NULL) {
+            BSValue value = scope->slots[arg];
             if (!BS_IS_UNSET(value)) {
                 function = value;
             }
         }
-        name = slot < code->slotCount ? code->slotNames[slot] : bsNull();
-        if (function.type == BS_NULL && name.type == BS_STRING) {
+        if (function.type == BS_NULL) {
             function = bsLookupName(name, options, scope);
         }
     } else {
-        uint32_t nameIndex = arg;
-        name = nameIndex < code->constantCount ? code->constants[nameIndex] : bsNull();
-        if (scope != NULL) {
-            if (scope->slots == NULL && scope->object.type == BS_OBJECT) {
-                BSValue found;
-                if (name.type == BS_STRING && bsObjectLookupString(scope->object, name, &found)) {
-                    function = found;
-                }
+        BSCallCache *cache = &code->caches[arg];
+        name = code->constants[cache->nameIndex];
+        if (scope != NULL && scope->slots == NULL && scope->object.type == BS_OBJECT) {
+            BSValue found;
+            if (bsObjectLookupString(scope->object, name, &found)) {
+                function = found;
             }
         }
-        if (function.type == BS_NULL && options->globals.type == BS_OBJECT && name.type == BS_STRING) {
+        if (function.type == BS_NULL && options->globals.type == BS_OBJECT) {
+            /* The call site caches the globals object's value slot for the name */
             BSObject *globals = options->globals.u.object;
-            BSCallCache *cache = (code->caches != NULL && callPc < code->cacheCount) ?
-                &code->caches[callPc] : NULL;
-            if (cache != NULL && cache->epoch == options->cacheEpoch &&
-                cache->gen == globals->generation && cache->cached.type != BS_NULL) {
-                function = cache->cached;
-            } else {
-                function = bsObjectGetString(options->globals, name);
-                if (cache != NULL) {
-                    cache->cached = function;
-                    cache->gen = globals->generation;
-                    cache->epoch = options->cacheEpoch;
-                }
+            if (cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
+                cache->slot = bsObjectValuePtrString(options->globals, name);
+                cache->gen = globals->generation;
+                cache->epoch = options->cacheEpoch;
+            }
+            if (cache->slot != NULL) {
+                function = *cache->slot;
             }
         }
     }
 
-    if (function.type == BS_NULL && builtins && name.type == BS_STRING) {
+    if (function.type == BS_NULL && builtins) {
         function = bsLibraryExpressionFunction(name);
     }
 
     if (function.type == BS_FUNCTION) {
+        BSFunction *fn = function.u.function;
+        BSValue result;
+        if (fn->intrinsic != 0 && bsIntrinsicCall(fn->intrinsic, args, argCount, &result)) {
+            return result;
+        }
         if (options->depth >= options->depthMax) {
-            bsErrorSetStatement(options, script, stmtLine, "Maximum expression depth exceeded");
+            bsErrorSetStatement(options, script, bsCodeLine(code, pc), "Maximum expression depth exceeded");
             return bsNull();
         }
         options->depth++;
-        BSValue result;
-        unsigned char id = function.u.function->intrinsic;
-        if (id != 0 && bsCallIntrinsic(id, args, argCount, &result)) {
-            options->depth--;
-            return result;
-        }
-        result = bsFunctionInvoke(function, args, argCount, options);
+        fn->refcount++; /* the call may reassign the global that holds the function */
+        result = fn->fn(args, argCount, options, fn->data);
+        bsRelease(function);
         options->depth--;
         if (options->argsError.type == BS_STRING) {
             if (options->debug && options->logFn != NULL) {
                 const char *scriptName = (script != NULL && script->scriptName.type == BS_STRING) ?
                     bsStringData(script->scriptName) : "";
                 bsLog(options, "%s:%d: BareScript: Function \"%s\" failed with error: %s", scriptName,
-                      stmtLine, bsStringData(name), bsStringData(options->argsError));
+                      bsCodeLine(code, pc), bsStringData(name), bsStringData(options->argsError));
             }
             bsAssign(&options->argsError, bsNull());
         }
@@ -678,7 +574,7 @@ static BSValue bsCall(const BSCode *code, size_t callPc, uint8_t op, uint32_t ar
         }
         return bsNull();
     }
-    bsErrorSetStatement(options, script, stmtLine, "Undefined function \"%s\"",
+    bsErrorSetStatement(options, script, bsCodeLine(code, pc), "Undefined function \"%s\"",
                         bsStringData(name));
     return bsNull();
 }
@@ -812,115 +708,102 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
 }
 
 
+/*
+ * Run a compiled chunk
+ *
+ * The value stack is allocated once at the chunk's emit-time maximum depth, so pushes and pops
+ * carry no bounds checks; the emitter's stack accounting is the invariant. Slot operands are
+ * likewise trusted - LOAD_SLOT and STORE_SLOT are only emitted in a function body, which always
+ * runs with its own slot array. A runtime error is detected where it can arise: at entry, after
+ * each call, and at the statements that raise one themselves.
+ */
 BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
                   bool builtins)
 {
+    if (options->error.type == BS_STRING) {
+        return bsNull();
+    }
+
     BSValue stackInline[BS_STACK_INLINE];
-    BSValue *stack = stackInline;
-    size_t stackCap = BS_STACK_INLINE;
+    BSValue *stack = code->stackMax <= BS_STACK_INLINE ? stackInline :
+        bsAlloc(code->stackMax * sizeof(BSValue));
     size_t sp = 0;
+    BSValue *slots = scope != NULL ? scope->slots : NULL;
 
     bool countStatements = script != NULL && !script->system;
     BSValue coverage = bsNull();
     bool hasCoverage = false;
     if (countStatements) {
-        coverage = bsObjectGet(options->globals, BS_GLOBAL_COVERAGE);
-        hasCoverage = coverage.type == BS_OBJECT && bsValueBoolean(bsObjectGet(coverage, "enabled"));
+        /* Interned keys make both lookups pointer comparisons - this runs on every function call */
+        static BSValue coverageKey = {BS_NULL, {0}};
+        static BSValue enabledKey = {BS_NULL, {0}};
+        if (coverageKey.type != BS_STRING) {
+            coverageKey = bsStringIntern(BS_GLOBAL_COVERAGE, strlen(BS_GLOBAL_COVERAGE));
+            enabledKey = bsStringIntern("enabled", 7);
+        }
+        BSValue enabled;
+        if (bsObjectLookupString(options->globals, coverageKey, &coverage) && coverage.type == BS_OBJECT &&
+            bsObjectLookupString(coverage, enabledKey, &enabled)) {
+            hasCoverage = bsValueBoolean(enabled);
+        }
     }
 
-    int stmtLine = 0;
-    size_t pc = 0;
     const uint32_t *insts = code->inst;
-    size_t count = code->count;
-
-    while (pc < count) {
-        uint32_t inst = insts[pc];
+    size_t pc = 0;
+    for (;;) {
+        uint32_t inst = insts[pc++];
         uint8_t op = BS_OP(inst);
         uint32_t arg = BS_ARG(inst);
-        pc++;
 
         switch (op) {
         case BS_OP_LOAD_NULL:
-            if (sp == stackCap) {
-                stack = bsStackGrow(stack, stackInline, &stackCap);
-            }
             stack[sp++] = bsNull();
             break;
 
         case BS_OP_LOAD_TRUE:
-            if (sp == stackCap) {
-                stack = bsStackGrow(stack, stackInline, &stackCap);
-            }
             stack[sp++] = bsBoolean(true);
             break;
 
         case BS_OP_LOAD_FALSE:
-            if (sp == stackCap) {
-                stack = bsStackGrow(stack, stackInline, &stackCap);
-            }
             stack[sp++] = bsBoolean(false);
             break;
 
         case BS_OP_LOAD_CONST:
-            if (sp == stackCap) {
-                stack = bsStackGrow(stack, stackInline, &stackCap);
-            }
             stack[sp++] = bsRetain(code->constants[arg]);
             break;
 
         case BS_OP_LOAD_SLOT: {
-            BSValue value = bsNull();
-            if (scope != NULL && scope->slots != NULL && arg < scope->slotCount) {
-                value = scope->slots[arg];
-                if (BS_IS_UNSET(value)) {
-                    value = bsLookupName(code->slotNames[arg], options, scope);
-                }
-            }
-            if (sp == stackCap) {
-                stack = bsStackGrow(stack, stackInline, &stackCap);
+            BSValue value = slots[arg];
+            if (BS_IS_UNSET(value)) {
+                value = bsLookupName(code->slotNames[arg], options, scope);
             }
             stack[sp++] = bsRetain(value);
             break;
         }
 
         case BS_OP_LOAD_NAME:
-            if (sp == stackCap) {
-                stack = bsStackGrow(stack, stackInline, &stackCap);
-            }
             stack[sp++] = bsRetain(bsLookupName(code->constants[arg], options, scope));
             break;
 
         case BS_OP_STORE_SLOT: {
-            BSValue value = sp != 0 ? stack[--sp] : bsNull();
-            if (scope != NULL && scope->slots != NULL && arg < scope->slotCount) {
-                BSValue previous = scope->slots[arg];
-                scope->slots[arg] = value;
-                if (!BS_IS_UNSET(previous)) {
-                    bsRelease(previous);
-                }
-            } else { /* GCOV_EXCL_START - STORE_SLOT is only emitted in a function body */
-                bsRelease(value);
-            } /* GCOV_EXCL_STOP */
+            BSValue previous = slots[arg];
+            slots[arg] = stack[--sp];
+            if (!BS_IS_UNSET(previous)) {
+                bsRelease(previous);
+            }
             break;
         }
 
-        case BS_OP_STORE_NAME: {
-            BSValue value = sp != 0 ? stack[--sp] : bsNull();
-            bsObjectSetString(options->globals, code->constants[arg], value);
+        case BS_OP_STORE_NAME:
+            bsObjectSetString(options->globals, code->constants[arg], stack[--sp]);
             break;
-        }
 
         case BS_OP_POP:
-            if (sp != 0) {
-                bsRelease(stack[--sp]);
-            }
+            bsRelease(stack[--sp]);
             break;
 
         case BS_OP_DUP:
-            if (sp == stackCap) {
-                stack = bsStackGrow(stack, stackInline, &stackCap);
-            }
-            stack[sp] = sp != 0 ? bsRetain(stack[sp - 1]) : bsNull();
+            stack[sp] = bsRetain(stack[sp - 1]);
             sp++;
             break;
 
@@ -930,7 +813,7 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
             break;
 
         case BS_OP_JUMP_FALSE: {
-            BSValue value = sp != 0 ? stack[--sp] : bsNull();
+            BSValue value = stack[--sp];
             bool take = !bsValueBoolean(value);
             bsRelease(value);
             if (take) {
@@ -941,7 +824,7 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
         }
 
         case BS_OP_JUMP_TRUE: {
-            BSValue value = sp != 0 ? stack[--sp] : bsNull();
+            BSValue value = stack[--sp];
             bool take = bsValueBoolean(value);
             bsRelease(value);
             if (take) {
@@ -951,16 +834,17 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
             break;
         }
 
-        case BS_OP_JUMP_UNDEF:
-            bsErrorSetStatement(options, script, stmtLine, "Unknown jump label \"%s\"",
+        case BS_OP_JUMP_UNDEF: {
+            /* A trap past the chunk's return carries the jump statement's line in a data word */
+            int line = (pc < code->count && BS_OP(insts[pc]) == BS_OP_ARGC) ? (int) BS_ARG(insts[pc]) :
+                bsCodeLine(code, pc);
+            bsErrorSetStatement(options, script, line, "Unknown jump label \"%s\"",
                                 bsStringData(code->constants[arg]));
             goto fail;
+        }
 
         case BS_OP_RETURN: {
-            BSValue result = sp != 0 ? stack[--sp] : bsNull();
-            while (sp != 0) { /* GCOV_EXCL_START - emit leaves one value for return */
-                bsRelease(stack[--sp]);
-            } /* GCOV_EXCL_STOP */
+            BSValue result = stack[--sp];
             if (stack != stackInline) {
                 free(stack);
             }
@@ -971,17 +855,17 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
         case BS_OP_CALL_SLOT: {
             size_t callPc = pc - 1;
             size_t argCount = BS_ARG(insts[pc++]);
-            BSValue *callArgs = argCount != 0 ? stack + (sp - argCount) : NULL;
+            BSValue *callArgs = stack + (sp - argCount);
             BSValue result = bsCall(code, callPc, op, arg, callArgs, argCount, script, options, scope,
-                                    builtins, stmtLine);
+                                    builtins);
             for (size_t ix = 0; ix < argCount; ix++) {
                 bsRelease(callArgs[ix]);
             }
             sp -= argCount;
-            if (sp == stackCap) {
-                stack = bsStackGrow(stack, stackInline, &stackCap);
-            }
             stack[sp++] = result;
+            if (options->error.type == BS_STRING) {
+                goto fail;
+            }
             break;
         }
 
@@ -1141,26 +1025,22 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
         }
 
         case BS_OP_INCLUDE:
-            if (!bsExecuteInclude(script, &code->includes[arg], stmtLine, options)) {
+            if (!bsExecuteInclude(script, &code->includes[arg], bsCodeLine(code, pc), options)) {
                 goto fail;
             }
             break;
 
         case BS_OP_STMT:
-            if (options->error.type == BS_STRING) {
-                goto fail;
-            }
-            stmtLine = code->coverLines[arg];
             if (countStatements) {
                 options->statementCount++;
                 if (options->maxStatements > 0 && options->statementCount > options->maxStatements) {
-                    bsErrorSetStatement(options, script, stmtLine,
+                    bsErrorSetStatement(options, script, code->coverLines[arg],
                                         "Exceeded maximum script statements (%lld)",
                                         (long long) options->maxStatements);
                     goto fail;
                 }
                 if (hasCoverage) {
-                    bsRecordCoverage(script, code->cover[arg], stmtLine, coverage);
+                    bsRecordCoverage(script, code->cover[arg], code->coverLines[arg], coverage);
                 }
             }
             break;
@@ -1171,15 +1051,14 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
     }
 
 fail:
-    while (sp != 0) { /* GCOV_EXCL_START - errors are raised at statement boundaries */
+    while (sp != 0) {
         bsRelease(stack[--sp]);
-    } /* GCOV_EXCL_STOP */
-    if (stack != stackInline) { /* GCOV_EXCL_START */
-        free(stack);
-    } /* GCOV_EXCL_STOP */
+    }
+    if (stack != stackInline) {
+        free(stack); /* GCOV_EXCL_LINE - errors are raised at statement boundaries */
+    }
     return bsNull();
 }
-
 
 BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins)
 {
