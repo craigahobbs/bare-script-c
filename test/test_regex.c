@@ -187,6 +187,10 @@ TEST(regex_quantifiers)
     ASSERT_VALUE_STRING(bsTestMatch("ab?c", "abc", 0), "abc");
     ASSERT_VALUE_STRING(bsTestMatch("a{2}", "aaa", 0), "aa");
     ASSERT_VALUE_STRING(bsTestMatch("a{2,}", "aaaa", 0), "aaaa");
+
+    /* Counts saturate rather than overflow */
+    ASSERT_VALUE_STRING(bsTestMatch("a{4294967296}", "aaa", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("a{1,99999999999}", "aaa", 0), "aaa");
     ASSERT_VALUE_STRING(bsTestMatch("a{2,3}", "aaaa", 0), "aaa");
     ASSERT_VALUE_STRING(bsTestMatch("a{4}", "aaa", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch("a{0}b", "b", 0), "b");

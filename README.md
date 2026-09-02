@@ -636,6 +636,7 @@ each other, it follows the one shown in bold.
 | `String(-0)`                           | `0`               | `-0`            | **`0`**             |
 | `-7 % 3`                               | `-1` (truncated)  | `2` (floored)   | **`-1`**            |
 | Bitwise operators                      | 32-bit            | arbitrary width | **32-bit**          |
+| A `regexNew` repeat count past 2^32    | accepted          | uncaught error  | **accepted**, saturating at 2^31 - 1 |
 
 `objectKeys` returns keys in insertion order, matching both references for ordinary keys.
 JavaScript additionally hoists integer-like keys to the front in ascending numeric order; this

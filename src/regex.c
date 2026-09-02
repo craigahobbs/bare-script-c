@@ -11,6 +11,7 @@
  * C stack bounded for the long subject strings that make up most real input.
  */
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -701,6 +702,17 @@ static bool rxIsSimple(const RxNode *node)
 }
 
 
+
+/*
+ * Append a digit to a "{n,m}" count, saturating at INT_MAX. JavaScript accepts any count, and a
+ * count that large never matches anyway; CPython raises an OverflowError the Python
+ * implementation does not catch.
+ */
+static int rxRepeatDigit(int count, char digit)
+{
+    return count > (INT_MAX - 9) / 10 ? INT_MAX : count * 10 + (digit - '0');
+}
+
 /*
  * Match a quantifier, consuming it on success
  *
@@ -732,7 +744,7 @@ static bool rxMatchQuantifier(RxCompiler *compiler, int *min, int *max, size_t *
     *min = 0;
     while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] >= '0' &&
            compiler->pattern[compiler->offset] <= '9') {
-        *min = *min * 10 + (compiler->pattern[compiler->offset] - '0');
+        *min = rxRepeatDigit(*min, compiler->pattern[compiler->offset]);
         compiler->offset++;
         digits++;
     }
@@ -747,7 +759,7 @@ static bool rxMatchQuantifier(RxCompiler *compiler, int *min, int *max, size_t *
         *max = 0;
         while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] >= '0' &&
                compiler->pattern[compiler->offset] <= '9') {
-            *max = *max * 10 + (compiler->pattern[compiler->offset] - '0');
+            *max = rxRepeatDigit(*max, compiler->pattern[compiler->offset]);
             compiler->offset++;
             maxDigits++;
         }
