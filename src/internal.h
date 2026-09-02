@@ -27,11 +27,6 @@ char *bsConcatChunks(const char *const *chunks, size_t *outSize);
 BSScript *bsIncludeScript(const char *name);
 
 
-/* The binary and unary operator text, indexed by operator - used by model conversion */
-extern const char *bsBinaryOpText[BS_BINARY_COUNT];
-extern const char *bsUnaryOpText[BS_UNARY_COUNT];
-
-
 /* Regex value reference counting - implemented by the regex engine */
 void bsRegexRetain(BSValue value);
 void bsRegexRelease(BSValue value);
@@ -93,15 +88,67 @@ static inline BSValue bsUnset(void)
 }
 
 
-/* Statement and expression execution, shared by the runtime and the parser's model conversion */
-BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t statementCount,
-                            BSOptions *options, BSScope *scope);
+/* Run a compiled bytecode chunk. Returns an owned value. */
+BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
+                  bool builtins);
 
-/* Free a parsed statement list */
-void bsStatementsFree(BSStatement **statements, size_t statementCount);
+/* Drop the saved parser model from a cached system include (not linted or covered) */
+void bsScriptDropModel(BSScript *script);
 
 /* Free a function definition */
 void bsFunctionDefFree(BSFunctionDef *def);
+
+void bsCodeFree(BSCode *code);
+
+
+/* Bytecode: instruction is (opcode << 24) | 24-bit argument */
+#define BS_OP(inst) ((uint8_t) ((inst) >> 24))
+#define BS_ARG(inst) ((uint32_t) ((inst) & 0xffffffu))
+#define BS_INST(op, arg) (((uint32_t) (op) << 24) | ((uint32_t) (arg) & 0xffffffu))
+
+enum {
+    BS_OP_LOAD_NULL = 0,
+    BS_OP_LOAD_TRUE,
+    BS_OP_LOAD_FALSE,
+    BS_OP_LOAD_CONST,
+    BS_OP_LOAD_SLOT,
+    BS_OP_LOAD_NAME,
+    BS_OP_STORE_SLOT,
+    BS_OP_STORE_NAME,
+    BS_OP_POP,
+    BS_OP_DUP,
+    BS_OP_JUMP,
+    BS_OP_JUMP_FALSE,
+    BS_OP_JUMP_TRUE,
+    BS_OP_JUMP_UNDEF,
+    BS_OP_RETURN,
+    BS_OP_CALL_NAME,
+    BS_OP_CALL_SLOT,
+    BS_OP_ADD,
+    BS_OP_SUB,
+    BS_OP_MUL,
+    BS_OP_DIV,
+    BS_OP_MOD,
+    BS_OP_POW,
+    BS_OP_EQ,
+    BS_OP_NE,
+    BS_OP_LT,
+    BS_OP_LE,
+    BS_OP_GT,
+    BS_OP_GE,
+    BS_OP_BAND,
+    BS_OP_BOR,
+    BS_OP_BXOR,
+    BS_OP_SHL,
+    BS_OP_SHR,
+    BS_OP_NEG,
+    BS_OP_NOT,
+    BS_OP_BNOT,
+    BS_OP_FUNCTION,
+    BS_OP_INCLUDE,
+    BS_OP_STMT,
+    BS_OP_ARGC = 0xFF  /* follows CALL_*; argument count, never dispatched */
+};
 
 
 /* The script function closure data - a function value created by a function definition statement */

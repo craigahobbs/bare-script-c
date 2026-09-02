@@ -55,6 +55,7 @@ TEST(runtime_expression_datetime)
     ASSERT_VALUE(bsTestExecute("return datetimeDay(86400000 + datetimeNew(2026, 1, 1))"), "2");
     ASSERT_VALUE(bsTestExecute("return datetimeNew(2026, 1, 1) + 1e300"), "null");
     ASSERT_VALUE(bsTestExecute("return 1e300 + datetimeNew(2026, 1, 1)"), "null");
+    ASSERT_VALUE(bsTestExecute("return true + 1"), "null");
     ASSERT_VALUE(bsTestExecute("return datetimeNew(2026, 1, 1) - 1"), "null");
 }
 
@@ -270,6 +271,19 @@ TEST(runtime_errors)
 {
     ASSERT_VALUE(bsTestExecute("undefinedFunc()"), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Undefined function \"undefinedFunc\"");
+
+    /* A statement without a line number omits the line from the prefix */
+    static const char *zeroLine =
+        "{\"scriptName\":\"z.bare\",\"statements\":[{\"expr\":{\"expr\":{\"function\":"
+        "{\"name\":\"nope\",\"args\":[]}}}}]}";
+    BSValue zeroModel = bsJSONDecode(zeroLine, strlen(zeroLine), NULL);
+    BSScript *zeroScript = bsScriptFromModel(zeroModel, "z.bare");
+    BSOptions *zeroOptions = bsTestOptions();
+    ASSERT_VALUE(bsExecuteScript(zeroScript, zeroOptions), "null");
+    ASSERT_STR_EQ(bsErrorGet(zeroOptions), "z.bare: Undefined function \"nope\"");
+    bsOptionsFree(zeroOptions);
+    bsScriptRelease(zeroScript);
+    bsRelease(zeroModel);
     ASSERT_VALUE(bsTestExecute("jump nowhere"), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Unknown jump label \"nowhere\"");
     ASSERT_VALUE(bsTestExecute("a = 1\nundefinedFunc()"), "null");
@@ -339,13 +353,13 @@ TEST(runtime_error_helpers)
     /* The first error wins */
     bsErrorSet(options, "error %d", 2);
     ASSERT_STR_EQ(bsErrorGet(options), "error 1");
-    bsErrorSetStatement(options, NULL, NULL, "error %d", 3);
+    bsErrorSetStatement(options, NULL, 0, "error %d", 3);
     ASSERT_STR_EQ(bsErrorGet(options), "error 1");
     bsErrorClear(options);
     ASSERT_NULL(bsErrorGet(options));
 
     /* Without a script and statement there is no location prefix */
-    bsErrorSetStatement(options, NULL, NULL, "plain");
+    bsErrorSetStatement(options, NULL, 0, "plain");
     ASSERT_STR_EQ(bsErrorGet(options), "plain");
     bsErrorClear(options);
 
@@ -477,6 +491,21 @@ TEST(runtime_expression_model)
     exprModel = bsJSONDecode(ifModel, strlen(ifModel), NULL);
     ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "1");
     bsRelease(exprModel);
+    exprModel = bsJSONDecode("{\"function\":{\"name\":\"if\",\"args\":[]}}",
+                            strlen("{\"function\":{\"name\":\"if\",\"args\":[]}}"), NULL);
+    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "null");
+    bsRelease(exprModel);
+    exprModel = bsJSONDecode("{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"false\"}]}}",
+                            strlen("{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"false\"}]}}"),
+                            NULL);
+    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "null");
+    bsRelease(exprModel);
+    exprModel = bsJSONDecode(
+        "{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"true\"},{\"number\":7}]}}",
+        strlen("{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"true\"},{\"number\":7}]}}"),
+        NULL);
+    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "7");
+    bsRelease(exprModel);
     exprModel = bsJSONDecode("{\"function\":{\"name\":\"mathAbs\"}}", strlen("{\"function\":{\"name\":\"mathAbs\"}}"), NULL);
     ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), true), "null");
     bsRelease(exprModel);
@@ -498,7 +527,14 @@ TEST(runtime_expression_model_invalid)
         "{\"unary\":{}}",
         "{\"unary\":{\"op\":\"?\",\"expr\":{\"number\":1}}}",
         "{\"unary\":{\"op\":\"-\",\"expr\":1}}",
-        "{\"group\":1}"
+        "{\"group\":1}",
+        "{\"function\":{\"name\":\"if\",\"args\":[1]}}",
+        "{\"function\":{\"name\":\"if\",\"args\":[{\"number\":1},1]}}",
+        "{\"function\":{\"name\":\"if\",\"args\":[{\"number\":1},{\"number\":2},1]}}",
+        "{\"binary\":{\"op\":\"&&\",\"left\":1,\"right\":{\"number\":1}}}",
+        "{\"binary\":{\"op\":\"&&\",\"left\":{\"number\":1},\"right\":1}}",
+        "{\"binary\":{\"op\":\"||\",\"left\":1,\"right\":{\"number\":1}}}",
+        "{\"binary\":{\"op\":\"||\",\"left\":{\"number\":1},\"right\":1}}"
     };
     for (size_t ix = 0; ix < sizeof(invalid) / sizeof(invalid[0]); ix++) {
         BSValue model = bsJSONDecode(invalid[ix], strlen(invalid[ix]), NULL);
@@ -744,6 +780,14 @@ TEST(runtime_coverage_jump)
     ASSERT_TRUE(bsObjectCount(covered) >= 4);
     ASSERT_TRUE(bsObjectGet(bsObjectGet(covered, "3"), "count").u.number >= 3);
     bsOptionsFree(options);
+
+    /* An expression jump (if/&&) is not a label; coverage still records the statement */
+    options = bsTestOptions();
+    coverage = bsObjectNew();
+    bsObjectSet(coverage, "enabled", bsBoolean(true));
+    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    ASSERT_VALUE(bsTestExecuteOptions("a = if(false, 1, 2)\nreturn a || 0", options), "2");
+    bsOptionsFree(options);
 }
 
 
@@ -896,6 +940,27 @@ TEST(runtime_many_locals)
     text = bsSBToValue(&sb);
     ASSERT_VALUE(bsTestExecute(bsStringData(text)), "11");
     bsRelease(text);
+
+    /* Enough values on the stack that LOAD_NULL / LOAD_TRUE / DUP / a 0-arg CALL grow it */
+    ASSERT_VALUE(bsTestExecute(
+        "function g(a, b, c, d, e, f, g, h, i):\n    return i\nendfunction\n"
+        "return g(null, null, null, null, null, null, null, null, null)"), "null");
+    ASSERT_VALUE(bsTestExecute(
+        "function g(a, b, c, d, e, f, g, h, i):\n    return i\nendfunction\n"
+        "return g(true, true, true, true, true, true, true, true, true)"), "true");
+    ASSERT_VALUE(bsTestExecute(
+        "function g(a, b, c, d, e, f, g, h):\n    return h\nendfunction\n"
+        "a = 1\nb = 0\nreturn g(1, 2, 3, 4, 5, 6, 7, a && b)"), "0");
+    ASSERT_VALUE(bsTestExecute(
+        "function h():\n    return 9\nendfunction\n"
+        "function g(a, b, c, d, e, f, g, h, i):\n    return i\nendfunction\n"
+        "return g(1, 2, 3, 4, 5, 6, 7, 8, h())"), "9");
+
+    /* An unassigned function local falls through to the globals */
+    ASSERT_VALUE(bsTestExecute(
+        "x = 5\n"
+        "function f():\n    x = x + 1\n    return x\nendfunction\n"
+        "return f()"), "6");
 }
 
 

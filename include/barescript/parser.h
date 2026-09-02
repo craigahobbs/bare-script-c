@@ -6,13 +6,11 @@
  *
  * Parsing is done by barescriptParser.bare, an include library script that runs on this runtime and
  * produces the JSON "BareScript model" - so the parser, and the exact syntax and error messages it
- * accepts, are shared with the JavaScript and Python implementations. The model is converted to the
- * compiled representation below, which is what the evaluator walks: statements and expressions as C
- * structs, with a jump's label resolved to a statement index and a function-local variable resolved
- * to a slot index.
+ * accepts, are shared with the JavaScript and Python implementations. The model is compiled to
+ * bytecode; the original model is kept for lint and coverage.
  *
  * Structured statements - if/elif/else, while, for, break, continue - never reach the runtime; the
- * parser lowers them to labels and jumps.
+ * parser lowers them to labels and jumps, which compile to JUMP / JUMPIF.
  */
 
 #ifndef BARESCRIPT_PARSER_H
@@ -29,174 +27,65 @@ BS_VISIBILITY_BEGIN
 
 
 typedef struct BSExpr BSExpr;
-typedef struct BSStatement BSStatement;
 typedef struct BSScript BSScript;
 typedef struct BSFunctionDef BSFunctionDef;
 
 
-/* The expression kinds */
-typedef enum {
-    BS_EXPR_NUMBER,
-    BS_EXPR_STRING,
-    BS_EXPR_VARIABLE,
-    BS_EXPR_FUNCTION,
-    BS_EXPR_CALL0,    /* a function call with 0 arguments; same union as FUNCTION */
-    BS_EXPR_CALL1,    /* a function call with 1 argument */
-    BS_EXPR_CALL2,    /* a function call with 2 arguments */
-    BS_EXPR_CALL3,    /* a function call with 3 arguments */
-    BS_EXPR_BINARY,
-    BS_EXPR_UNARY,
-    BS_EXPR_GROUP
-} BSExprType;
-
-
-/* The binary expression operators */
-typedef enum {
-    BS_BINARY_EXP,    /* ** */
-    BS_BINARY_MUL,    /* *  */
-    BS_BINARY_DIV,    /* /  */
-    BS_BINARY_MOD,    /* %  */
-    BS_BINARY_ADD,    /* +  */
-    BS_BINARY_SUB,    /* -  */
-    BS_BINARY_SHL,    /* << */
-    BS_BINARY_SHR,    /* >> */
-    BS_BINARY_LTE,    /* <= */
-    BS_BINARY_LT,     /* <  */
-    BS_BINARY_GTE,    /* >= */
-    BS_BINARY_GT,     /* >  */
-    BS_BINARY_EQ,     /* == */
-    BS_BINARY_NE,     /* != */
-    BS_BINARY_AND,    /* &  */
-    BS_BINARY_XOR,    /* ^  */
-    BS_BINARY_OR,     /* |  */
-    BS_BINARY_LAND,   /* && */
-    BS_BINARY_LOR,    /* || */
-    BS_BINARY_COUNT
-} BSBinaryOp;
-
-
-/* The unary expression operators */
-typedef enum {
-    BS_UNARY_NEG,  /* - */
-    BS_UNARY_NOT,  /* ! */
-    BS_UNARY_BNOT, /* ~ */
-    BS_UNARY_COUNT
-} BSUnaryOp;
-
-
-/* The special variable kinds - "null", "true", and "false" are not overridable */
-typedef enum {
-    BS_SPECIAL_NONE = 0,
-    BS_SPECIAL_NULL,
-    BS_SPECIAL_TRUE,
-    BS_SPECIAL_FALSE
-} BSSpecialVariable;
-
-
-/* An expression */
-struct BSExpr {
-    BSExprType type;
-    unsigned char pure;           /* 1 if evaluating this cannot reassign a name */
-    unsigned char laterEffectful; /* bit i set if some call argument after i is not pure (i < 8) */
-    union {
-        double number;
-        BSValue string;
-        struct {
-            BSValue name;
-            int slot;                 /* the function-local slot index, or -1 */
-            BSSpecialVariable special;
-        } variable;
-        struct {
-            BSValue name;
-            int slot;                 /* the function-local slot index, or -1 */
-            bool isIf;                /* the built-in "if" function */
-            BSExpr **args;
-            size_t argCount;
-            /*
-             * Call-site cache of the last globals lookup. Valid while cachedObject still is the
-             * globals object and cachedGen matches its mutation generation. A borrowed value.
-             */
-            BSValue cached;
-            uint32_t cachedGen;
-            BSObject *cachedObject;
-        } function;
-        struct {
-            BSBinaryOp op;
-            BSExpr *left;
-            BSExpr *right;
-        } binary;
-        struct {
-            BSUnaryOp op;
-            BSExpr *expr;
-        } unary;
-        BSExpr *group;
-    } u;
-};
-
-
-/* The statement kinds */
-typedef enum {
-    BS_STMT_EXPR,
-    BS_STMT_JUMP,
-    BS_STMT_RETURN,
-    BS_STMT_LABEL,
-    BS_STMT_FUNCTION,
-    BS_STMT_INCLUDE
-} BSStatementType;
-
-
-/* An include statement's script reference */
+/* An include script reference compiled into a code chunk */
 typedef struct BSInclude {
     BSValue url;
     bool system;
 } BSInclude;
 
 
-/* A statement */
-struct BSStatement {
-    BSStatementType type;
-    int lineNumber;
-    int lineCount;
-    union {
-        struct {
-            BSValue name;    /* the assignment variable name, or a null value */
-            int slot;        /* the function-local slot index, or -1 */
-            BSExpr *expr;
-        } expr;
-        struct {
-            BSValue label;
-            int index;       /* the resolved statement index, or -1 if unresolved */
-            BSExpr *expr;    /* the jumpif test expression, or NULL */
-        } jump;
-        struct {
-            BSExpr *expr;    /* the return expression, or NULL */
-        } ret;
-        struct {
-            BSValue name;
-        } label;
-        struct {
-            BSFunctionDef *def;
-        } function;
-        struct {
-            BSInclude *includes;
-            size_t count;
-        } include;
-    } u;
+/* Call-site cache of a global function lookup */
+typedef struct BSCallCache {
+    BSValue cached;
+    uint32_t gen;
+    uint32_t epoch;
+} BSCallCache;
+
+
+/*
+ * A compiled bytecode chunk
+ *
+ * Instructions are (opcode << 24) | arg. Constants are interned names, string literals, and
+ * numbers that do not fit an immediate. COVER operands index cover[], borrowed statement models
+ * from the parser output.
+ */
+typedef struct BSCode {
+    uint32_t *inst;
+    size_t count;
+    BSValue *constants;
+    size_t constantCount;
+    BSCallCache *caches;
+    size_t cacheCount;
+    BSInclude *includes;
+    size_t includeCount;
+    BSValue *cover;
+    int *coverLines;
+    size_t coverCount;
+    BSValue *slotNames;
+    size_t slotCount;
+} BSCode;
+
+
+/* A compiled expression - a bytecode chunk plus the original expression model */
+struct BSExpr {
+    BSCode code;
+    BSValue model;
 };
 
 
 /* A function definition */
 struct BSFunctionDef {
     BSValue name;
-    BSValue *argNames;      /* the declared argument names */
+    BSValue *argNames;
     size_t argCount;
     bool lastArgArray;
     bool async;
-    BSStatement **statements;
-    size_t statementCount;
-    BSValue *slotNames;     /* the function-local variable slot names */
-    size_t slotCount;
-    BSScript *script;       /* the defining script - borrowed */
+    BSCode code;
+    BSScript *script;
     int lineNumber;
     int lineCount;
 };
@@ -205,13 +94,13 @@ struct BSFunctionDef {
 /* A parsed script */
 struct BSScript {
     int32_t refcount;
-    BSValue scriptName;     /* a string value, or a null value */
-    BSValue scriptLines;    /* an array of the script's line strings */
-    BSStatement **statements;
-    size_t statementCount;
+    BSValue scriptName;
+    BSValue scriptLines;
+    BSValue model;          /* the original parser model, for lint and coverage */
+    BSCode code;            /* top-level bytecode */
     BSFunctionDef **functions;
     size_t functionCount;
-    bool system;            /* true if this is a system include script */
+    bool system;
 
     /*
      * Coverage recording cache. Hits are counted in a line-indexed array of pointers into the
@@ -277,9 +166,6 @@ BSExpr *bsExprFromModel(BSValue model);
 
 /* Convert a compiled script to its JSON "BareScript" model - returns an owned object value */
 BSValue bsScriptToModel(const BSScript *script);
-
-/* Convert a compiled statement to its JSON "ScriptStatement" model - returns an owned object value */
-BSValue bsStatementToModel(const BSStatement *statement);
 
 /* Convert a compiled expression to its JSON "Expression" model - returns an owned object value */
 BSValue bsExprToModel(const BSExpr *expr);

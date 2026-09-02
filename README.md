@@ -384,26 +384,23 @@ barescriptParser.bare (bundled JSON model)
   BareScript model  --.
         |             |  bsScriptFromModel
         v             v
-   compiled script -> executed by the runtime, which is what parses your script
+   bytecode chunk  -> executed by the runtime, which is what parses your script
 ```
 
-The model that comes back is converted to the runtime's compiled representation - statements and
-expressions as C structs rather than objects - by `model.c`. Two resolution passes run once a
-statement list is complete:
-
-- **Jump resolution** turns each jump's label into a statement index.
-- **Slot resolution** collects a function's local variables - its declared arguments plus every
-  assignment target in its body, a statically known set - and resolves each variable reference to
-  a slot index, so a local read is an array load rather than a dictionary lookup. A slot holding
-  the internal unset marker falls through to the globals object, matching the reference behavior
-  where an unassigned local simply is not a key of the locals dictionary.
+`model.c` compiles the model to bytecode and keeps the original model on the script for lint and
+coverage. Jump labels become instruction indexes and function-local names become slot indexes
+during emit - there is no executable expression tree. A slot holding the internal unset marker
+falls through to the globals object, matching the reference behavior where an unassigned local
+simply is not a key of the locals dictionary. Group nodes stay in the model (the parser and linter
+observe them) and flatten only in the code stream.
 
 When `__barescriptCoverage` is enabled, each compiled script keeps a line-indexed array of
 pointers into the coverage object's per-line counts, so a loop increments a number instead of
 formatting a line key and searching the covered object on every statement.
 
-`bsScriptToModel`, `bsStatementToModel`, and `bsExprToModel` convert back, which is how the linter
-receives a script and how `barescriptEvaluateExpression` works.
+`bsScriptToModel` and `bsExprToModel` return the saved model (with `scriptName` / `scriptLines` /
+`system` overlaid), which is how the linter receives a script and how `barescriptEvaluateExpression`
+works.
 
 
 ### The Bundled Include Library

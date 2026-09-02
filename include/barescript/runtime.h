@@ -91,6 +91,12 @@ struct BSOptions {
     /* The expression evaluation recursion depth guard */
     int depth;
     int depthMax;
+
+    /*
+     * Identity for call-site function caches. Unique per options instance so a cached include
+     * script cannot reuse a function pointer from a previous, already-freed globals object.
+     */
+    uint32_t cacheEpoch;
 };
 
 
@@ -100,8 +106,8 @@ void bsOptionsFree(BSOptions *options);
 /* Set the pending runtime error, which halts script execution */
 void bsErrorSet(BSOptions *options, const char *format, ...);
 
-/* Set the pending runtime error, prefixed with a script statement's location */
-void bsErrorSetStatement(BSOptions *options, const BSScript *script, const BSStatement *statement,
+/* Set the pending runtime error, prefixed with a script location. lineNumber 0 omits the line. */
+void bsErrorSetStatement(BSOptions *options, const BSScript *script, int lineNumber,
                          const char *format, ...);
 
 /*

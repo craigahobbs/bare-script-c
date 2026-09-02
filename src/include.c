@@ -508,6 +508,7 @@ BSScript *bsIncludeScript(const char *name)
             return NULL; /* GCOV_EXCL_LINE - bundled models always convert */
         }
         script->system = true;
+        bsScriptDropModel(script);
         bsIncludeScripts[ix] = bsScriptRetain(script);
         return script;
     }

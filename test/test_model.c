@@ -150,6 +150,11 @@ TEST(model_invalid)
     bsTestInvalidModel("{\"statements\":[{\"include\":{\"includes\":[]}}]}");
     bsTestInvalidModel("{\"statements\":[{\"include\":{\"includes\":[{}]}}]}");
     bsTestInvalidModel("{\"statements\":[{\"include\":{\"includes\":[{\"url\":1}]}}]}");
+
+    /* Fail after emit has already allocated includes, slots, or jump patches */
+    bsTestInvalidModel("{\"statements\":[{\"include\":{\"includes\":[{\"url\":\"a.bare\"}]}},{}]}");
+    bsTestInvalidModel("{\"statements\":[{\"function\":{\"name\":\"f\",\"args\":[\"x\"],\"statements\":[{}]}}]}");
+    bsTestInvalidModel("{\"statements\":[{\"jump\":{\"label\":\"later\"}},{}]}");
 }
 
 
@@ -168,8 +173,10 @@ TEST(model_valid_shapes)
         "{\"return\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[{\"number\":2}]}}}}"
         "]}");
     ASSERT_NOT_NULL(script);
-    ASSERT_INT_EQ(script->statements[0]->lineNumber, 1);
-    ASSERT_INT_EQ(script->statements[0]->lineCount, 2);
+    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(script->model, "statements"), 0),
+                                            "expr"), "lineNumber").u.number, 1);
+    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(script->model, "statements"), 0),
+                                            "expr"), "lineCount").u.number, 2);
 
     BSOptions *options = bsTestOptions();
     ASSERT_VALUE(bsExecuteScript(script, options), "[2]");
@@ -184,8 +191,9 @@ TEST(model_valid_shapes)
         "{\"statements\":[{\"include\":{\"includes\":["
         "{\"url\":\"a.bare\"},{\"url\":\"b.bare\",\"system\":true}]}}]}");
     ASSERT_NOT_NULL(script);
-    ASSERT_FALSE(script->statements[0]->u.include.includes[0].system);
-    ASSERT_TRUE(script->statements[0]->u.include.includes[1].system);
+    ASSERT_INT_EQ((int) script->code.includeCount, 2);
+    ASSERT_FALSE(script->code.includes[0].system);
+    ASSERT_TRUE(script->code.includes[1].system);
     model = bsScriptToModel(script);
     BSValue includes = bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(model, "statements"), 0),
                                                "include"), "includes");

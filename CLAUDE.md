@@ -73,13 +73,14 @@ needs only a JSON decode.
 
 ```
 barescriptParser.bare (bundled JSON model) --decode--> BareScript model
-    --bsScriptFromModel (model.c)--> compiled script --> runs, and parses your script
+    --bsScriptFromModel (model.c)--> bytecode --> runs, and parses your script
 ```
 
-`src/model.c` converts a BareScript model object into the runtime's compiled representation and
-back (`bsScriptToModel`, which is how the linter receives a script). Two passes run once a
-statement list is complete: **jump resolution** (label -> statement index) and **slot resolution**
-(a function's locals -> array indexes, with an unset marker falling through to globals).
+`src/model.c` compiles the model to bytecode and keeps the original model on the script for lint
+and coverage (`bsScriptToModel` retains it). Jump labels become instruction indexes and
+function-local names become slot indexes during emit. A slot holding the internal unset marker
+falls through to the globals object. Group nodes stay in the model and flatten only in the code
+stream. The interpreter is `bsRunCode` in `src/runtime.c`.
 
 ### The bundled include library
 
@@ -140,9 +141,9 @@ BareScript exposes - see README's **Regular Expressions** table.
 | ------------------------- | ------------------------------------------------------------- |
 | `include/barescript/`     | the public API; `barescript.h` includes the rest              |
 | `src/value.c`             | values, refcounting, strings, arrays, the object treap        |
-| `src/runtime.c`           | the statement loop and expression evaluator                   |
+| `src/runtime.c`           | bytecode interpreter, includes, coverage                      |
 | `src/library.c`           | the built-in library and `bsArgsValidate`                     |
-| `src/model.c`             | BareScript model <-> compiled script, jump and slot resolution |
+| `src/model.c`             | BareScript model -> bytecode; saved model for lint/coverage   |
 | `src/parser.c`            | thin wrapper running the BareScript parser and linter         |
 | `src/include.c`           | system include resolution and model decompression             |
 | `src/includeSource.c`     | **generated** - compressed include library models             |

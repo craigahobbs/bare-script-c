@@ -21,6 +21,8 @@
 /* The maximum expression evaluation recursion depth */
 #define BS_DEPTH_MAX 500
 
+static uint32_t bsCacheEpoch;
+
 /* The largest datetime JavaScript's Date represents, in milliseconds */
 #define BS_DATETIME_MAX 8640000000000000.0
 
@@ -39,6 +41,7 @@ BSOptions *bsOptionsNew(void)
     options->argsError = bsNull();
     options->maxStatements = BS_MAX_STATEMENTS_DEFAULT;
     options->depthMax = BS_DEPTH_MAX;
+    options->cacheEpoch = ++bsCacheEpoch;
     return options;
 }
 
@@ -70,7 +73,7 @@ void bsErrorSet(BSOptions *options, const char *format, ...)
 }
 
 
-void bsErrorSetStatement(BSOptions *options, const BSScript *script, const BSStatement *statement,
+void bsErrorSetStatement(BSOptions *options, const BSScript *script, int lineNumber,
                          const char *format, ...)
 {
     if (options->error.type == BS_STRING) {
@@ -81,10 +84,13 @@ void bsErrorSetStatement(BSOptions *options, const BSScript *script, const BSSta
     BSValue message = bsStringNewVFormat(format, args);
     va_end(args);
 
-    if (script != NULL && statement != NULL) {
-        const char *scriptName = script->scriptName.type == BS_STRING ? bsStringData(script->scriptName) : "";
-        options->error = bsStringNewFormat("%s:%d: %s", scriptName, statement->lineNumber,
-                                           bsStringData(message));
+    if (script != NULL && script->scriptName.type == BS_STRING) {
+        const char *scriptName = bsStringData(script->scriptName);
+        if (lineNumber != 0) {
+            options->error = bsStringNewFormat("%s:%d: %s", scriptName, lineNumber, bsStringData(message));
+        } else {
+            options->error = bsStringNewFormat("%s: %s", scriptName, bsStringData(message));
+        }
         bsRelease(message);
     } else {
         options->error = message;
@@ -209,8 +215,12 @@ void bsSystemIncludeClear(void)
 
 
 /*
- * Expression evaluation
+ * Bytecode interpreter
  */
+
+
+#define BS_STACK_INLINE 8
+#define BS_SLOTS_INLINE 32
 
 
 static int32_t bsToInt32(double value)
@@ -236,58 +246,20 @@ static BSValue bsArithmetic(double result)
 }
 
 
-/*
- * An evaluated value. Leaves (literals and variable lookups) are borrowed from the AST or a
- * slot/global; the caller retains only if the value must outlive the next evaluation. Heap
- * results (concat, calls) are owned.
- */
-typedef struct {
-    BSValue value;
-    bool owned;
-} BSEval;
-
-static inline BSEval bsEvalBorrowed(BSValue value)
+static BSValue *bsStackGrow(BSValue *stack, BSValue *inlineBuf, size_t *cap)
 {
-    BSEval eval;
-    eval.value = value;
-    eval.owned = false;
-    return eval;
-}
-
-static inline BSEval bsEvalOwned(BSValue value)
-{
-    BSEval eval;
-    eval.value = value;
-    eval.owned = true;
-    return eval;
-}
-
-static inline void bsEvalDrop(BSEval eval)
-{
-    if (eval.owned) {
-        bsRelease(eval.value);
+    size_t old = *cap;
+    *cap = old * 2;
+    if (stack == inlineBuf) {
+        BSValue *heap = bsAlloc(*cap * sizeof(BSValue));
+        memcpy(heap, inlineBuf, old * sizeof(BSValue));
+        return heap;
     }
-}
-
-static inline BSValue bsEvalTake(BSEval eval)
-{
-    return eval.owned ? eval.value : bsRetain(eval.value);
+    return bsRealloc(stack, *cap * sizeof(BSValue));
 }
 
 
-typedef struct {
-    BSOptions *options;
-    BSScope *scope;
-    BSScript *script;
-    BSStatement *statement;
-    bool builtins;
-} BSEvalCtx;
-
-static BSEval bsEvalExpr(BSExpr *expr, const BSEvalCtx *ctx, int depth);
-
-
-/* Look up a variable in a locals object or the globals. Slot hits are handled by bsEvalVariable. */
-static BSValue bsLookup(BSValue name, BSOptions *options, BSScope *scope)
+static BSValue bsLookupName(BSValue name, BSOptions *options, BSScope *scope)
 {
     if (scope != NULL && scope->slots == NULL && scope->object.type == BS_OBJECT) {
         BSValue found;
@@ -299,641 +271,43 @@ static BSValue bsLookup(BSValue name, BSOptions *options, BSScope *scope)
 }
 
 
-/* Look up a function, using the call site's globals cache when the name is not a local */
-static BSValue bsLookupFunction(BSExpr *expr, const BSEvalCtx *ctx)
+static BSValue bsAddSlow(BSValue left, BSValue right)
 {
-    BSScope *scope = ctx->scope;
-    if (scope != NULL) {
-        if (scope->slots != NULL) {
-            if (expr->u.function.slot >= 0) {
-                BSValue value = scope->slots[expr->u.function.slot];
-                if (!BS_IS_UNSET(value)) {
-                    return value;
-                }
-            }
-        } else if (scope->object.type == BS_OBJECT) {
-            BSValue found;
-            if (bsObjectLookupString(scope->object, expr->u.function.name, &found)) {
-                return found;
-            }
-        }
+    if (left.type == BS_STRING || right.type == BS_STRING) {
+        return bsStringConcat(left, right);
     }
-
-    BSOptions *options = ctx->options;
-    if (options->globals.type == BS_OBJECT) {
-        BSObject *globals = options->globals.u.object;
-        if (expr->u.function.cachedObject == globals &&
-            expr->u.function.cachedGen == globals->generation &&
-            expr->u.function.cached.type != BS_NULL) {
-            return expr->u.function.cached;
-        }
-        BSValue function = bsObjectGetString(options->globals, expr->u.function.name);
-        expr->u.function.cached = function;
-        expr->u.function.cachedGen = globals->generation;
-        expr->u.function.cachedObject = globals;
-        return function;
+    if (left.type == BS_DATETIME && right.type == BS_NUMBER) {
+        double value = (double) left.u.datetime + right.u.number;
+        return (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
+    }
+    if (left.type == BS_NUMBER && right.type == BS_DATETIME) {
+        double value = left.u.number + (double) right.u.datetime;
+        return (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
     }
     return bsNull();
 }
 
 
-static inline __attribute__((always_inline)) BSEval bsEvalVariable(const BSExpr *expr, const BSEvalCtx *ctx)
+static BSValue bsBitwise(uint8_t op, BSValue left, BSValue right)
 {
-    switch (expr->u.variable.special) {
-    case BS_SPECIAL_NULL:
-        return bsEvalBorrowed(bsNull());
-    case BS_SPECIAL_TRUE:
-        return bsEvalBorrowed(bsBoolean(true));
-    case BS_SPECIAL_FALSE:
-        return bsEvalBorrowed(bsBoolean(false));
-    default: {
-        int slot = expr->u.variable.slot;
-        BSScope *scope = ctx->scope;
-        if (scope != NULL && scope->slots != NULL && slot >= 0) {
-            BSValue value = scope->slots[slot];
-            if (!BS_IS_UNSET(value)) {
-                return bsEvalBorrowed(value);
-            }
-        }
-        return bsEvalBorrowed(bsLookup(expr->u.variable.name, ctx->options, scope));
-    }
-    }
-}
-
-
-static inline __attribute__((always_inline)) BSEval bsEvalArg(BSExpr *expr, const BSEvalCtx *ctx, int depth)
-{
-    switch (expr->type) {
-    case BS_EXPR_NUMBER:
-        return bsEvalBorrowed(bsNumber(expr->u.number));
-    case BS_EXPR_STRING:
-        return bsEvalBorrowed(expr->u.string);
-    case BS_EXPR_VARIABLE:
-        return bsEvalVariable(expr, ctx);
-    default:
-        return bsEvalExpr(expr, ctx, depth);
-    }
-}
-
-
-static bool bsArgsAfterAreEffectful(const BSExpr *expr, size_t ix)
-{
-    size_t argCount = expr->u.function.argCount;
-    for (size_t j = ix + 1; j < argCount; j++) {
-        if (!expr->u.function.args[j]->pure) {
-            return true;
-        }
-    }
-    return false;
-}
-
-
-static BSValue bsDispatchFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth,
-                                  BSValue function, const BSValue *args, size_t argCount)
-{
-    BSValue result = bsNull();
-    BSOptions *options = ctx->options;
-    if (function.type == BS_FUNCTION) {
-        int savedDepth = options->depth;
-        options->depth = depth;
-        result = bsFunctionInvoke(function, args, argCount, options);
-        options->depth = savedDepth;
-
-        if (options->argsError.type == BS_STRING) {
-            if (options->debug && options->logFn != NULL) {
-                const char *scriptName = (ctx->script != NULL && ctx->script->scriptName.type == BS_STRING) ?
-                    bsStringData(ctx->script->scriptName) : "";
-                int lineNumber = ctx->statement != NULL ? ctx->statement->lineNumber : 0;
-                bsLog(options, "%s:%d: BareScript: Function \"%s\" failed with error: %s", scriptName,
-                      lineNumber, bsStringData(expr->u.function.name), bsStringData(options->argsError));
-            }
-            bsAssign(&options->argsError, bsNull());
-        }
-    } else if (function.type != BS_NULL) {
-        if (options->debug) {
-            bsLog(options, "BareScript: Function \"%s\" failed with error: not a function",
-                  bsStringData(expr->u.function.name));
-        }
-    } else {
-        bsErrorSetStatement(options, ctx->script, ctx->statement, "Undefined function \"%s\"",
-                            bsStringData(expr->u.function.name));
-    }
-    return result;
-}
-
-
-static BSValue bsLookupCallable(BSExpr *expr, const BSEvalCtx *ctx)
-{
-    BSValue function = bsLookupFunction(expr, ctx);
-    if (function.type == BS_NULL && ctx->builtins) {
-        function = bsLibraryExpressionFunction(expr->u.function.name);
-    }
-    return function;
-}
-
-
-static BSValue bsInvokeResolved(BSExpr *expr, const BSEvalCtx *ctx, int depth,
-                                const BSValue *args, size_t argCount)
-{
-    return bsDispatchFunction(expr, ctx, depth, bsLookupCallable(expr, ctx), args, argCount);
-}
-
-
-static void bsEvalRetainIfLater(BSEval *eval, unsigned char laterEffectful, unsigned char bit)
-{
-    if (!eval->owned && eval->value.type >= BS_STRING && (laterEffectful & bit) != 0) {
-        eval->value = bsRetain(eval->value);
-        eval->owned = true;
-    }
-}
-
-
-static BSEval bsEvalCall0(BSExpr *expr, const BSEvalCtx *ctx, int depth)
-{
-    BSValue function = bsLookupCallable(expr, ctx);
-    if (function.type == BS_FUNCTION) {
-        unsigned char id = function.u.function->intrinsic;
-        if (id == BS_INTRIN_ARRAY_NEW) {
-            return bsEvalOwned(bsArrayNew());
-        }
-        if (id == BS_INTRIN_OBJECT_NEW) {
-            return bsEvalOwned(bsObjectNew());
-        }
-    }
-    return bsEvalOwned(bsDispatchFunction(expr, ctx, depth, function, NULL, 0));
-}
-
-
-static BSEval bsEvalCall1(BSExpr *expr, const BSEvalCtx *ctx, int depth)
-{
-    BSEval arg = bsEvalArg(expr->u.function.args[0], ctx, depth);
-    BSValue function = bsLookupCallable(expr, ctx);
-    BSValue result;
-    if (function.type == BS_FUNCTION) {
-        unsigned char id = function.u.function->intrinsic;
-        if (id == BS_INTRIN_ARRAY_LENGTH && arg.value.type == BS_ARRAY) {
-            result = bsNumber((double) arg.value.u.array->count);
-            bsEvalDrop(arg);
-            return bsEvalBorrowed(result);
-        }
-        if (id == BS_INTRIN_STRING_LENGTH && arg.value.type == BS_STRING) {
-            result = bsNumber((double) arg.value.u.string->length);
-            bsEvalDrop(arg);
-            return bsEvalBorrowed(result);
-        }
-        if (id == BS_INTRIN_SYSTEM_TYPE) {
-            result = bsFunctionInvoke(function, &arg.value, 1, ctx->options);
-            bsEvalDrop(arg);
-            return bsEvalOwned(result);
-        }
-        if (id == BS_INTRIN_MATH_FLOOR && arg.value.type == BS_NUMBER) {
-            result = bsNumber(floor(arg.value.u.number));
-            bsEvalDrop(arg);
-            return bsEvalBorrowed(result);
-        }
-        if (id == BS_INTRIN_ARRAY_NEW) {
-            result = bsArrayNewCapacity(1);
-            bsArrayPush(result, bsRetain(arg.value));
-            bsEvalDrop(arg);
-            return bsEvalOwned(result);
-        }
-        if (id == BS_INTRIN_OBJECT_NEW && arg.value.type == BS_STRING) {
-            result = bsObjectNew();
-            bsObjectSetString(result, arg.value, bsNull());
-            bsEvalDrop(arg);
-            return bsEvalOwned(result);
-        }
-    }
-    result = bsDispatchFunction(expr, ctx, depth, function, &arg.value, 1);
-    bsEvalDrop(arg);
-    return bsEvalOwned(result);
-}
-
-
-static BSEval bsEvalCall2(BSExpr *expr, const BSEvalCtx *ctx, int depth)
-{
-    BSExpr **callArgs = expr->u.function.args;
-    BSEval a0 = bsEvalArg(callArgs[0], ctx, depth);
-    bsEvalRetainIfLater(&a0, expr->laterEffectful, 1u);
-    BSEval a1 = bsEvalArg(callArgs[1], ctx, depth);
-    BSValue function = bsLookupCallable(expr, ctx);
-    BSValue result;
-    if (function.type == BS_FUNCTION) {
-        unsigned char id = function.u.function->intrinsic;
-        if (id == BS_INTRIN_OBJECT_GET && a0.value.type == BS_OBJECT && a1.value.type == BS_STRING) {
-            BSValue found;
-            result = bsObjectLookupString(a0.value, a1.value, &found) ? bsRetain(found) : bsNull();
-            bsEvalDrop(a0);
-            bsEvalDrop(a1);
-            return bsEvalOwned(result);
-        }
-        if (id == BS_INTRIN_OBJECT_HAS && a0.value.type == BS_OBJECT && a1.value.type == BS_STRING) {
-            result = bsBoolean(bsObjectHasString(a0.value, a1.value));
-            bsEvalDrop(a0);
-            bsEvalDrop(a1);
-            return bsEvalBorrowed(result);
-        }
-        if (id == BS_INTRIN_REGEX_MATCH && a0.value.type == BS_REGEX && a1.value.type == BS_STRING) {
-            BSValue matchArgs[2] = {a0.value, a1.value};
-            result = bsFunctionInvoke(function, matchArgs, 2, ctx->options);
-            bsEvalDrop(a0);
-            bsEvalDrop(a1);
-            return bsEvalOwned(result);
-        }
-        if (id == BS_INTRIN_ARRAY_GET && a0.value.type == BS_ARRAY && a1.value.type == BS_NUMBER) {
-            double number = a1.value.u.number;
-            if (isfinite(number) && trunc(number) == number && number >= 0) {
-                size_t index = (size_t) number;
-                if (index < a0.value.u.array->count) {
-                    result = bsRetain(a0.value.u.array->values[index]);
-                    bsEvalDrop(a0);
-                    bsEvalDrop(a1);
-                    return bsEvalOwned(result);
-                }
-            }
-        }
-        if (id == BS_INTRIN_ARRAY_NEW) {
-            result = bsArrayNewCapacity(2);
-            bsArrayPush(result, bsRetain(a0.value));
-            bsArrayPush(result, bsRetain(a1.value));
-            bsEvalDrop(a0);
-            bsEvalDrop(a1);
-            return bsEvalOwned(result);
-        }
-        if (id == BS_INTRIN_OBJECT_NEW && a0.value.type == BS_STRING) {
-            result = bsObjectNew();
-            bsObjectSetString(result, a0.value, bsRetain(a1.value));
-            bsEvalDrop(a0);
-            bsEvalDrop(a1);
-            return bsEvalOwned(result);
-        }
-    }
-    BSValue argv[2] = {a0.value, a1.value};
-    result = bsDispatchFunction(expr, ctx, depth, function, argv, 2);
-    bsEvalDrop(a0);
-    bsEvalDrop(a1);
-    return bsEvalOwned(result);
-}
-
-
-static BSEval bsEvalCall3(BSExpr *expr, const BSEvalCtx *ctx, int depth)
-{
-    BSExpr **callArgs = expr->u.function.args;
-    BSEval a0 = bsEvalArg(callArgs[0], ctx, depth);
-    bsEvalRetainIfLater(&a0, expr->laterEffectful, 1u);
-    BSEval a1 = bsEvalArg(callArgs[1], ctx, depth);
-    bsEvalRetainIfLater(&a1, expr->laterEffectful, 2u);
-    BSEval a2 = bsEvalArg(callArgs[2], ctx, depth);
-    BSValue function = bsLookupCallable(expr, ctx);
-    BSValue result;
-    if (function.type == BS_FUNCTION) {
-        unsigned char id = function.u.function->intrinsic;
-        if (id == BS_INTRIN_OBJECT_SET && a0.value.type == BS_OBJECT && a1.value.type == BS_STRING) {
-            bsObjectSetString(a0.value, a1.value, bsRetain(a2.value));
-            result = bsRetain(a2.value);
-            bsEvalDrop(a0);
-            bsEvalDrop(a1);
-            bsEvalDrop(a2);
-            return bsEvalOwned(result);
-        }
-        if (id == BS_INTRIN_OBJECT_GET && a0.value.type == BS_OBJECT && a1.value.type == BS_STRING) {
-            BSValue found;
-            result = bsObjectLookupString(a0.value, a1.value, &found) ? bsRetain(found) : bsRetain(a2.value);
-            bsEvalDrop(a0);
-            bsEvalDrop(a1);
-            bsEvalDrop(a2);
-            return bsEvalOwned(result);
-        }
-        if (id == BS_INTRIN_ARRAY_NEW) {
-            result = bsArrayNewCapacity(3);
-            bsArrayPush(result, bsRetain(a0.value));
-            bsArrayPush(result, bsRetain(a1.value));
-            bsArrayPush(result, bsRetain(a2.value));
-            bsEvalDrop(a0);
-            bsEvalDrop(a1);
-            bsEvalDrop(a2);
-            return bsEvalOwned(result);
-        }
-        if (id == BS_INTRIN_OBJECT_NEW && a0.value.type == BS_STRING && a2.value.type == BS_STRING) {
-            result = bsObjectNew();
-            bsObjectSetString(result, a0.value, bsRetain(a1.value));
-            bsObjectSetString(result, a2.value, bsNull());
-            bsEvalDrop(a0);
-            bsEvalDrop(a1);
-            bsEvalDrop(a2);
-            return bsEvalOwned(result);
-        }
-    }
-    BSValue argv[3] = {a0.value, a1.value, a2.value};
-    result = bsDispatchFunction(expr, ctx, depth, function, argv, 3);
-    bsEvalDrop(a0);
-    bsEvalDrop(a1);
-    bsEvalDrop(a2);
-    return bsEvalOwned(result);
-}
-
-
-static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
-{
-    /* The built-in "if" function evaluates only the selected branch */
-    if (expr->u.function.isIf) {
-        size_t argCount = expr->u.function.argCount;
-        bool test = false;
-        if (argCount >= 1) {
-            BSEval value = bsEvalArg(expr->u.function.args[0], ctx, depth);
-            test = bsValueBoolean(value.value);
-            bsEvalDrop(value);
-        }
-        BSExpr *branch = NULL;
-        if (test) {
-            branch = argCount >= 2 ? expr->u.function.args[1] : NULL;
-        } else {
-            branch = argCount >= 3 ? expr->u.function.args[2] : NULL;
-        }
-        return branch != NULL ? bsEvalArg(branch, ctx, depth) : bsEvalBorrowed(bsNull());
-    }
-
-    /* Evaluate the function arguments. A later effectful arg can reassign a borrowed heap value. */
-    size_t argCount = expr->u.function.argCount;
-    BSValue argsInline[8];
-    bool ownedInline[8];
-    BSValue *args = argsInline;
-    bool *owned = ownedInline;
-    if (argCount > 8) {
-        args = bsAlloc(argCount * sizeof(BSValue));
-        owned = bsAlloc(argCount * sizeof(bool));
-    }
-    for (size_t ix = 0; ix < argCount; ix++) {
-        BSEval eval = bsEvalArg(expr->u.function.args[ix], ctx, depth);
-        bool later = ix < 8 ? (expr->laterEffectful & (unsigned char) (1u << ix)) != 0 :
-            bsArgsAfterAreEffectful(expr, ix);
-        if (!eval.owned && eval.value.type >= BS_STRING && later) {
-            eval.value = bsRetain(eval.value);
-            eval.owned = true;
-        }
-        args[ix] = eval.value;
-        owned[ix] = eval.owned;
-    }
-
-    BSValue result = bsInvokeResolved(expr, ctx, depth, args, argCount);
-
-    for (size_t ix = 0; ix < argCount; ix++) {
-        if (owned[ix]) {
-            bsRelease(args[ix]);
-        }
-    }
-    if (args != argsInline) {
-        free(args);
-        free(owned);
-    }
-    return bsEvalOwned(result);
-}
-
-
-static BSEval bsEvalBinary(BSExpr *expr, const BSEvalCtx *ctx, int depth)
-{
-    BSBinaryOp op = expr->u.binary.op;
-    BSEval left = bsEvalArg(expr->u.binary.left, ctx, depth);
-
-    /* The short-circuiting logical operators */
-    if (op == BS_BINARY_LAND) {
-        if (!bsValueBoolean(left.value)) {
-            return left;
-        }
-        bsEvalDrop(left);
-        return bsEvalArg(expr->u.binary.right, ctx, depth);
-    }
-    if (op == BS_BINARY_LOR) {
-        if (bsValueBoolean(left.value)) {
-            return left;
-        }
-        bsEvalDrop(left);
-        return bsEvalArg(expr->u.binary.right, ctx, depth);
-    }
-
-    /* A later operand can reassign the slot a borrowed heap value came from */
-    if (!left.owned && left.value.type >= BS_STRING && !expr->u.binary.right->pure) {
-        left.value = bsRetain(left.value);
-        left.owned = true;
-    }
-
-    BSEval right = bsEvalArg(expr->u.binary.right, ctx, depth);
-    bool bothNumber = (left.value.type == BS_NUMBER && right.value.type == BS_NUMBER);
-    BSValue result = bsNull();
-    bool owned = false;
-
-    switch (op) {
-    case BS_BINARY_ADD:
-        if (bothNumber) {
-            result = bsArithmetic(left.value.u.number + right.value.u.number);
-        } else if (left.value.type == BS_STRING || right.value.type == BS_STRING) {
-            result = bsStringConcat(left.value, right.value);
-            owned = true;
-        } else if (left.value.type == BS_DATETIME && right.value.type == BS_NUMBER) {
-            double value = (double) left.value.u.datetime + right.value.u.number;
-            result = (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
-        } else if (left.value.type == BS_NUMBER && right.value.type == BS_DATETIME) {
-            double value = left.value.u.number + (double) right.value.u.datetime;
-            result = (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
-        }
-        break;
-
-    case BS_BINARY_SUB:
-        if (bothNumber) {
-            result = bsArithmetic(left.value.u.number - right.value.u.number);
-        } else if (left.value.type == BS_DATETIME && right.value.type == BS_DATETIME) {
-            result = bsNumber((double) (left.value.u.datetime - right.value.u.datetime));
-        }
-        break;
-
-    case BS_BINARY_MUL:
-        if (bothNumber) {
-            result = bsArithmetic(left.value.u.number * right.value.u.number);
-        }
-        break;
-
-    case BS_BINARY_DIV:
-        if (bothNumber) {
-            result = bsArithmetic(left.value.u.number / right.value.u.number);
-        }
-        break;
-
-    case BS_BINARY_MOD:
-        if (bothNumber) {
-            result = bsArithmetic(fmod(left.value.u.number, right.value.u.number));
-        }
-        break;
-
-    case BS_BINARY_EXP:
-        if (bothNumber) {
-            result = bsArithmetic(pow(left.value.u.number, right.value.u.number));
-        }
-        break;
-
-    case BS_BINARY_LT:
-        result = bsBoolean(bothNumber ? left.value.u.number < right.value.u.number :
-                           bsValueCompare(left.value, right.value) < 0);
-        break;
-
-    case BS_BINARY_LTE:
-        result = bsBoolean(bothNumber ? left.value.u.number <= right.value.u.number :
-                           bsValueCompare(left.value, right.value) <= 0);
-        break;
-
-    case BS_BINARY_GT:
-        result = bsBoolean(bothNumber ? left.value.u.number > right.value.u.number :
-                           bsValueCompare(left.value, right.value) > 0);
-        break;
-
-    case BS_BINARY_GTE:
-        result = bsBoolean(bothNumber ? left.value.u.number >= right.value.u.number :
-                           bsValueCompare(left.value, right.value) >= 0);
-        break;
-
-    case BS_BINARY_EQ:
-        result = bsBoolean(bothNumber ? left.value.u.number == right.value.u.number :
-                           bsValueCompare(left.value, right.value) == 0);
-        break;
-
-    case BS_BINARY_NE:
-        result = bsBoolean(bothNumber ? left.value.u.number != right.value.u.number :
-                           bsValueCompare(left.value, right.value) != 0);
-        break;
-
-    default:
-        /* The bitwise operators - these coerce to 32-bit integers, as JavaScript does */
-        if (bsIsInteger(left.value) && bsIsInteger(right.value)) {
-            int32_t leftInt = bsToInt32(left.value.u.number);
-            int32_t rightInt = bsToInt32(right.value.u.number);
-            uint32_t shift = ((uint32_t) rightInt) & 31u;
-            switch (op) {
-            case BS_BINARY_AND:
-                result = bsNumber((double) (leftInt & rightInt));
-                break;
-            case BS_BINARY_OR:
-                result = bsNumber((double) (leftInt | rightInt));
-                break;
-            case BS_BINARY_XOR:
-                result = bsNumber((double) (leftInt ^ rightInt));
-                break;
-            case BS_BINARY_SHL:
-                result = bsNumber((double) (int32_t) ((uint32_t) leftInt << shift));
-                break;
-            default:
-                result = bsNumber((double) (leftInt >> shift));
-                break;
-            }
-        }
-        break;
-    }
-
-    bsEvalDrop(left);
-    bsEvalDrop(right);
-    return owned ? bsEvalOwned(result) : bsEvalBorrowed(result);
-}
-
-
-static BSEval bsEvalExpr(BSExpr *expr, const BSEvalCtx *ctx, int depth)
-{
-    for (;;) {
-        switch (expr->type) {
-        case BS_EXPR_NUMBER:
-            return bsEvalBorrowed(bsNumber(expr->u.number));
-
-        case BS_EXPR_STRING:
-            return bsEvalBorrowed(expr->u.string);
-
-        case BS_EXPR_VARIABLE:
-            return bsEvalVariable(expr, ctx);
-
-        default:
-            break;
-        }
-
-        /* The recursive expression kinds are depth-guarded */
-        if (depth >= ctx->options->depthMax) {
-            bsErrorSetStatement(ctx->options, ctx->script, ctx->statement,
-                                "Maximum expression depth exceeded");
-            return bsEvalBorrowed(bsNull());
-        }
-        depth++;
-
-        switch (expr->type) {
-        case BS_EXPR_GROUP:
-            expr = expr->u.group;
-            continue;
-
-        case BS_EXPR_FUNCTION:
-            return bsEvalFunction(expr, ctx, depth);
-
-        case BS_EXPR_CALL0:
-            return bsEvalCall0(expr, ctx, depth);
-
-        case BS_EXPR_CALL1:
-            return bsEvalCall1(expr, ctx, depth);
-
-        case BS_EXPR_CALL2:
-            return bsEvalCall2(expr, ctx, depth);
-
-        case BS_EXPR_CALL3:
-            return bsEvalCall3(expr, ctx, depth);
-
-        case BS_EXPR_BINARY:
-            return bsEvalBinary(expr, ctx, depth);
-
-        default: {
-            BSEval value = bsEvalArg(expr->u.unary.expr, ctx, depth);
-            BSValue result;
-            switch (expr->u.unary.op) {
-            case BS_UNARY_NOT:
-                result = bsBoolean(!bsValueBoolean(value.value));
-                break;
-            case BS_UNARY_NEG:
-                result = value.value.type == BS_NUMBER ? bsNumber(-value.value.u.number) : bsNull();
-                break;
-            default:
-                result = bsIsInteger(value.value) ? bsNumber((double) ~bsToInt32(value.value.u.number)) :
-                    bsNull();
-                break;
-            }
-            bsEvalDrop(value);
-            return bsEvalBorrowed(result);
-        }
-        }
-    }
-}
-
-
-BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins)
-{
-    BSEvalCtx ctx;
-    ctx.options = options;
-    ctx.scope = scope;
-    ctx.script = NULL;
-    ctx.statement = NULL;
-    ctx.builtins = builtins;
-    return bsEvalTake(bsEvalExpr(expr, &ctx, options->depth));
-}
-
-
-BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue locals, bool builtins)
-{
-    BSExpr *expr = bsExprFromModel(exprModel);
-    if (expr == NULL) {
+    if (!bsIsInteger(left) || !bsIsInteger(right)) {
         return bsNull();
     }
-    BSScope scope;
-    bsScopeInit(&scope);
-    scope.object = locals;
-    BSEvalCtx ctx;
-    ctx.options = options;
-    ctx.scope = &scope;
-    ctx.script = NULL;
-    ctx.statement = NULL;
-    ctx.builtins = builtins;
-    BSValue result = bsEvalTake(bsEvalExpr(expr, &ctx, options->depth));
-    bsExprFree(expr);
-    return result;
+    int32_t leftInt = bsToInt32(left.u.number);
+    int32_t rightInt = bsToInt32(right.u.number);
+    uint32_t shift = ((uint32_t) rightInt) & 31u;
+    switch (op) {
+    case BS_OP_BAND:
+        return bsNumber((double) (leftInt & rightInt));
+    case BS_OP_BOR:
+        return bsNumber((double) (leftInt | rightInt));
+    case BS_OP_BXOR:
+        return bsNumber((double) (leftInt ^ rightInt));
+    case BS_OP_SHL:
+        return bsNumber((double) (int32_t) ((uint32_t) leftInt << shift));
+    default:
+        return bsNumber((double) (leftInt >> shift));
+    }
 }
 
 
@@ -1007,9 +381,8 @@ static void bsCoverageEnsure(BSScript *script, BSValue coverage)
 }
 
 
-static void bsRecordCoverage(BSScript *script, BSStatement *statement, BSValue coverage)
+static void bsRecordCoverage(BSScript *script, BSValue statement, int line, BSValue coverage)
 {
-    int line = statement->lineNumber;
     if (line <= 0 || script->scriptName.type != BS_STRING) {
         return;
     }
@@ -1036,10 +409,25 @@ static void bsRecordCoverage(BSScript *script, BSStatement *statement, BSValue c
     }
 
     coveredStatement = bsObjectNew();
-    bsObjectSet(coveredStatement, "statement", bsStatementToModel(statement));
+    bsObjectSet(coveredStatement, "statement", bsRetain(statement));
     bsObjectSet(coveredStatement, "count", bsNumber(1));
     bsObjectSet(script->coverageCovered, lineKey, coveredStatement);
     script->coverageCounts[line] = bsObjectValuePtr(coveredStatement, "count", 5);
+}
+
+
+static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, bool hasCoverage,
+                        BSValue coverage)
+{
+    if (!hasCoverage || target == 0) {
+        return;
+    }
+    uint32_t prev = code->inst[target - 1];
+    if (BS_OP(prev) != BS_OP_STMT) {
+        return;
+    }
+    uint32_t index = BS_ARG(prev);
+    bsRecordCoverage(script, code->cover[index], code->coverLines[index], coverage);
 }
 
 
@@ -1056,20 +444,24 @@ static void bsScriptFunctionFree(void *data)
 }
 
 
+static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lineNumber,
+                             BSOptions *options);
+
+
 BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BSScriptFunction *scriptFunction = data;
     BSFunctionDef *def = scriptFunction->def;
+    size_t slotCount = def->code.slotCount;
 
     BSScope scope;
     bsScopeInit(&scope);
-    BSValue slotsInline[64];
-    BSValue *slots = def->slotCount <= 64 ? slotsInline : bsAlloc(def->slotCount * sizeof(BSValue));
+    BSValue slotsInline[BS_SLOTS_INLINE];
+    BSValue *slots = slotCount <= BS_SLOTS_INLINE ? slotsInline : bsAlloc(slotCount * sizeof(BSValue));
     scope.slots = slots;
-    scope.slotCount = def->slotCount;
+    scope.slotCount = slotCount;
 
-    /* Bind the declared arguments, then mark remaining locals unset */
-    size_t ixArgLast = def->argCount - 1;
+    size_t ixArgLast = def->argCount != 0 ? def->argCount - 1 : 0;
     for (size_t ix = 0; ix < def->argCount; ix++) {
         if (def->lastArgArray && ix == ixArgLast) {
             BSValue rest = bsArrayNewCapacity(argCount > ix ? argCount - ix : 0);
@@ -1081,13 +473,12 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
             slots[ix] = ix < argCount ? bsRetain(args[ix]) : bsNull();
         }
     }
-    for (size_t ix = def->argCount; ix < def->slotCount; ix++) {
+    for (size_t ix = def->argCount; ix < slotCount; ix++) {
         slots[ix] = bsUnset();
     }
 
-    BSValue result = bsExecuteStatements(scriptFunction->script, def->statements, def->statementCount,
-                                         options, &scope);
-    for (size_t ix = 0; ix < def->slotCount; ix++) {
+    BSValue result = bsRunCode(&def->code, scriptFunction->script, options, &scope, false);
+    for (size_t ix = 0; ix < slotCount; ix++) {
         if (!BS_IS_UNSET(slots[ix])) {
             bsRelease(slots[ix]);
         }
@@ -1099,272 +490,604 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
 }
 
 
-/*
- * Statement execution
- */
-
-
-static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions *options);
-
-
-BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t statementCount,
-                            BSOptions *options, BSScope *scope)
+static BSValue bsCall(const BSCode *code, size_t callPc, uint8_t op, uint32_t arg, BSValue *args,
+                      size_t argCount, BSScript *script, BSOptions *options, BSScope *scope,
+                      bool builtins, int stmtLine)
 {
-    /* System includes never record coverage and are trusted not to need the statement budget. */
+    BSValue name;
+    BSValue function = bsNull();
+    if (op == BS_OP_CALL_SLOT) {
+        uint32_t slot = arg;
+        if (scope != NULL && scope->slots != NULL && slot < scope->slotCount) {
+            BSValue value = scope->slots[slot];
+            if (!BS_IS_UNSET(value)) {
+                function = value;
+            }
+        }
+        name = slot < code->slotCount ? code->slotNames[slot] : bsNull();
+        if (function.type == BS_NULL && name.type == BS_STRING) {
+            function = bsLookupName(name, options, scope);
+        }
+    } else {
+        uint32_t nameIndex = arg;
+        name = nameIndex < code->constantCount ? code->constants[nameIndex] : bsNull();
+        if (scope != NULL) {
+            if (scope->slots == NULL && scope->object.type == BS_OBJECT) {
+                BSValue found;
+                if (name.type == BS_STRING && bsObjectLookupString(scope->object, name, &found)) {
+                    function = found;
+                }
+            }
+        }
+        if (function.type == BS_NULL && options->globals.type == BS_OBJECT && name.type == BS_STRING) {
+            BSObject *globals = options->globals.u.object;
+            BSCallCache *cache = (code->caches != NULL && callPc < code->cacheCount) ?
+                &code->caches[callPc] : NULL;
+            if (cache != NULL && cache->epoch == options->cacheEpoch &&
+                cache->gen == globals->generation && cache->cached.type != BS_NULL) {
+                function = cache->cached;
+            } else {
+                function = bsObjectGetString(options->globals, name);
+                if (cache != NULL) {
+                    cache->cached = function;
+                    cache->gen = globals->generation;
+                    cache->epoch = options->cacheEpoch;
+                }
+            }
+        }
+    }
+
+    if (function.type == BS_NULL && builtins && name.type == BS_STRING) {
+        function = bsLibraryExpressionFunction(name);
+    }
+
+    if (function.type == BS_FUNCTION) {
+        if (options->depth >= options->depthMax) {
+            bsErrorSetStatement(options, script, stmtLine, "Maximum expression depth exceeded");
+            return bsNull();
+        }
+        options->depth++;
+        BSValue result = bsFunctionInvoke(function, args, argCount, options);
+        options->depth--;
+        if (options->argsError.type == BS_STRING) {
+            if (options->debug && options->logFn != NULL) {
+                const char *scriptName = (script != NULL && script->scriptName.type == BS_STRING) ?
+                    bsStringData(script->scriptName) : "";
+                bsLog(options, "%s:%d: BareScript: Function \"%s\" failed with error: %s", scriptName,
+                      stmtLine, bsStringData(name), bsStringData(options->argsError));
+            }
+            bsAssign(&options->argsError, bsNull());
+        }
+        return result;
+    }
+    if (function.type != BS_NULL) {
+        if (options->debug) {
+            bsLog(options, "BareScript: Function \"%s\" failed with error: not a function",
+                  bsStringData(name));
+        }
+        return bsNull();
+    }
+    bsErrorSetStatement(options, script, stmtLine, "Undefined function \"%s\"",
+                        bsStringData(name));
+    return bsNull();
+}
+
+
+static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lineNumber,
+                             BSOptions *options)
+{
+    bool system = include->system;
+
+    BSValue includeUrl = bsRetain(include->url);
+    if (!system && options->urlFn != NULL) {
+        char *resolved = options->urlFn(bsStringData(includeUrl), options->urlData);
+        bsAssign(&includeUrl, bsStringNew(resolved));
+        free(resolved);
+    }
+
+    BSValue includeKey = system ? bsStringNewFormat("<%s>", bsStringData(includeUrl)) : bsRetain(includeUrl);
+    BSValue includes = bsObjectGet(options->globals, BS_GLOBAL_INCLUDES);
+    if (includes.type != BS_OBJECT) {
+        includes = bsObjectNew();
+        bsObjectSet(options->globals, BS_GLOBAL_INCLUDES, includes);
+    }
+    if (bsValueBoolean(bsObjectGetString(includes, includeKey))) {
+        bsRelease(includeKey);
+        bsRelease(includeUrl);
+        return true;
+    }
+    bsObjectSetString(includes, includeKey, bsBoolean(true));
+    bsRelease(includeKey);
+
+    if (system && bsArrayCount(bsSystemIncludePaths) == 0 &&
+        (bsSystemIncludes.type != BS_OBJECT ||
+         bsObjectGet(bsSystemIncludes, bsStringData(includeUrl)).type != BS_STRING)) {
+        BSScript *cached = bsIncludeScript(bsStringData(includeUrl));
+        if (cached != NULL) {
+            BSValue result = bsRunCode(&cached->code, cached, options, NULL, false);
+            bsRelease(result);
+            bsScriptRelease(cached);
+            bsRelease(includeUrl);
+            if (options->error.type == BS_STRING) {
+                return false; /* GCOV_EXCL_LINE - bundled includes are trusted */
+            }
+            return true;
+        }
+    }
+
+    const char *includeText = NULL;
+    char *includeOwned = NULL;
+    size_t includeSize = 0;
+    if (system) {
+        includeText = bsSystemIncludeGet(bsStringData(includeUrl));
+        if (includeText != NULL) {
+            includeSize = strlen(includeText);
+        }
+    } else if (options->fetchFn != NULL) {
+        BSFetchRequest request;
+        memset(&request, 0, sizeof(request));
+        request.url = bsStringData(includeUrl);
+        request.headers = bsNull();
+        includeOwned = options->fetchFn(&request, &includeSize, options->fetchData);
+        includeText = includeOwned;
+    }
+    if (includeText == NULL) {
+        bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed",
+                            bsStringData(includeUrl));
+        bsRelease(includeUrl);
+        return false;
+    }
+
+    BSScript *includeScript;
+    if (system && includeText[0] == '{') {
+        BSValue model = bsJSONDecode(includeText, includeSize, NULL);
+        includeScript = bsScriptFromModel(model, bsStringData(includeUrl));
+        bsRelease(model);
+        free(includeOwned);
+        if (includeScript == NULL) {
+            bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed",
+                                bsStringData(includeUrl));
+            bsRelease(includeUrl);
+            return false;
+        }
+    } else { /* GCOV_EXCL_LINE - llvm-cov attributes this brace to the JSON-model branch */
+        BSParserError parserError;
+        memset(&parserError, 0, sizeof(parserError));
+        includeScript = bsParseScript(includeText, includeSize, 1, bsStringData(includeUrl),
+                                      &parserError);
+        free(includeOwned);
+        if (includeScript == NULL) {
+            BSValue message = bsRetain(parserError.message);
+            bsErrorSet(options, "%s", bsStringData(message));
+            bsRelease(message);
+            bsParserErrorFree(&parserError);
+            bsRelease(includeUrl);
+            return false;
+        }
+    }
+    includeScript->system = system;
+
+    BSUrlFn savedUrlFn = options->urlFn;
+    void *savedUrlData = options->urlData;
+    void (*savedUrlDataFree)(void *) = options->urlDataFree;
+    options->urlFn = bsUrlFileRelative;
+    options->urlData = bsStrdup(bsStringData(includeUrl));
+    options->urlDataFree = free;
+    BSValue result = bsRunCode(&includeScript->code, includeScript, options, NULL, false);
+    bsRelease(result);
+
+    if (options->logFn != NULL && options->debug && options->error.type != BS_STRING) {
+        BSValue warnings = bsLintScript(includeScript, options->globals);
+        size_t warningCount = bsArrayCount(warnings);
+        if (warningCount != 0) {
+            bsLog(options, "BareScript: Include \"%s\" static analysis... %zu warning%s:",
+                  bsStringData(includeUrl), warningCount, warningCount > 1 ? "s" : "");
+            for (size_t ixWarning = 0; ixWarning < warningCount; ixWarning++) {
+                BSValue warning = bsValueString(bsArrayGet(warnings, ixWarning));
+                bsLog(options, "BareScript: %s", bsStringData(warning));
+                bsRelease(warning);
+            }
+        }
+        bsRelease(warnings);
+    }
+    free(options->urlData);
+    options->urlFn = savedUrlFn;
+    options->urlData = savedUrlData;
+    options->urlDataFree = savedUrlDataFree;
+    bsScriptRelease(includeScript);
+    bsRelease(includeUrl);
+
+    return options->error.type != BS_STRING;
+}
+
+
+BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
+                  bool builtins)
+{
+    BSValue stackInline[BS_STACK_INLINE];
+    BSValue *stack = stackInline;
+    size_t stackCap = BS_STACK_INLINE;
+    size_t sp = 0;
+
+    bool countStatements = script != NULL && !script->system;
     BSValue coverage = bsNull();
     bool hasCoverage = false;
-    bool countStatements = !script->system;
     if (countStatements) {
         coverage = bsObjectGet(options->globals, BS_GLOBAL_COVERAGE);
         hasCoverage = coverage.type == BS_OBJECT && bsValueBoolean(bsObjectGet(coverage, "enabled"));
     }
 
-    BSEvalCtx ctx;
-    ctx.options = options;
-    ctx.scope = scope;
-    ctx.script = script;
-    ctx.builtins = false;
-    ctx.statement = NULL;
+    int stmtLine = 0;
+    size_t pc = 0;
+    const uint32_t *insts = code->inst;
+    size_t count = code->count;
 
-    size_t ixStatement = 0;
-    while (ixStatement < statementCount) {
-        BSStatement *statement = statements[ixStatement];
-        ctx.statement = statement;
+    while (pc < count) {
+        uint32_t inst = insts[pc];
+        uint8_t op = BS_OP(inst);
+        uint32_t arg = BS_ARG(inst);
+        pc++;
 
-        if (countStatements) {
-            options->statementCount++;
-            if (options->maxStatements > 0 && options->statementCount > options->maxStatements) {
-                bsErrorSetStatement(options, script, statement, "Exceeded maximum script statements (%lld)",
-                                    (long long) options->maxStatements);
-                return bsNull();
+        switch (op) {
+        case BS_OP_LOAD_NULL:
+            if (sp == stackCap) {
+                stack = bsStackGrow(stack, stackInline, &stackCap);
             }
-            if (hasCoverage) {
-                bsRecordCoverage(script, statement, coverage);
+            stack[sp++] = bsNull();
+            break;
+
+        case BS_OP_LOAD_TRUE:
+            if (sp == stackCap) {
+                stack = bsStackGrow(stack, stackInline, &stackCap);
             }
+            stack[sp++] = bsBoolean(true);
+            break;
+
+        case BS_OP_LOAD_FALSE:
+            if (sp == stackCap) {
+                stack = bsStackGrow(stack, stackInline, &stackCap);
+            }
+            stack[sp++] = bsBoolean(false);
+            break;
+
+        case BS_OP_LOAD_CONST:
+            if (sp == stackCap) {
+                stack = bsStackGrow(stack, stackInline, &stackCap);
+            }
+            stack[sp++] = bsRetain(code->constants[arg]);
+            break;
+
+        case BS_OP_LOAD_SLOT: {
+            BSValue value = bsNull();
+            if (scope != NULL && scope->slots != NULL && arg < scope->slotCount) {
+                value = scope->slots[arg];
+                if (BS_IS_UNSET(value)) {
+                    value = bsLookupName(code->slotNames[arg], options, scope);
+                }
+            }
+            if (sp == stackCap) {
+                stack = bsStackGrow(stack, stackInline, &stackCap);
+            }
+            stack[sp++] = bsRetain(value);
+            break;
         }
 
-        switch (statement->type) {
-        case BS_STMT_EXPR: {
-            BSEval eval = bsEvalArg(statement->u.expr.expr, &ctx, options->depth);
-            if (statement->u.expr.name.type == BS_STRING) {
-                /*
-                 * A function body always has a slot for every name it assigns, so an assignment
-                 * either targets a slot or - at the script's top level - a global
-                 */
-                BSValue value = bsEvalTake(eval);
-                if (scope != NULL && statement->u.expr.slot >= 0) {
-                    BSValue previous = scope->slots[statement->u.expr.slot];
-                    scope->slots[statement->u.expr.slot] = value;
-                    if (!BS_IS_UNSET(previous)) {
-                        bsRelease(previous);
-                    }
-                } else {
-                    bsObjectSetString(options->globals, statement->u.expr.name, value);
+        case BS_OP_LOAD_NAME:
+            if (sp == stackCap) {
+                stack = bsStackGrow(stack, stackInline, &stackCap);
+            }
+            stack[sp++] = bsRetain(bsLookupName(code->constants[arg], options, scope));
+            break;
+
+        case BS_OP_STORE_SLOT: {
+            BSValue value = sp != 0 ? stack[--sp] : bsNull();
+            if (scope != NULL && scope->slots != NULL && arg < scope->slotCount) {
+                BSValue previous = scope->slots[arg];
+                scope->slots[arg] = value;
+                if (!BS_IS_UNSET(previous)) {
+                    bsRelease(previous);
                 }
+            } else { /* GCOV_EXCL_START - STORE_SLOT is only emitted in a function body */
+                bsRelease(value);
+            } /* GCOV_EXCL_STOP */
+            break;
+        }
+
+        case BS_OP_STORE_NAME: {
+            BSValue value = sp != 0 ? stack[--sp] : bsNull();
+            bsObjectSetString(options->globals, code->constants[arg], value);
+            break;
+        }
+
+        case BS_OP_POP:
+            if (sp != 0) {
+                bsRelease(stack[--sp]);
+            }
+            break;
+
+        case BS_OP_DUP:
+            if (sp == stackCap) {
+                stack = bsStackGrow(stack, stackInline, &stackCap);
+            }
+            stack[sp] = sp != 0 ? bsRetain(stack[sp - 1]) : bsNull();
+            sp++;
+            break;
+
+        case BS_OP_JUMP:
+            bsJumpCover(code, arg, script, hasCoverage, coverage);
+            pc = arg;
+            break;
+
+        case BS_OP_JUMP_FALSE: {
+            BSValue value = sp != 0 ? stack[--sp] : bsNull();
+            bool take = !bsValueBoolean(value);
+            bsRelease(value);
+            if (take) {
+                bsJumpCover(code, arg, script, hasCoverage, coverage);
+                pc = arg;
+            }
+            break;
+        }
+
+        case BS_OP_JUMP_TRUE: {
+            BSValue value = sp != 0 ? stack[--sp] : bsNull();
+            bool take = bsValueBoolean(value);
+            bsRelease(value);
+            if (take) {
+                bsJumpCover(code, arg, script, hasCoverage, coverage);
+                pc = arg;
+            }
+            break;
+        }
+
+        case BS_OP_JUMP_UNDEF:
+            bsErrorSetStatement(options, script, stmtLine, "Unknown jump label \"%s\"",
+                                bsStringData(code->constants[arg]));
+            goto fail;
+
+        case BS_OP_RETURN: {
+            BSValue result = sp != 0 ? stack[--sp] : bsNull();
+            while (sp != 0) { /* GCOV_EXCL_START - emit leaves one value for return */
+                bsRelease(stack[--sp]);
+            } /* GCOV_EXCL_STOP */
+            if (stack != stackInline) {
+                free(stack);
+            }
+            return result;
+        }
+
+        case BS_OP_CALL_NAME:
+        case BS_OP_CALL_SLOT: {
+            size_t callPc = pc - 1;
+            size_t argCount = BS_ARG(insts[pc++]);
+            BSValue *callArgs = argCount != 0 ? stack + (sp - argCount) : NULL;
+            BSValue result = bsCall(code, callPc, op, arg, callArgs, argCount, script, options, scope,
+                                    builtins, stmtLine);
+            for (size_t ix = 0; ix < argCount; ix++) {
+                bsRelease(callArgs[ix]);
+            }
+            sp -= argCount;
+            if (sp == stackCap) {
+                stack = bsStackGrow(stack, stackInline, &stackCap);
+            }
+            stack[sp++] = result;
+            break;
+        }
+
+        case BS_OP_ADD: {
+            BSValue right = stack[--sp];
+            BSValue left = stack[--sp];
+            if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
+                stack[sp++] = bsArithmetic(left.u.number + right.u.number);
             } else {
-                bsEvalDrop(eval);
+                stack[sp++] = bsAddSlow(left, right);
+                bsRelease(left);
+                bsRelease(right);
             }
             break;
         }
 
-        case BS_STMT_JUMP: {
-            bool jump = true;
-            if (statement->u.jump.expr != NULL) {
-                BSEval eval = bsEvalArg(statement->u.jump.expr, &ctx, options->depth);
-                jump = bsValueBoolean(eval.value);
-                bsEvalDrop(eval);
-            }
-            if (jump) {
-                if (statement->u.jump.index < 0) {
-                    bsErrorSetStatement(options, script, statement, "Unknown jump label \"%s\"",
-                                        bsStringData(statement->u.jump.label));
-                    return bsNull();
-                }
-                ixStatement = (size_t) statement->u.jump.index;
-                if (hasCoverage) {
-                    bsRecordCoverage(script, statements[ixStatement], coverage);
-                }
+        case BS_OP_SUB: {
+            BSValue right = stack[--sp];
+            BSValue left = stack[--sp];
+            if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
+                stack[sp++] = bsArithmetic(left.u.number - right.u.number);
+            } else if (left.type == BS_DATETIME && right.type == BS_DATETIME) {
+                stack[sp++] = bsNumber((double) (left.u.datetime - right.u.datetime));
+            } else {
+                stack[sp++] = bsNull();
+                bsRelease(left);
+                bsRelease(right);
             }
             break;
         }
 
-        case BS_STMT_RETURN: {
-            return statement->u.ret.expr != NULL ?
-                bsEvalTake(bsEvalArg(statement->u.ret.expr, &ctx, options->depth)) : bsNull();
+        case BS_OP_MUL: {
+            BSValue right = stack[--sp];
+            BSValue left = stack[--sp];
+            stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
+                bsArithmetic(left.u.number * right.u.number) : bsNull();
+            bsRelease(left);
+            bsRelease(right);
+            break;
         }
 
-        case BS_STMT_FUNCTION: {
+        case BS_OP_DIV: {
+            BSValue right = stack[--sp];
+            BSValue left = stack[--sp];
+            stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
+                bsArithmetic(left.u.number / right.u.number) : bsNull();
+            bsRelease(left);
+            bsRelease(right);
+            break;
+        }
+
+        case BS_OP_MOD: {
+            BSValue right = stack[--sp];
+            BSValue left = stack[--sp];
+            stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
+                bsArithmetic(fmod(left.u.number, right.u.number)) : bsNull();
+            bsRelease(left);
+            bsRelease(right);
+            break;
+        }
+
+        case BS_OP_POW: {
+            BSValue right = stack[--sp];
+            BSValue left = stack[--sp];
+            stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
+                bsArithmetic(pow(left.u.number, right.u.number)) : bsNull();
+            bsRelease(left);
+            bsRelease(right);
+            break;
+        }
+
+        case BS_OP_EQ:
+        case BS_OP_NE:
+        case BS_OP_LT:
+        case BS_OP_LE:
+        case BS_OP_GT:
+        case BS_OP_GE: {
+            BSValue right = stack[--sp];
+            BSValue left = stack[--sp];
+            int cmp;
+            if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
+                double ln = left.u.number, rn = right.u.number;
+                cmp = ln < rn ? -1 : (ln > rn ? 1 : 0);
+            } else {
+                cmp = bsValueCompare(left, right);
+                bsRelease(left);
+                bsRelease(right);
+            }
+            bool result = false;
+            switch (op) {
+            case BS_OP_EQ:
+                result = cmp == 0;
+                break;
+            case BS_OP_NE:
+                result = cmp != 0;
+                break;
+            case BS_OP_LT:
+                result = cmp < 0;
+                break;
+            case BS_OP_LE:
+                result = cmp <= 0;
+                break;
+            case BS_OP_GT:
+                result = cmp > 0;
+                break;
+            default:
+                result = cmp >= 0;
+                break;
+            }
+            stack[sp++] = bsBoolean(result);
+            break;
+        }
+
+        case BS_OP_BAND:
+        case BS_OP_BOR:
+        case BS_OP_BXOR:
+        case BS_OP_SHL:
+        case BS_OP_SHR: {
+            BSValue right = stack[--sp];
+            BSValue left = stack[--sp];
+            stack[sp++] = bsBitwise(op, left, right);
+            bsRelease(left);
+            bsRelease(right);
+            break;
+        }
+
+        case BS_OP_NEG: {
+            BSValue value = stack[--sp];
+            stack[sp++] = value.type == BS_NUMBER ? bsNumber(-value.u.number) : bsNull();
+            bsRelease(value);
+            break;
+        }
+
+        case BS_OP_NOT: {
+            BSValue value = stack[--sp];
+            stack[sp++] = bsBoolean(!bsValueBoolean(value));
+            bsRelease(value);
+            break;
+        }
+
+        case BS_OP_BNOT: {
+            BSValue value = stack[--sp];
+            stack[sp++] = bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull();
+            bsRelease(value);
+            break;
+        }
+
+        case BS_OP_FUNCTION: {
+            BSFunctionDef *def = script->functions[arg];
             BSScriptFunction *scriptFunction = bsAlloc(sizeof(BSScriptFunction));
             scriptFunction->script = bsScriptRetain(script);
-            scriptFunction->def = statement->u.function.def;
-            BSValue function = bsFunctionNew(bsStringData(statement->u.function.def->name),
-                                             bsScriptFunctionCall, scriptFunction, bsScriptFunctionFree);
-            bsObjectSetString(options->globals, statement->u.function.def->name, function);
+            scriptFunction->def = def;
+            BSValue function = bsFunctionNew(bsStringData(def->name), bsScriptFunctionCall,
+                                             scriptFunction, bsScriptFunctionFree);
+            bsObjectSetString(options->globals, def->name, function);
             break;
         }
 
-        case BS_STMT_LABEL:
-            break;
-
-        default:
-            if (!bsExecuteInclude(script, statement, options)) {
-                return bsNull();
+        case BS_OP_INCLUDE:
+            if (!bsExecuteInclude(script, &code->includes[arg], stmtLine, options)) {
+                goto fail;
             }
             break;
-        }
 
-        if (options->error.type == BS_STRING) {
-            return bsNull();
+        case BS_OP_STMT:
+            if (options->error.type == BS_STRING) {
+                goto fail;
+            }
+            stmtLine = code->coverLines[arg];
+            if (countStatements) {
+                options->statementCount++;
+                if (options->maxStatements > 0 && options->statementCount > options->maxStatements) {
+                    bsErrorSetStatement(options, script, stmtLine,
+                                        "Exceeded maximum script statements (%lld)",
+                                        (long long) options->maxStatements);
+                    goto fail;
+                }
+                if (hasCoverage) {
+                    bsRecordCoverage(script, code->cover[arg], stmtLine, coverage);
+                }
+            }
+            break;
+
+        default: /* GCOV_EXCL_LINE - emit never produces an unknown opcode */
+            break; /* GCOV_EXCL_LINE */
         }
-        ixStatement++;
     }
 
+fail:
+    while (sp != 0) { /* GCOV_EXCL_START - errors are raised at statement boundaries */
+        bsRelease(stack[--sp]);
+    } /* GCOV_EXCL_STOP */
+    if (stack != stackInline) { /* GCOV_EXCL_START */
+        free(stack);
+    } /* GCOV_EXCL_STOP */
     return bsNull();
 }
 
 
-static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions *options)
+BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins)
 {
-    for (size_t ix = 0; ix < statement->u.include.count; ix++) {
-        const BSInclude *include = &statement->u.include.includes[ix];
-        bool system = include->system;
+    return bsRunCode(&expr->code, NULL, options, scope, builtins);
+}
 
-        /* Fix up the non-system include URL */
-        BSValue includeUrl = bsRetain(include->url);
-        if (!system && options->urlFn != NULL) {
-            char *resolved = options->urlFn(bsStringData(includeUrl), options->urlData);
-            bsAssign(&includeUrl, bsStringNew(resolved));
-            free(resolved);
-        }
 
-        /* System include keys are bracketed so they cannot collide with local include URLs */
-        BSValue includeKey = system ? bsStringNewFormat("<%s>", bsStringData(includeUrl)) : bsRetain(includeUrl);
-        BSValue includes = bsObjectGet(options->globals, BS_GLOBAL_INCLUDES);
-        if (includes.type != BS_OBJECT) {
-            includes = bsObjectNew();
-            bsObjectSet(options->globals, BS_GLOBAL_INCLUDES, includes);
-        }
-        if (bsValueBoolean(bsObjectGetString(includes, includeKey))) {
-            bsRelease(includeKey);
-            bsRelease(includeUrl);
-            continue;
-        }
-        bsObjectSetString(includes, includeKey, bsBoolean(true));
-        bsRelease(includeKey);
-
-        /* Bundled includes reuse a cached compiled script unless a register/path override exists. */
-        if (system && bsArrayCount(bsSystemIncludePaths) == 0 &&
-            (bsSystemIncludes.type != BS_OBJECT ||
-             bsObjectGet(bsSystemIncludes, bsStringData(includeUrl)).type != BS_STRING)) {
-            BSScript *cached = bsIncludeScript(bsStringData(includeUrl));
-            if (cached != NULL) {
-                BSValue result = bsExecuteStatements(cached, cached->statements, cached->statementCount,
-                                                     options, NULL);
-                bsRelease(result);
-                bsScriptRelease(cached);
-                bsRelease(includeUrl);
-                if (options->error.type == BS_STRING) {
-                    return false; /* GCOV_EXCL_LINE - bundled includes are trusted */
-                }
-                continue;
-            }
-        }
-
-        /* Get the include script text. Bundled models are decoded in place; do not copy. */
-        const char *includeText = NULL;
-        char *includeOwned = NULL;
-        size_t includeSize = 0;
-        if (system) {
-            includeText = bsSystemIncludeGet(bsStringData(includeUrl));
-            if (includeText != NULL) {
-                includeSize = strlen(includeText);
-            }
-        } else if (options->fetchFn != NULL) {
-            BSFetchRequest request;
-            memset(&request, 0, sizeof(request));
-            request.url = bsStringData(includeUrl);
-            request.headers = bsNull();
-            includeOwned = options->fetchFn(&request, &includeSize, options->fetchData);
-            includeText = includeOwned;
-        }
-        if (includeText == NULL) {
-            bsErrorSetStatement(options, script, statement, "Include of \"%s\" failed", bsStringData(includeUrl));
-            bsRelease(includeUrl);
-            return false;
-        }
-
-        /*
-         * Load the include script. A system include starting with "{" is the parser-compiled JSON
-         * script model - every bundled include is embedded pre-compiled, so including one costs a
-         * JSON parse rather than a run of the BareScript parser.
-         */
-        BSScript *includeScript;
-        if (system && includeText[0] == '{') {
-            BSValue model = bsJSONDecode(includeText, includeSize, NULL);
-            includeScript = bsScriptFromModel(model, bsStringData(includeUrl));
-            bsRelease(model);
-            free(includeOwned);
-            if (includeScript == NULL) {
-                bsErrorSetStatement(options, script, statement, "Include of \"%s\" failed",
-                                    bsStringData(includeUrl));
-                bsRelease(includeUrl);
-                return false;
-            }
-        } else { /* GCOV_EXCL_LINE - llvm-cov attributes this brace to the JSON-model branch */
-            BSParserError parserError;
-            memset(&parserError, 0, sizeof(parserError));
-            includeScript = bsParseScript(includeText, includeSize, 1, bsStringData(includeUrl),
-                                          &parserError);
-            free(includeOwned);
-            if (includeScript == NULL) {
-                BSValue message = bsRetain(parserError.message);
-                bsErrorSet(options, "%s", bsStringData(message));
-                bsRelease(message);
-                bsParserErrorFree(&parserError);
-                bsRelease(includeUrl);
-                return false;
-            }
-        }
-        includeScript->system = system;
-
-        /* Execute the include script with URLs relative to the include */
-        BSUrlFn savedUrlFn = options->urlFn;
-        void *savedUrlData = options->urlData;
-        void (*savedUrlDataFree)(void *) = options->urlDataFree;
-        options->urlFn = bsUrlFileRelative;
-        options->urlData = bsStrdup(bsStringData(includeUrl));
-        options->urlDataFree = free;
-        BSValue result = bsExecuteStatements(includeScript, includeScript->statements,
-                                             includeScript->statementCount, options, NULL);
-        bsRelease(result);
-
-        /* Run the linter over the include in debug mode */
-        if (options->logFn != NULL && options->debug && options->error.type != BS_STRING) {
-            BSValue warnings = bsLintScript(includeScript, options->globals);
-            size_t warningCount = bsArrayCount(warnings);
-            if (warningCount != 0) {
-                bsLog(options, "BareScript: Include \"%s\" static analysis... %zu warning%s:",
-                      bsStringData(includeUrl), warningCount, warningCount > 1 ? "s" : "");
-                for (size_t ixWarning = 0; ixWarning < warningCount; ixWarning++) {
-                    BSValue warning = bsValueString(bsArrayGet(warnings, ixWarning));
-                    bsLog(options, "BareScript: %s", bsStringData(warning));
-                    bsRelease(warning);
-                }
-            }
-            bsRelease(warnings);
-        }
-        free(options->urlData);
-        options->urlFn = savedUrlFn;
-        options->urlData = savedUrlData;
-        options->urlDataFree = savedUrlDataFree;
-        bsScriptRelease(includeScript);
-        bsRelease(includeUrl);
-
-        if (options->error.type == BS_STRING) {
-            return false;
-        }
+BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue locals, bool builtins)
+{
+    BSExpr *expr = bsExprFromModel(exprModel);
+    if (expr == NULL) {
+        return bsNull();
     }
-    return true;
+    BSScope scope;
+    bsScopeInit(&scope);
+    scope.object = locals;
+    BSValue result = bsRunCode(&expr->code, NULL, options, &scope, builtins);
+    bsExprFree(expr);
+    return result;
 }
 
 
@@ -1372,5 +1095,7 @@ BSValue bsExecuteScript(BSScript *script, BSOptions *options)
 {
     bsLibraryGlobals(options->globals);
     options->statementCount = 0;
-    return bsExecuteStatements(script, script->statements, script->statementCount, options, NULL);
+    options->cacheEpoch = ++bsCacheEpoch;
+    return bsRunCode(&script->code, script, options, NULL, false);
 }
+
