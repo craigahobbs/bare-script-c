@@ -1056,8 +1056,8 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
 
     BSScope scope;
     bsScopeInit(&scope);
-    BSValue slotsInline[16];
-    BSValue *slots = def->slotCount <= 16 ? slotsInline : bsAlloc(def->slotCount * sizeof(BSValue));
+    BSValue slotsInline[64];
+    BSValue *slots = def->slotCount <= 64 ? slotsInline : bsAlloc(def->slotCount * sizeof(BSValue));
     scope.slots = slots;
     scope.slotCount = def->slotCount;
 

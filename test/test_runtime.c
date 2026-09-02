@@ -236,6 +236,18 @@ TEST(runtime_functions)
     /* Function-local jump labels */
     ASSERT_VALUE(bsTestExecute("function f():\n    i = 0\n    loop:\n    i = i + 1\n"
                                "    jumpif (i < 3) loop\n    return i\nendfunction\nreturn f()"), "3");
+
+    /* More locals than the inline slot buffer (64) allocate a heap slot array */
+    {
+        char text[4096];
+        size_t n = 0;
+        n += (size_t) snprintf(text + n, sizeof(text) - n, "function f():\n");
+        for (int ix = 0; ix < 70; ix++) {
+            n += (size_t) snprintf(text + n, sizeof(text) - n, "    v%d = %d\n", ix, ix);
+        }
+        n += (size_t) snprintf(text + n, sizeof(text) - n, "    return v69\nendfunction\nreturn f()");
+        ASSERT_VALUE(bsTestExecute(text), "69");
+    }
 }
 
 
