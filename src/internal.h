@@ -89,17 +89,11 @@ static inline BSValue bsUnset(void)
 }
 
 
-/* Run a compiled bytecode chunk. Returns an owned value. */
-BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
-                  bool builtins);
 
 /* Drop the saved parser model from a cached system include (not linted or covered) */
 void bsScriptDropModel(BSScript *script);
 
-/* Free a function definition */
-void bsFunctionDefFree(BSFunctionDef *def);
 
-void bsCodeFree(BSCode *code);
 
 
 /* Bytecode: instruction is (opcode << 24) | 24-bit argument */
@@ -257,6 +251,9 @@ int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc);
 /* The value type names, indexed by BSType */
 extern const char *const bsTypeNames[BS_REGEX + 1];
 
+
+/* True if no two of a regex's capture groups share a name */
+bool bsRegexGroupNamesUnique(BSValue regex);
 
 /* A capture group's interned name string value (borrowed), or a null value if the group is unnamed */
 BSValue bsRegexGroupNameValue(BSValue regex, size_t group);

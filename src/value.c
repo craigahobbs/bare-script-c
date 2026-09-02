@@ -341,16 +341,25 @@ BSValue bsStringNewAscii(const char *text, size_t size)
 }
 
 
+/* Complete a string whose bytes are in place: count its code points and note if it is ASCII */
+static BSValue bsStringFinish(BSString *string, size_t size)
+{
+    if (bsUtf8IsAscii(string->data, size)) {
+        string->length = (uint32_t) size;
+        string->flags |= BS_STR_ASCII;
+    } else {
+        size_t length = bsUTF8Length(string->data, size);
+        string->length = (uint32_t) (length != SIZE_MAX ? length : size);
+    }
+    return bsStringTake(string);
+}
+
+
 BSValue bsStringNewSize(const char *text, size_t size)
 {
-    if (bsUtf8IsAscii(text, size)) {
-        return bsStringNewAscii(text, size);
-    }
     BSString *string = bsStringAlloc(size);
     memcpy(string->data, text, size);
-    size_t length = bsUTF8Length(string->data, size);
-    string->length = (uint32_t) (length != SIZE_MAX ? length : size);
-    return bsStringTake(string);
+    return bsStringFinish(string, size);
 }
 
 
@@ -383,14 +392,7 @@ BSValue bsStringNewVFormat(const char *format, va_list args)
 
     BSString *string = bsStringAlloc((size_t) size);
     vsnprintf(string->data, (size_t) size + 1, format, args);
-    if (bsUtf8IsAscii(string->data, (size_t) size)) {
-        string->length = (uint32_t) size;
-        string->flags |= BS_STR_ASCII;
-        return bsStringTake(string);
-    }
-    size_t length = bsUTF8Length(string->data, (size_t) size);
-    string->length = (uint32_t) (length != SIZE_MAX ? length : (size_t) size);
-    return bsStringTake(string);
+    return bsStringFinish(string, (size_t) size);
 }
 
 
@@ -1039,6 +1041,20 @@ static uint32_t bsInternHash(const char *data, size_t size, bool *ascii)
     return hash;
 }
 
+/* Store an interned string in the first empty slot of its probe sequence */
+static void bsInternPut(BSString *string, uint32_t hash)
+{
+    for (size_t probe = 0;; probe++) {
+        size_t slot = (hash + probe) & bsInternMask;
+        if (bsInternSlots[slot].string == NULL) {
+            bsInternSlots[slot].string = string;
+            bsInternSlots[slot].hash = hash;
+            return;
+        }
+    }
+}
+
+
 static void bsInternGrow(void)
 {
     size_t oldCapacity = bsInternMask + 1;
@@ -1052,15 +1068,7 @@ static void bsInternGrow(void)
         if (string == NULL) {
             continue;
         }
-        uint32_t hash = old[ix].hash;
-        for (size_t probe = 0;; probe++) {
-            size_t slot = (hash + probe) & bsInternMask;
-            if (bsInternSlots[slot].string == NULL) {
-                bsInternSlots[slot].string = string;
-                bsInternSlots[slot].hash = hash;
-                break;
-            }
-        }
+        bsInternPut(string, old[ix].hash);
     }
     if (bsInternHeap) {
         free(old);
@@ -1109,15 +1117,9 @@ BSValue bsStringIntern(const char *data, size_t size)
     BSValue value = ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
     value.u.string->flags |= BS_STR_INTERNED;
     value.u.string->refcount++;
-    for (size_t probe = 0;; probe++) {
-        size_t slot = (hash + probe) & bsInternMask;
-        if (bsInternSlots[slot].string == NULL) {
-            bsInternSlots[slot].string = value.u.string;
-            bsInternSlots[slot].hash = hash;
-            bsInternCount++;
-            return value;
-        }
-    }
+    bsInternPut(value.u.string, hash);
+    bsInternCount++;
+    return value;
 }
 
 BSValue bsStringInternExisting(const char *data, size_t size)
@@ -1176,12 +1178,11 @@ static uint32_t bsPtrHash(const BSString *key)
     return (uint32_t) x;
 }
 
-static void bsObjectLookupPut(BSObject *object, BSObjectNode *node);
 static void bsObjectLookupGrow(BSObject *object);
 
 static void bsObjectLookupPut(BSObject *object, BSObjectNode *node)
 {
-    if (object->u.tree.lookup == NULL || node->key == NULL || (node->key->flags & BS_STR_INTERNED) == 0) {
+    if (object->u.tree.lookup == NULL || (node->key->flags & BS_STR_INTERNED) == 0) {
         return;
     }
     if ((object->count + 1) * 2 > object->u.tree.lookupMask + 1) {
@@ -1224,38 +1225,33 @@ static void bsObjectLookupGrow(BSObject *object)
     }
 }
 
-static void bsObjectLookupDel(BSObject *object, BSString *interned)
+/* The table slot holding the node keyed by "interned", or the empty slot its probe sequence ends at */
+static BSObjectNode **bsObjectLookupSlot(const BSObject *object, BSString *interned)
 {
-    if (object->u.tree.lookup == NULL || interned == NULL) {
-        return;
-    }
     uint32_t hash = bsPtrHash(interned);
     for (uint32_t probe = 0;; probe++) {
         uint32_t slot = (hash + probe) & object->u.tree.lookupMask;
         BSObjectNode *entry = object->u.tree.lookup[slot];
-        if (entry == BS_OBJECT_LOOKUP_EMPTY) {
-            return;
+        if (entry == BS_OBJECT_LOOKUP_EMPTY || (entry != BS_OBJECT_LOOKUP_TOMB && entry->key == interned)) {
+            return &object->u.tree.lookup[slot];
         }
-        if (entry != BS_OBJECT_LOOKUP_TOMB && entry->key == interned) {
-            object->u.tree.lookup[slot] = BS_OBJECT_LOOKUP_TOMB;
-            return;
+    }
+}
+
+static void bsObjectLookupDel(BSObject *object, BSString *interned)
+{
+    if (object->u.tree.lookup != NULL) {
+        BSObjectNode **slot = bsObjectLookupSlot(object, interned);
+        if (*slot != BS_OBJECT_LOOKUP_EMPTY) {
+            *slot = BS_OBJECT_LOOKUP_TOMB;
         }
     }
 }
 
 static BSObjectNode *bsObjectLookupGet(const BSObject *object, BSString *interned)
 {
-    uint32_t hash = bsPtrHash(interned);
-    for (uint32_t probe = 0;; probe++) {
-        uint32_t slot = (hash + probe) & object->u.tree.lookupMask;
-        BSObjectNode *entry = object->u.tree.lookup[slot];
-        if (entry == BS_OBJECT_LOOKUP_EMPTY) {
-            return NULL;
-        }
-        if (entry != BS_OBJECT_LOOKUP_TOMB && entry->key == interned) {
-            return entry;
-        }
-    }
+    BSObjectNode *entry = *bsObjectLookupSlot(object, interned);
+    return entry != BS_OBJECT_LOOKUP_EMPTY ? entry : NULL;
 }
 
 
@@ -1297,13 +1293,25 @@ static int bsObjectPackedFind(const BSObject *object, const char *key, size_t si
 }
 
 
+/* Resolve a key to its interned string, if it has one, and then to that string's bytes */
+static BSString *bsInternResolve(const char **key, size_t *size, BSString *interned)
+{
+    if (interned == NULL && *size <= BS_INTERN_MAX) {
+        interned = bsInternLookup(*key, *size);
+    }
+    if (interned != NULL) {
+        *key = interned->data;
+        *size = interned->size;
+    }
+    return interned;
+}
+
+
 static BSValue *bsObjectFindValue(BSObject *object, const char *key, size_t size,
                                   BSString *interned)
 {
+    interned = bsInternResolve(&key, &size, interned);
     if (object->packed) {
-        if (interned == NULL && size <= BS_INTERN_MAX) {
-            interned = bsInternLookup(key, size);
-        }
         int found = bsObjectPackedFind(object, key, size, interned);
         return found >= 0 ? &object->u.small.values[found] : NULL;
     }
@@ -1369,8 +1377,6 @@ static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *obj
 }
 
 
-/* Link an existing list node into the treap. Does not touch the insertion-order list. */
-
 /* Rotate a newly linked node up its insertion path until the heap property holds again */
 static void bsObjectTreapBubbleUp(BSObject *object, BSObjectNode *const *path, const signed char *dirs,
                                   int depth)
@@ -1394,6 +1400,41 @@ static void bsObjectTreapBubbleUp(BSObject *object, BSObjectNode *const *path, c
     }
 }
 
+/*
+ * Descend the treap to a key, recording the path taken. Returns the node with that key, or NULL
+ * with "*attach" pointing at the empty child where a node for it belongs.
+ */
+static BSObjectNode *bsObjectTreapDescend(BSObject *object, const char *keyData, size_t keySize,
+                                          BSObjectNode **path, signed char *dirs, int *depth,
+                                          BSObjectNode ***attach)
+{
+    int d = 0;
+    BSObjectNode *node = object->u.tree.root;
+    for (;;) {
+        int compare = bsKeyCompare(node->key, keyData, keySize);
+        if (compare == 0) {
+            return node;
+        }
+        /* GCOV_EXCL_START */
+        if (d >= 128) {
+            abort();
+        }
+        /* GCOV_EXCL_STOP */
+        path[d] = node;
+        dirs[d] = compare > 0 ? -1 : 1;
+        d++;
+        BSObjectNode **child = compare > 0 ? &node->left : &node->right;
+        if (*child == NULL) {
+            *attach = child;
+            *depth = d;
+            return NULL;
+        }
+        node = *child;
+    }
+}
+
+
+/* Link an existing list node into the treap. Does not touch the insertion-order list. */
 static void bsObjectTreapLink(BSObject *object, BSObjectNode *created)
 {
     created->left = NULL;
@@ -1402,41 +1443,16 @@ static void bsObjectTreapLink(BSObject *object, BSObjectNode *created)
         object->u.tree.root = created;
         return;
     }
-
-    const char *keyData = created->key->data;
-    size_t keySize = created->key->size;
     BSObjectNode *path[128];
     signed char dirs[128];
-    int depth = 0;
-    BSObjectNode *node = object->u.tree.root;
-    for (;;) {
-        int compare = bsKeyCompare(node->key, keyData, keySize);
-        /* GCOV_EXCL_START */
-        if (compare == 0 || depth >= 128) {
-            abort();
-        }
-        /* GCOV_EXCL_STOP */
-        path[depth] = node;
-        if (compare > 0) {
-            dirs[depth] = -1;
-            if (node->left == NULL) {
-                node->left = created;
-                depth++;
-                break;
-            }
-            node = node->left;
-        } else {
-            dirs[depth] = 1;
-            if (node->right == NULL) {
-                node->right = created;
-                depth++;
-                break;
-            }
-            node = node->right;
-        }
-        depth++;
+    int depth;
+    BSObjectNode **attach;
+    /* GCOV_EXCL_START */
+    if (bsObjectTreapDescend(object, created->key->data, created->key->size, path, dirs, &depth, &attach) != NULL) {
+        abort();
     }
-
+    /* GCOV_EXCL_STOP */
+    *attach = created;
     bsObjectTreapBubbleUp(object, path, dirs, depth);
 }
 
@@ -1461,45 +1477,18 @@ static void bsObjectBuildTreap(BSObject *object)
 
 static void bsObjectTreapInsert(BSObject *object, BSValue key, BSValue item)
 {
-    const char *keyData = bsStringData(key);
-    size_t keySize = bsStringSize(key);
     BSObjectNode *path[128];
     signed char dirs[128];
-    int depth = 0;
-    BSObjectNode *node = object->u.tree.root;
-    for (;;) {
-        int compare = bsKeyCompare(node->key, keyData, keySize);
-        if (compare == 0) {
-            bsReleaseInline(node->value);
-            node->value = item;
-            return;
-        }
-        /* GCOV_EXCL_START */
-        if (depth >= 128) {
-            abort();
-        }
-        /* GCOV_EXCL_STOP */
-        path[depth] = node;
-        if (compare > 0) {
-            dirs[depth] = -1;
-            if (node->left == NULL) {
-                node->left = bsObjectNodeCreate(key, item, object);
-                depth++;
-                break;
-            }
-            node = node->left;
-        } else {
-            dirs[depth] = 1;
-            if (node->right == NULL) {
-                node->right = bsObjectNodeCreate(key, item, object);
-                depth++;
-                break;
-            }
-            node = node->right;
-        }
-        depth++;
+    int depth;
+    BSObjectNode **attach;
+    BSObjectNode *node = bsObjectTreapDescend(object, bsStringData(key), bsStringSize(key), path, dirs,
+                                              &depth, &attach);
+    if (node != NULL) {
+        bsReleaseInline(node->value);
+        node->value = item;
+        return;
     }
-
+    *attach = bsObjectNodeCreate(key, item, object);
     bsObjectTreapBubbleUp(object, path, dirs, depth);
 }
 
@@ -1616,16 +1605,7 @@ static BSObjectNode *bsObjectFind(BSObjectNode *node, const char *key, size_t si
 static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t size,
                                      BSString *interned)
 {
-    if (interned == NULL && size <= BS_INTERN_MAX) {
-        interned = bsInternLookup(key, size);
-        if (interned != NULL) {
-            key = interned->data;
-            size = interned->size;
-        }
-    } else if (interned != NULL) {
-        key = interned->data;
-        size = interned->size;
-    }
+    interned = bsInternResolve(&key, &size, interned);
     if (object->count > BS_OBJECT_SMALL) {
         if (interned != NULL) {
             BSObjectNode *node = bsObjectLookupGet(object, interned);
@@ -1810,14 +1790,7 @@ bool bsObjectDelete(BSValue value, const char *key)
 {
     BSObject *object = value.u.object;
     size_t size = strlen(key);
-    BSString *interned = NULL;
-    if (size <= BS_INTERN_MAX) {
-        interned = bsInternLookup(key, size);
-        if (interned != NULL) {
-            key = interned->data;
-            size = interned->size;
-        }
-    }
+    BSString *interned = bsInternResolve(&key, &size, NULL);
     if (object->packed) {
         int found = bsObjectPackedFind(object, key, size, interned);
         if (found < 0) {
@@ -2081,16 +2054,29 @@ void bsAssign(BSValue *target, BSValue value)
  */
 
 
+/* Copy formatted text into the caller's buffer, NUL-terminated and truncated as snprintf would */
+static size_t bsNumberEmit(char *buffer, size_t bufferSize, const char *text, size_t size)
+{
+    if (bufferSize != 0) {
+        size_t copy = size < bufferSize - 1 ? size : bufferSize - 1;
+        memcpy(buffer, text, copy);
+        buffer[copy] = '\0';
+    }
+    return size;
+}
+
+
 size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
 {
     if (isnan(number)) {
-        return (size_t) snprintf(buffer, bufferSize, "NaN");
+        return bsNumberEmit(buffer, bufferSize, "NaN", 3);
     }
     if (isinf(number)) {
-        return (size_t) snprintf(buffer, bufferSize, number > 0 ? "Infinity" : "-Infinity");
+        return number > 0 ? bsNumberEmit(buffer, bufferSize, "Infinity", 8) :
+            bsNumberEmit(buffer, bufferSize, "-Infinity", 9);
     }
     if (number == 0) {
-        return (size_t) snprintf(buffer, bufferSize, "0");
+        return bsNumberEmit(buffer, bufferSize, "0", 1);
     }
 
     /*
@@ -2098,24 +2084,18 @@ size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
      * a digit loop, skipping the round-trip search below entirely
      */
     if (number == trunc(number) && number > -1e15 && number < 1e15) {
-        char integerText[24];
-        size_t integerSize = 0;
+        char text[24];
+        size_t begin = sizeof(text);
         bool negative = number < 0;
         uint64_t magnitude = (uint64_t) (negative ? -number : number);
         do {
-            integerText[integerSize++] = (char) ('0' + (magnitude % 10));
+            text[--begin] = (char) ('0' + (magnitude % 10));
             magnitude /= 10;
         } while (magnitude != 0);
-        char text[26];
-        size_t size = 0;
         if (negative) {
-            text[size++] = '-';
+            text[--begin] = '-';
         }
-        while (integerSize != 0) {
-            text[size++] = integerText[--integerSize];
-        }
-        text[size] = '\0';
-        return (size_t) snprintf(buffer, bufferSize, "%s", text);
+        return bsNumberEmit(buffer, bufferSize, text + begin, sizeof(text) - begin);
     }
 
     /*
@@ -2209,7 +2189,7 @@ size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
         size += (size_t) snprintf(text + size, sizeof(text) - size, "%d", n - 1 >= 0 ? n - 1 : -(n - 1));
     }
     text[size] = '\0';
-    return (size_t) snprintf(buffer, bufferSize, "%s", text);
+    return bsNumberEmit(buffer, bufferSize, text, strlen(text));
 }
 
 

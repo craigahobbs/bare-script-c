@@ -393,6 +393,8 @@ TEST(regex_compile_errors)
     bsTestRegexError("(?<\\w>a)", "unknown extension ?<\\w at position 1");
     bsTestRegexError("a**", "multiple repeat at position 2");
     bsTestRegexError("a{2}{3}", "multiple repeat at position 4");
+    bsTestRegexError("[a-\\b]", "bad character range a-\\b at position 1");
+    bsTestRegexError("(a)\\99999999999", "invalid group reference 2147483647 at position 4");
     bsTestRegexError("a*?*", "multiple repeat at position 3");
     bsTestRegexError("\\999", "invalid group reference 999 at position 1");
 

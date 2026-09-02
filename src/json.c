@@ -25,10 +25,17 @@
  */
 
 
-/* The bytes an encoded string escapes: the control characters, the quote, and the backslash */
-static bool bsJSONEscaped(unsigned char ch)
+/* The escape for a byte an encoded string escapes - the control characters, the quote, and the
+ * backslash - or NULL for a byte that stands as it is */
+static const char *bsJSONEscape(unsigned char ch)
 {
-    return ch < 0x20 || ch == '"' || ch == '\\';
+    static const char *const controls[0x20] = {
+        "\\u0000", "\\u0001", "\\u0002", "\\u0003", "\\u0004", "\\u0005", "\\u0006", "\\u0007",
+        "\\b", "\\t", "\\n", "\\u000b", "\\f", "\\r", "\\u000e", "\\u000f",
+        "\\u0010", "\\u0011", "\\u0012", "\\u0013", "\\u0014", "\\u0015", "\\u0016", "\\u0017",
+        "\\u0018", "\\u0019", "\\u001a", "\\u001b", "\\u001c", "\\u001d", "\\u001e", "\\u001f"
+    };
+    return ch < 0x20 ? controls[ch] : ch == '"' ? "\\\"" : ch == '\\' ? "\\\\" : NULL;
 }
 
 
@@ -39,38 +46,9 @@ static void bsJSONEncodeString(BSStringBuilder *sb, BSValue value)
     bsSBAppendChar(sb, '"');
     size_t begin = 0;
     for (size_t ix = 0; ix < size; ix++) {
-        unsigned char ch = (unsigned char) data[ix];
-        if (!bsJSONEscaped(ch)) {
+        const char *escape = bsJSONEscape((unsigned char) data[ix]);
+        if (escape == NULL) {
             continue;
-        }
-        const char *escape;
-        char buffer[8];
-        switch (ch) {
-        case '"':
-            escape = "\\\"";
-            break;
-        case '\\':
-            escape = "\\\\";
-            break;
-        case '\n':
-            escape = "\\n";
-            break;
-        case '\r':
-            escape = "\\r";
-            break;
-        case '\t':
-            escape = "\\t";
-            break;
-        case '\b':
-            escape = "\\b";
-            break;
-        case '\f':
-            escape = "\\f";
-            break;
-        default:
-            snprintf(buffer, sizeof(buffer), "\\u%04x", ch);
-            escape = buffer;
-            break;
         }
         bsSBAppend(sb, data + begin, ix - begin);
         bsSBAppendString(sb, escape);
@@ -291,6 +269,12 @@ static bool bsJSONHex4(BSJSONParser *parser, uint32_t *result)
 }
 
 
+/* The character each single-character escape stands for */
+static const char bsJSONUnescape[256] = {
+    ['"'] = '"', ['\\'] = '\\', ['/'] = '/', ['b'] = '\b', ['f'] = '\f', ['n'] = '\n', ['r'] = '\r', ['t'] = '\t'
+};
+
+
 static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, int asKey)
 {
     size_t begin = parser->offset;
@@ -346,32 +330,9 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, int asKey)
             return bsJSONError(parser, "Unterminated string starting at", begin);
         }
         char escape = parser->text[parser->offset++];
-        switch (escape) {
-        case '"':
-            bsSBAppendChar(&sb, '"');
-            break;
-        case '\\':
-            bsSBAppendChar(&sb, '\\');
-            break;
-        case '/':
-            bsSBAppendChar(&sb, '/');
-            break;
-        case 'b':
-            bsSBAppendChar(&sb, '\b');
-            break;
-        case 'f':
-            bsSBAppendChar(&sb, '\f');
-            break;
-        case 'n':
-            bsSBAppendChar(&sb, '\n');
-            break;
-        case 'r':
-            bsSBAppendChar(&sb, '\r');
-            break;
-        case 't':
-            bsSBAppendChar(&sb, '\t');
-            break;
-        case 'u': {
+        if (bsJSONUnescape[(unsigned char) escape] != '\0') {
+            bsSBAppendChar(&sb, bsJSONUnescape[(unsigned char) escape]);
+        } else if (escape == 'u') {
             uint32_t codePoint;
             if (!bsJSONHex4(parser, &codePoint)) {
                 bsSBFree(&sb);
@@ -396,9 +357,7 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, int asKey)
                 codePoint = 0xFFFD;
             }
             bsSBAppend(&sb, utf8, bsUTF8Encode(codePoint, utf8));
-            break;
-        }
-        default:
+        } else {
             bsSBFree(&sb);
             return bsJSONError(parser, "Invalid \\escape", escapeOffset);
         }
@@ -415,6 +374,32 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, int asKey)
 
 
 static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result);
+
+
+/*
+ * After a container item: the container's closing character ends it (1), a comma continues it
+ * (0), and anything else - or a comma before the close - is an error, set on the parser (-1)
+ */
+static int bsJSONSeparator(BSJSONParser *parser, char close, const char *trailingComma)
+{
+    bsJSONSkipSpace(parser);
+    if (parser->offset < parser->size && parser->text[parser->offset] == close) {
+        parser->offset++;
+        return 1;
+    }
+    if (parser->offset >= parser->size || parser->text[parser->offset] != ',') {
+        bsJSONError(parser, "Expecting ',' delimiter", parser->offset);
+        return -1;
+    }
+    size_t commaOffset = parser->offset;
+    parser->offset++;
+    bsJSONSkipSpace(parser);
+    if (parser->offset < parser->size && parser->text[parser->offset] == close) {
+        bsJSONError(parser, trailingComma, commaOffset);
+        return -1;
+    }
+    return 0;
+}
 
 
 static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
@@ -435,21 +420,13 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
             return false;
         }
         bsArrayPush(array, item);
-        bsJSONSkipSpace(parser);
-        if (parser->offset < parser->size && parser->text[parser->offset] == ']') {
-            parser->offset++;
+        int separator = bsJSONSeparator(parser, ']', "Illegal trailing comma before end of array");
+        if (separator < 0) {
+            bsRelease(array);
+            return false;
+        }
+        if (separator > 0) {
             break;
-        }
-        if (parser->offset >= parser->size || parser->text[parser->offset] != ',') {
-            bsRelease(array);
-            return bsJSONError(parser, "Expecting ',' delimiter", parser->offset);
-        }
-        size_t commaOffset = parser->offset;
-        parser->offset++;
-        bsJSONSkipSpace(parser);
-        if (parser->offset < parser->size && parser->text[parser->offset] == ']') {
-            bsRelease(array);
-            return bsJSONError(parser, "Illegal trailing comma before end of array", commaOffset);
         }
     }
     *result = array;
@@ -489,21 +466,13 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
         }
         bsObjectSetString(object, key, item);
         bsRelease(key);
-        bsJSONSkipSpace(parser);
-        if (parser->offset < parser->size && parser->text[parser->offset] == '}') {
-            parser->offset++;
+        int separator = bsJSONSeparator(parser, '}', "Illegal trailing comma before end of object");
+        if (separator < 0) {
+            bsRelease(object);
+            return false;
+        }
+        if (separator > 0) {
             break;
-        }
-        if (parser->offset >= parser->size || parser->text[parser->offset] != ',') {
-            bsRelease(object);
-            return bsJSONError(parser, "Expecting ',' delimiter", parser->offset);
-        }
-        size_t commaOffset = parser->offset;
-        parser->offset++;
-        bsJSONSkipSpace(parser);
-        if (parser->offset < parser->size && parser->text[parser->offset] == '}') {
-            bsRelease(object);
-            return bsJSONError(parser, "Illegal trailing comma before end of object", commaOffset);
         }
     }
     *result = object;
@@ -651,30 +620,21 @@ BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t
     bsJSONInternModelKeys();
     BSJSONParser parser = {text, size, 0, NULL, 0};
     BSValue result;
-    if (!bsJSONDecodeValue(&parser, 0, &result)) {
-        if (error != NULL) {
-            *error = parser.error;
+    bool decoded = bsJSONDecodeValue(&parser, 0, &result);
+    if (decoded) {
+        bsJSONSkipSpace(&parser);
+        if (parser.offset != parser.size) {
+            bsRelease(result);
+            decoded = bsJSONError(&parser, "Extra data", parser.offset);
         }
-        if (errorOffset != NULL) {
-            *errorOffset = parser.errorOffset;
-        }
-        return bsNull();
-    }
-    bsJSONSkipSpace(&parser);
-    if (parser.offset != parser.size) {
-        bsRelease(result);
-        if (error != NULL) {
-            *error = "Extra data";
-        }
-        if (errorOffset != NULL) {
-            *errorOffset = parser.offset;
-        }
-        return bsNull();
     }
     if (error != NULL) {
-        *error = NULL;
+        *error = decoded ? NULL : parser.error;
     }
-    return result;
+    if (errorOffset != NULL && !decoded) {
+        *errorOffset = parser.errorOffset;
+    }
+    return decoded ? result : bsNull();
 }
 
 

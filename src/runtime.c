@@ -18,6 +18,11 @@
 #include "internal.h"
 
 
+/* Run a compiled bytecode chunk. Returns an owned value. */
+static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
+                         bool builtins);
+
+
 /* The maximum expression evaluation recursion depth */
 #define BS_DEPTH_MAX 500
 
@@ -944,7 +949,7 @@ includeFailed:
     BS_NEXT()
 
 
-BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
+static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
                   bool builtins)
 {
     if (options->error.type == BS_STRING) {

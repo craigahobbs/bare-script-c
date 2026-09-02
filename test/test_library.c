@@ -861,6 +861,14 @@ TEST(library_direct_call)
 }
 
 
+TEST(library_regex_duplicate_names)
+{
+    /* A name reused across alternatives keys its last definition */
+    bsTestExpr("objectGet(regexMatch(regexNew('(?<a>x)|(?<a>y)'), 'y'), 'groups')",
+               "{\"0\":\"y\",\"1\":null,\"2\":\"y\",\"a\":\"y\"}");
+}
+
+
 TEST(library_regex_many_groups)
 {
     /* A match with more than ten capture groups exercises the multi-digit group keys */

@@ -69,7 +69,7 @@ void bsScriptDropModel(BSScript *script)
 }
 
 
-void bsCodeFree(BSCode *code)
+static void bsCodeFree(BSCode *code)
 {
     free(code->inst);
     for (size_t ix = 0; ix < code->constantCount; ix++) {
@@ -103,7 +103,7 @@ void bsExprFree(BSExpr *expr)
 }
 
 
-void bsFunctionDefFree(BSFunctionDef *def)
+static void bsFunctionDefFree(BSFunctionDef *def)
 {
     bsRelease(def->name);
     for (size_t ix = 0; ix < def->argCount; ix++) {

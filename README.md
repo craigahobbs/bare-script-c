@@ -92,7 +92,7 @@ of PGO - because the value system is small functions across translation unit bou
 `bsRetain`, `bsRelease`, and the object treap's comparisons are called from everywhere and can
 only be inlined across the library at link time.
 
-Under PGO and LTO, `-O2` emits 178 KB of text against `-O3`'s 198 KB at the same speed. Also
+Under PGO and LTO, `-O2` emits about 10% less text than `-O3` at the same speed. Also
 measured on the same suite, and not used: `-fno-stack-protector` (3% less text, 1.6% fewer instructions, no measurable time - not
 worth a mitigation), `-fomit-frame-pointer`, `-flto=thin`, `-mcpu=native`, and disabling the
 code generator's tail merging to keep every threaded-dispatch jump distinct (8% more text, no
@@ -492,13 +492,15 @@ BareScript's regex functions expose:
 | Flags      | `i` (case-insensitive), `m` (multi-line), `s` (dot matches newline)         |
 
 Matching is over Unicode code points, so match indexes agree with the string library's indexes.
-ASCII subjects match the original bytes without widening to a `uint32_t` buffer. Four properties
+ASCII subjects match the original bytes without widening to a `uint32_t` buffer. Five properties
 keep it well-behaved on real input - which matters more here than in the reference implementations,
 because the parser is itself regex-driven:
 
 - A pattern whose every alternative begins with `^` only tries the search start position. Every
   pattern the parser uses is anchored this way, so this is the difference between a linear and a
   quadratic scan of each line it parses.
+- An unanchored pattern computes the set of code points a match can begin with, and the search
+  skips every position whose code point is not in it.
 
 - A quantifier whose body matches exactly one code point - `\s*`, `[0-9]+`, `.*`, the overwhelming
   majority of real patterns - matches **iteratively**, so the C stack stays bounded on long
@@ -623,7 +625,7 @@ the release build:
 | urlDecode, ms per 2000 runs                   |     28 |     20 |
 | urlEncode, ms per 2000 runs                   |     21 |     15 |
 
-The shared library is 453 KB, of which 202 KB is the compressed include library and 178 KB is
+The shared library is 469 KB, of which 202 KB is the compressed include library and 188 KB is
 code.
 
 ## Compatibility

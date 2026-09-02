@@ -138,7 +138,8 @@ struct BSRegex {
     RxFirstSet first;
     RxNode *root;
     size_t groupCount;
-    BSValue *groupNames; /* groupCount entries, or NULL if no group is named */
+    BSValue *groupNames;
+    bool uniqueNames; /* no two groups share a name, so a match model can append each */ /* groupCount entries, or NULL if no group is named */
     RxNodeChunk *chunks;
 };
 
@@ -161,9 +162,10 @@ typedef struct RxCompiler {
 } RxCompiler;
 
 
-static bool rxIsNameChar(char ch)
+/* The word characters - a name's characters, and "\\w" */
+static bool rxIsWordCode(uint32_t ch)
 {
-    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_';
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
 }
 
 
@@ -180,7 +182,7 @@ static bool rxIsTranslated(const char *pattern, size_t size, size_t ix)
     }
     size_t nameIx = ix + 3;
     size_t end = nameIx;
-    while (end < size && rxIsNameChar(pattern[end])) {
+    while (end < size && rxIsWordCode((unsigned char) pattern[end])) {
         end++;
     }
     return end != nameIx && end < size && pattern[end] == '>';
@@ -328,6 +330,44 @@ static bool rxHex(RxCompiler *compiler, size_t count, char kind, size_t escapeOf
 
 
 /*
+ * Append a digit to a "{n,m}" count, saturating at INT_MAX. JavaScript accepts any count, and a
+ * count that large never matches anyway; CPython raises an OverflowError the Python
+ * implementation does not catch.
+ */
+static int rxRepeatDigit(int count, char digit)
+{
+    return count > (INT_MAX - 9) / 10 ? INT_MAX : count * 10 + (digit - '0');
+}
+
+
+/* Accumulate the decimal digits at the offset into "*count", saturating; returns how many there were */
+static size_t rxDigits(RxCompiler *compiler, int *count)
+{
+    size_t digits = 0;
+    *count = 0;
+    while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] >= '0' &&
+           compiler->pattern[compiler->offset] <= '9') {
+        *count = rxRepeatDigit(*count, compiler->pattern[compiler->offset]);
+        compiler->offset++;
+        digits++;
+    }
+    return digits;
+}
+
+
+/* Step past the backslash at "escapeOffset": an escape needs a character after it */
+static bool rxEscapeBegin(RxCompiler *compiler, size_t escapeOffset)
+{
+    compiler->offset = escapeOffset + 1;
+    if (compiler->offset >= compiler->size) {
+        rxError(compiler, escapeOffset, "bad escape (end of pattern)");
+        return false;
+    }
+    return true;
+}
+
+
+/*
  * Parse an escape sequence. Returns the predefined class flag, or zero for a literal code point,
  * which is stored in "*literal". On failure, sets compiler->failed, which the caller checks.
  */
@@ -383,6 +423,32 @@ static RxNode *rxParseAlternation(RxCompiler *compiler);
 static void rxClassFinish(RxNode *node, unsigned flags);
 
 
+/*
+ * Parse one bound of a character class range: a code point, into "*code", or a predefined class
+ * escape, into "*classes". "\\b" is a backspace inside a class. False on a compile error.
+ */
+static bool rxClassBound(RxCompiler *compiler, uint32_t *code, unsigned *classes)
+{
+    *classes = 0;
+    if (compiler->pattern[compiler->offset] == '\\') {
+        if (!rxEscapeBegin(compiler, compiler->offset)) {
+            return false;
+        }
+        if (compiler->pattern[compiler->offset] == 'b') {
+            compiler->offset++;
+            *code = '\b';
+            return true;
+        }
+        *classes = rxEscape(compiler, code);
+        return !compiler->failed;
+    }
+    size_t codeSize;
+    *code = bsUTF8Decode(compiler->pattern, compiler->size, compiler->offset, &codeSize);
+    compiler->offset += codeSize;
+    return true;
+}
+
+
 static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
 {
     RxNode *node = rxNodeNew(compiler, RX_CLASS);
@@ -403,30 +469,13 @@ static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
         /* The range's low bound */
         size_t lowOffset = compiler->offset;
         uint32_t lo;
-        if (ch == '\\') {
-            compiler->offset++;
-            if (compiler->offset >= compiler->size) {
-                rxError(compiler, compiler->offset - 1, "bad escape (end of pattern)");
-                return NULL;
-            }
-            /* "\b" is a backspace inside a character class */
-            if (compiler->pattern[compiler->offset] == 'b') {
-                compiler->offset++;
-                lo = '\b';
-            } else {
-                unsigned classes = rxEscape(compiler, &lo);
-                if (compiler->failed) {
-                    return NULL;
-                }
-                if (classes != 0) {
-                    node->u.cls.classes |= classes;
-                    continue;
-                }
-            }
-        } else {
-            size_t codeSize;
-            lo = bsUTF8Decode(compiler->pattern, compiler->size, compiler->offset, &codeSize);
-            compiler->offset += codeSize;
+        unsigned classes;
+        if (!rxClassBound(compiler, &lo, &classes)) {
+            return NULL;
+        }
+        if (classes != 0) {
+            node->u.cls.classes |= classes;
+            continue;
         }
 
         /* The optional range's high bound */
@@ -436,25 +485,10 @@ static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
             compiler->pattern[compiler->offset + 1] != ']') {
             compiler->offset++;
             size_t highOffset = compiler->offset;
-            char next = compiler->pattern[compiler->offset];
-            bool badRange = false;
-            if (next == '\\') {
-                compiler->offset++;
-                if (compiler->offset >= compiler->size) {
-                    rxError(compiler, compiler->offset - 1, "bad escape (end of pattern)");
-                    return NULL;
-                }
-                unsigned classes = rxEscape(compiler, &hi);
-                if (compiler->failed) {
-                    return NULL;
-                }
-                badRange = (classes != 0);
-            } else {
-                size_t codeSize;
-                hi = bsUTF8Decode(compiler->pattern, compiler->size, compiler->offset, &codeSize);
-                compiler->offset += codeSize;
+            if (!rxClassBound(compiler, &hi, &classes)) {
+                return NULL;
             }
-            if (badRange || hi < lo) {
+            if (classes != 0 || hi < lo) {
                 rxError(compiler, lowOffset, "bad character range %.*s-%.*s",
                         (int) (lowEnd - lowOffset), compiler->pattern + lowOffset,
                         (int) (compiler->offset - highOffset), compiler->pattern + highOffset);
@@ -474,7 +508,7 @@ static bool rxParseName(RxCompiler *compiler, BSValue *name)
     size_t begin = compiler->offset;
     while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] != '>') {
         char ch = compiler->pattern[compiler->offset];
-        if (!rxIsNameChar(ch)) {
+        if (!rxIsWordCode((unsigned char) ch)) {
             return false;
         }
         compiler->offset++;
@@ -605,9 +639,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
 
     if (ch == '\\') {
         size_t escapeOffset = compiler->offset;
-        compiler->offset++;
-        if (compiler->offset >= compiler->size) {
-            rxError(compiler, escapeOffset, "bad escape (end of pattern)");
+        if (!rxEscapeBegin(compiler, escapeOffset)) {
             return NULL;
         }
         char escape = compiler->pattern[compiler->offset];
@@ -621,18 +653,14 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         /* A numbered backreference */
         if (escape >= '1' && escape <= '9') {
             size_t digitOffset = compiler->offset;
-            size_t group = 0;
-            while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] >= '0' &&
-                   compiler->pattern[compiler->offset] <= '9') {
-                group = group * 10 + (size_t) (compiler->pattern[compiler->offset] - '0');
-                compiler->offset++;
-            }
+            int group;
+            rxDigits(compiler, &group);
             if (group >= BS_REGEX_GROUPS_MAX) {
-                rxError(compiler, digitOffset, "invalid group reference %zu", group);
+                rxError(compiler, digitOffset, "invalid group reference %d", group);
                 return NULL;
             }
             RxNode *node = rxNodeNew(compiler, RX_BACKREF);
-            node->u.groupIndex = group;
+            node->u.groupIndex = (size_t) group;
             return node;
         }
 
@@ -704,16 +732,6 @@ static bool rxIsSimple(const RxNode *node)
 
 
 /*
- * Append a digit to a "{n,m}" count, saturating at INT_MAX. JavaScript accepts any count, and a
- * count that large never matches anyway; CPython raises an OverflowError the Python
- * implementation does not catch.
- */
-static int rxRepeatDigit(int count, char digit)
-{
-    return count > (INT_MAX - 9) / 10 ? INT_MAX : count * 10 + (digit - '0');
-}
-
-/*
  * Match a quantifier, consuming it on success
  *
  * "*", "+", "?", and the counted forms "{n}", "{n,}", "{n,m}" - a "{" that is not a counted
@@ -740,30 +758,14 @@ static bool rxMatchQuantifier(RxCompiler *compiler, int *min, int *max, size_t *
     size_t save = compiler->offset;
     compiler->offset++;
     *digitOffset = compiler->offset;
-    size_t digits = 0;
-    *min = 0;
-    while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] >= '0' &&
-           compiler->pattern[compiler->offset] <= '9') {
-        *min = rxRepeatDigit(*min, compiler->pattern[compiler->offset]);
-        compiler->offset++;
-        digits++;
-    }
-    if (digits == 0) {
+    if (rxDigits(compiler, min) == 0) {
         compiler->offset = save;
         return false;
     }
     *max = *min;
     if (compiler->offset < compiler->size && compiler->pattern[compiler->offset] == ',') {
         compiler->offset++;
-        size_t maxDigits = 0;
-        *max = 0;
-        while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] >= '0' &&
-               compiler->pattern[compiler->offset] <= '9') {
-            *max = rxRepeatDigit(*max, compiler->pattern[compiler->offset]);
-            compiler->offset++;
-            maxDigits++;
-        }
-        if (maxDigits == 0) {
+        if (rxDigits(compiler, max) == 0) {
             *max = -1;
         }
     }
@@ -889,10 +891,7 @@ static size_t rxLengthAdd(size_t left, size_t right)
 
 static size_t rxLengthMul(size_t length, int count)
 {
-    if (length == RX_LENGTH_MAX || count < 0) {
-        return length == 0 ? 0 : RX_LENGTH_MAX;
-    }
-    return length * (size_t) count;
+    return length == RX_LENGTH_MAX ? RX_LENGTH_MAX : length * (size_t) count;
 }
 
 
@@ -1081,6 +1080,7 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
     regex->flags = flags;
     regex->anchored = false;
     regex->firstUsable = false;
+    regex->uniqueNames = false;
     memset(&regex->first, 0, sizeof(regex->first));
     regex->root = NULL;
     regex->groupCount = 1;
@@ -1122,8 +1122,8 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
          * matches after a newline. The parser's patterns are all anchored, so this is the
          * difference between a linear and a quadratic scan over every line it parses.
          */
-        if ((flags & BS_REGEX_MULTILINE) == 0 && regex->root->kind == RX_ALT) {
-            regex->anchored = regex->root->u.alt.count != 0;
+        if ((flags & BS_REGEX_MULTILINE) == 0) {
+            regex->anchored = true;
             for (size_t ix = 0; ix < regex->root->u.alt.count; ix++) {
                 const RxNode *branch = regex->root->u.alt.branches[ix];
                 if (branch == NULL || branch->kind != RX_BOL) {
@@ -1149,6 +1149,15 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         if (named) {
             regex->groupNames = bsAlloc(regex->groupCount * sizeof(BSValue));
             memcpy(regex->groupNames, compiler.groupNames, regex->groupCount * sizeof(BSValue));
+            regex->uniqueNames = true;
+            for (size_t ix = 0; ix < regex->groupCount && regex->uniqueNames; ix++) {
+                for (size_t jx = 0; jx < ix; jx++) {
+                    if (regex->groupNames[ix].type == BS_STRING && regex->groupNames[jx].type == BS_STRING &&
+                        bsValueCompare(regex->groupNames[ix], regex->groupNames[jx]) == 0) {
+                        regex->uniqueNames = false;
+                    }
+                }
+            }
         }
     }
     if (compiler.failed) {
@@ -1177,6 +1186,12 @@ void bsRegexRelease(BSValue value)
     if (--value.u.regex->refcount == 0) {
         bsRegexFree(value.u.regex);
     }
+}
+
+
+bool bsRegexGroupNamesUnique(BSValue regex)
+{
+    return regex.u.regex->uniqueNames;
 }
 
 
@@ -1275,12 +1290,6 @@ static void rxTrailUnwind(RxState *state, size_t mark)
         state->match->groups[entry->group] = entry->span;
         state->match->matched[entry->group] = entry->matched;
     }
-}
-
-
-static bool rxIsWordCode(uint32_t ch)
-{
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
 }
 
 
@@ -1580,13 +1589,11 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
 
     /* Atom sequences already loop in one frame; do not charge depth/steps per atom. */
     if (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS) {
-        bool matched = true;
         if (state->codes == NULL) {
             while (node != NULL &&
                    (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS)) {
                 if (!rxMatchOneByte(state, node, pos)) {
-                    matched = false;
-                    break;
+                    return false;
                 }
                 pos++;
                 node = node->next;
@@ -1595,14 +1602,13 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
             while (node != NULL &&
                    (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS)) {
                 if (!rxMatchOne(state, node, pos)) {
-                    matched = false;
-                    break;
+                    return false;
                 }
                 pos++;
                 node = node->next;
             }
         }
-        return matched && rxMatchNode(state, node, cont, pos);
+        return rxMatchNode(state, node, cont, pos);
     }
 
     if (++state->depth > RX_DEPTH_MAX || ++state->steps > RX_STEPS_MAX) {
@@ -1818,7 +1824,6 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     state.length = subject->length;
     state.flags = compiled->flags;
     state.match = match;
-    state.end = 0;
     state.trail = state.trailInline;
     state.trailCapacity = sizeof(state.trailInline) / sizeof(state.trailInline[0]);
 
