@@ -374,6 +374,7 @@ TEST(library_regex)
     bsTestExpr("regexMatchAll('x', 'abc')", "null");
     bsTestExpr("regexMatch(regexNew('(?<name>b)'), 'abc')",
                "{\"groups\":{\"0\":\"b\",\"1\":\"b\",\"name\":\"b\"},\"index\":1,\"input\":\"abc\"}");
+    bsTestExpr("objectGet(objectGet(regexMatch(regexNew('(a*)b'), 'b'), 'groups'), '1')", "\"\"");
     bsTestExpr("regexReplace(regexNew('(\\\\w+) (\\\\w+)'), 'John Smith', '$2, $1')", "\"Smith, John\"");
     bsTestExpr("regexReplace(regexNew('(?<a>x)'), 'axb', '[$<a>]')", "\"a[x]b\"");
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$$')", "\"a$b\"");
@@ -817,6 +818,17 @@ TEST(library_direct_call)
     args[0] = bsNumber(0);
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("systemBoolean"), args, 1, options), "false");
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("systemType"), args, 1, options), "\"number\"");
+
+    BSValue re = bsRegexNew("b", 1, 0, NULL, 0);
+    BSValue abc = bsStringNew("abc");
+    args[0] = re;
+    args[1] = abc;
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("regexMatch"), args, 2, options),
+                 "{\"groups\":{\"0\":\"b\"},\"index\":1,\"input\":\"abc\"}");
+    ASSERT_VALUE(bsFunctionInvoke(bsLibraryScriptFunction("regexMatch"), args, 2, options),
+                 "{\"groups\":{\"0\":\"b\"},\"index\":1,\"input\":\"abc\"}");
+    bsRelease(re);
+    bsRelease(abc);
 
     bsRelease(array);
     bsRelease(object);

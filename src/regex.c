@@ -102,6 +102,16 @@ struct RxNode {
 };
 
 
+/* Nodes are allocated in chunks so a typical pattern is one malloc instead of one per node */
+#define RX_CHUNK_NODES 32
+
+typedef struct RxNodeChunk {
+    struct RxNodeChunk *next;
+    RxNode nodes[RX_CHUNK_NODES];
+    size_t used;
+} RxNodeChunk;
+
+
 /*
  * The set of code points a match can begin with
  *
@@ -127,10 +137,8 @@ struct BSRegex {
     RxFirstSet first;
     RxNode *root;
     size_t groupCount;
-    BSValue groupNames[BS_REGEX_GROUPS_MAX];
-    RxNode **nodes;
-    size_t nodeCount;
-    size_t nodeCapacity;
+    BSValue *groupNames; /* groupCount entries, or NULL if no group is named */
+    RxNodeChunk *chunks;
 };
 
 
@@ -148,6 +156,7 @@ typedef struct RxCompiler {
     char *error;      /* the caller's message buffer, empty until a failure */
     size_t errorSize;
     bool failed;
+    BSValue groupNames[BS_REGEX_GROUPS_MAX];
 } RxCompiler;
 
 
@@ -249,14 +258,16 @@ static uint32_t rxSwapCase(uint32_t ch)
 static RxNode *rxNodeNew(RxCompiler *compiler, RxKind kind)
 {
     BSRegex *regex = compiler->regex;
-    if (regex->nodeCount == regex->nodeCapacity) {
-        regex->nodeCapacity = regex->nodeCapacity != 0 ? regex->nodeCapacity * 2 : 16;
-        regex->nodes = bsRealloc(regex->nodes, regex->nodeCapacity * sizeof(RxNode *));
+    RxNodeChunk *chunk = regex->chunks;
+    if (chunk == NULL || chunk->used == RX_CHUNK_NODES) {
+        chunk = bsAlloc(sizeof(RxNodeChunk));
+        chunk->next = regex->chunks;
+        chunk->used = 0;
+        regex->chunks = chunk;
     }
-    RxNode *node = bsAlloc(sizeof(RxNode));
+    RxNode *node = &chunk->nodes[chunk->used++];
     memset(node, 0, sizeof(RxNode));
     node->kind = kind;
-    regex->nodes[regex->nodeCount++] = node;
     return node;
 }
 
@@ -474,7 +485,7 @@ static bool rxParseName(RxCompiler *compiler, BSValue *name)
     if (compiler->offset >= compiler->size || compiler->offset == begin) {
         return false;
     }
-    *name = bsStringNewSize(compiler->pattern + begin, compiler->offset - begin);
+    *name = bsStringIntern(compiler->pattern + begin, compiler->offset - begin);
     compiler->offset++;
     return true;
 }
@@ -543,7 +554,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
                 return NULL;
             }
             group = compiler->regex->groupCount++;
-            compiler->regex->groupNames[group] = name;
+            compiler->groupNames[group] = name;
         }
 
         RxNode *sub = rxParseAlternation(compiler);
@@ -644,8 +655,8 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
             }
             size_t group = 0;
             for (size_t ix = 1; ix < compiler->regex->groupCount; ix++) {
-                if (compiler->regex->groupNames[ix].type == BS_STRING &&
-                    bsValueCompare(compiler->regex->groupNames[ix], name) == 0) {
+                if (compiler->groupNames[ix].type == BS_STRING &&
+                    bsValueCompare(compiler->groupNames[ix], name) == 0) {
                     group = ix;
                     break;
                 }
@@ -1026,18 +1037,25 @@ static bool rxFirstSet(const RxNode *node, unsigned flags, RxFirstSet *set)
 
 static void bsRegexFree(BSRegex *regex)
 {
-    for (size_t ix = 0; ix < regex->nodeCount; ix++) {
-        RxNode *node = regex->nodes[ix];
-        if (node->kind == RX_CLASS) {
-            free(node->u.cls.ranges);
-        } else if (node->kind == RX_ALT) {
-            free(node->u.alt.branches);
+    RxNodeChunk *chunk = regex->chunks;
+    while (chunk != NULL) {
+        for (size_t ix = 0; ix < chunk->used; ix++) {
+            RxNode *node = &chunk->nodes[ix];
+            if (node->kind == RX_CLASS) {
+                free(node->u.cls.ranges);
+            } else if (node->kind == RX_ALT) {
+                free(node->u.alt.branches);
+            }
         }
-        free(node);
+        RxNodeChunk *next = chunk->next;
+        free(chunk);
+        chunk = next;
     }
-    free(regex->nodes);
-    for (size_t ix = 0; ix < regex->groupCount; ix++) {
-        bsRelease(regex->groupNames[ix]);
+    if (regex->groupNames != NULL) {
+        for (size_t ix = 0; ix < regex->groupCount; ix++) {
+            bsRelease(regex->groupNames[ix]);
+        }
+        free(regex->groupNames);
     }
     bsRelease(regex->pattern);
     free(regex);
@@ -1059,24 +1077,30 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
     memset(&regex->first, 0, sizeof(regex->first));
     regex->root = NULL;
     regex->groupCount = 1;
-    regex->nodes = NULL;
-    regex->nodeCount = 0;
-    regex->nodeCapacity = 0;
-    for (size_t ix = 0; ix < BS_REGEX_GROUPS_MAX; ix++) {
-        regex->groupNames[ix] = bsNull();
-    }
+    regex->groupNames = NULL;
+    regex->chunks = NULL;
 
-    RxCompiler compiler = {pattern, patternSize, 0, flags, regex, error, errorSize, false};
+    RxCompiler compiler;
+    memset(&compiler, 0, sizeof(compiler));
+    compiler.pattern = pattern;
+    compiler.size = patternSize;
+    compiler.offset = 0;
+    compiler.flags = flags;
+    compiler.regex = regex;
+    compiler.error = error;
+    compiler.errorSize = errorSize;
     regex->root = rxParseAlternation(&compiler);
     if (!compiler.failed && compiler.offset != patternSize) {
         rxError(&compiler, compiler.offset, "unbalanced parenthesis");
     }
     if (!compiler.failed) {
         /* A group's close node continues where the group itself continues */
-        for (size_t ix = 0; ix < regex->nodeCount; ix++) {
-            RxNode *node = regex->nodes[ix];
-            if (node->kind == RX_GROUP) {
-                node->u.group.close->next = node->next;
+        for (RxNodeChunk *chunk = regex->chunks; chunk != NULL; chunk = chunk->next) {
+            for (size_t ix = 0; ix < chunk->used; ix++) {
+                RxNode *node = &chunk->nodes[ix];
+                if (node->kind == RX_GROUP) {
+                    node->u.group.close->next = node->next;
+                }
             }
         }
 
@@ -1103,14 +1127,32 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         }
 
         /* Bound each lookbehind's scan by its sub-pattern's match length */
-        for (size_t ix = 0; ix < regex->nodeCount; ix++) {
-            RxNode *node = regex->nodes[ix];
-            if (node->kind == RX_LOOKBEHIND) {
-                rxNodeLength(node->u.look.sub, &node->u.look.minLength, &node->u.look.maxLength);
+        for (RxNodeChunk *chunk = regex->chunks; chunk != NULL; chunk = chunk->next) {
+            for (size_t ix = 0; ix < chunk->used; ix++) {
+                RxNode *node = &chunk->nodes[ix];
+                if (node->kind == RX_LOOKBEHIND) {
+                    rxNodeLength(node->u.look.sub, &node->u.look.minLength, &node->u.look.maxLength);
+                }
             }
+        }
+
+        /* Keep named-group strings only; unnamed patterns store no name array */
+        bool named = false;
+        for (size_t ix = 0; ix < regex->groupCount; ix++) {
+            if (compiler.groupNames[ix].type == BS_STRING) {
+                named = true;
+                break;
+            }
+        }
+        if (named) {
+            regex->groupNames = bsAlloc(regex->groupCount * sizeof(BSValue));
+            memcpy(regex->groupNames, compiler.groupNames, regex->groupCount * sizeof(BSValue));
         }
     }
     if (compiler.failed) {
+        for (size_t ix = 0; ix < regex->groupCount; ix++) {
+            bsRelease(compiler.groupNames[ix]);
+        }
         bsRegexFree(regex);
         return bsNull();
     }
@@ -1156,10 +1198,11 @@ size_t bsRegexGroupCount(BSValue regex)
 
 const char *bsRegexGroupName(BSValue regex, size_t group)
 {
-    if (group >= regex.u.regex->groupCount || regex.u.regex->groupNames[group].type != BS_STRING) {
+    BSValue *names = regex.u.regex->groupNames;
+    if (names == NULL || group >= regex.u.regex->groupCount || names[group].type != BS_STRING) {
         return NULL;
     }
-    return bsStringData(regex.u.regex->groupNames[group]);
+    return bsStringData(names[group]);
 }
 
 

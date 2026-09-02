@@ -186,7 +186,8 @@ enum {
     BS_INTRIN_STRING_LENGTH,
     BS_INTRIN_STRING_STARTS_WITH,
     BS_INTRIN_SYSTEM_BOOLEAN,
-    BS_INTRIN_SYSTEM_TYPE
+    BS_INTRIN_SYSTEM_TYPE,
+    BS_INTRIN_REGEX_MATCH
 };
 
 /* Call a function, taking a library intrinsic fast path when the function has one */

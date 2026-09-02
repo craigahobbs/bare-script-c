@@ -533,6 +533,13 @@ static BSEval bsEvalCall2(BSExpr *expr, const BSEvalCtx *ctx, int depth)
             bsEvalDrop(a1);
             return bsEvalBorrowed(result);
         }
+        if (id == BS_INTRIN_REGEX_MATCH && a0.value.type == BS_REGEX && a1.value.type == BS_STRING) {
+            BSValue matchArgs[2] = {a0.value, a1.value};
+            result = bsFunctionInvoke(function, matchArgs, 2, ctx->options);
+            bsEvalDrop(a0);
+            bsEvalDrop(a1);
+            return bsEvalOwned(result);
+        }
         if (id == BS_INTRIN_ARRAY_GET && a0.value.type == BS_ARRAY && a1.value.type == BS_NUMBER) {
             double number = a1.value.u.number;
             if (isfinite(number) && trunc(number) == number && number >= 0) {

@@ -1213,6 +1213,7 @@ static BSValue bsMatchKeyIndex;
 static BSValue bsMatchKeyInput;
 static BSValue bsMatchKeyGroups;
 static BSValue bsMatchKeyDigit[10];
+static BSValue bsMatchEmpty;
 
 static void bsMatchKeysInit(void)
 {
@@ -1222,6 +1223,7 @@ static void bsMatchKeysInit(void)
     bsMatchKeyIndex = bsStringIntern("index", 5);
     bsMatchKeyInput = bsStringIntern("input", 5);
     bsMatchKeyGroups = bsStringIntern("groups", 6);
+    bsMatchEmpty = bsStringIntern("", 0);
     for (int ix = 0; ix < 10; ix++) {
         char digit = (char) ('0' + ix);
         bsMatchKeyDigit[ix] = bsStringIntern(&digit, 1);
@@ -1240,7 +1242,11 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
         if (match->matched[ix]) {
             size_t begin = bsStringOffset(string, match->groups[ix].begin);
             size_t end = bsStringOffset(string, match->groups[ix].end);
-            text = bsStringNewSize(bsStringData(string) + begin, end - begin);
+            if (end == begin) {
+                text = bsRetain(bsMatchEmpty);
+            } else {
+                text = bsStringNewSize(bsStringData(string) + begin, end - begin);
+            }
         }
         if (ix < 10) {
             bsObjectSetString(groups, bsMatchKeyDigit[ix], text);
@@ -1277,6 +1283,20 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
 }
 
 
+static BSValue bsRegexMatchImpl(BSValue regex, BSValue string)
+{
+    BSRegexSubject subject;
+    bsRegexSubjectInit(&subject, string);
+    BSRegexMatch match;
+    BSValue result = bsNull();
+    if (bsRegexSearch(regex, &subject, 0, &match)) {
+        result = bsRegexMatchModel(regex, string, &subject, &match);
+    }
+    bsRegexSubjectFree(&subject);
+    return result;
+}
+
+
 static const BSArgModel regexMatchArgs[] = {
     {"regex", BS_ARG_REGEX, 0, 0, 0, 0, 0},
     {"string", BS_ARG_STRING, 0, 0, 0, 0, 0}
@@ -1288,15 +1308,7 @@ static BSValue bsFnRegexMatch(const BSValue *args, size_t argCount, BSOptions *o
     if (!bsArgsValidate(regexMatchArgs, 2, args, argCount, values, options, "regexMatch")) {
         return bsNull();
     }
-    BSRegexSubject subject;
-    bsRegexSubjectInit(&subject, values[1]);
-    BSRegexMatch match;
-    BSValue result = bsNull();
-    if (bsRegexSearch(values[0], &subject, 0, &match)) {
-        result = bsRegexMatchModel(values[0], values[1], &subject, &match);
-    }
-    bsRegexSubjectFree(&subject);
-    return result;
+    return bsRegexMatchImpl(values[0], values[1]);
 }
 
 
@@ -2519,7 +2531,8 @@ static const struct {
     {"stringLength", BS_INTRIN_STRING_LENGTH},
     {"stringStartsWith", BS_INTRIN_STRING_STARTS_WITH},
     {"systemBoolean", BS_INTRIN_SYSTEM_BOOLEAN},
-    {"systemType", BS_INTRIN_SYSTEM_TYPE}
+    {"systemType", BS_INTRIN_SYSTEM_TYPE},
+    {"regexMatch", BS_INTRIN_REGEX_MATCH}
 };
 
 #define BS_INTRINSIC_COUNT (sizeof(bsIntrinsicTable) / sizeof(bsIntrinsicTable[0]))
@@ -2734,6 +2747,11 @@ BSValue bsFunctionInvoke(BSValue function, const BSValue *args, size_t argCount,
     case BS_INTRIN_SYSTEM_TYPE:
         if (argCount == 1) {
             return bsSystemTypeName(args[0]);
+        }
+        break;
+    case BS_INTRIN_REGEX_MATCH:
+        if (argCount == 2 && args[0].type == BS_REGEX && args[1].type == BS_STRING) {
+            return bsRegexMatchImpl(args[0], args[1]);
         }
         break;
     default:

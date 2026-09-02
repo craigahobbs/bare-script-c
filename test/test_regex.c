@@ -85,6 +85,11 @@ TEST(regex_literals)
     ASSERT_VALUE_STRING(bsTestMatch("abc", "xxabyy", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch("", "abc", 0), "");
     ASSERT_VALUE_STRING(bsTestMatch("a", "", 0), "null");
+
+    /* An unnamed pattern stores no group-name array */
+    BSValue regex = bsRegexNew("abc", 3, 0, NULL, 0);
+    ASSERT_NULL(bsRegexGroupName(regex, 0));
+    bsRelease(regex);
 }
 
 
@@ -353,6 +358,7 @@ TEST(regex_subject_long)
 TEST(regex_compile_errors)
 {
     bsTestRegexError("(", "missing ), unterminated subpattern at position 0");
+    bsTestRegexError("(?<a>x", "missing ), unterminated subpattern at position 0");
     bsTestRegexError(")", "unbalanced parenthesis at position 0");
     bsTestRegexError("(?", "unexpected end of pattern at position 2");
     bsTestRegexError("(?P<a>b)", "unknown extension ?P at position 1");

@@ -216,6 +216,8 @@ TEST(runtime_functions)
                  "\"ov\"");
     ASSERT_VALUE(bsTestExecute("function arrayLength(a):\n    return 'ov'\nendfunction\n"
                                "return arrayLength([])"), "\"ov\"");
+    ASSERT_VALUE(bsTestExecute("function regexMatch(r, s):\n    return 'ov'\nendfunction\n"
+                               "return regexMatch(regexNew('a'), 'a')"), "\"ov\"");
 
     /* CALL3 retains borrowed args when a later argument is effectful */
     ASSERT_VALUE(bsTestExecute("o = {'k': 1}\nfunction mut(obj):\n    objectSet(obj, 'k', 9)\n"
