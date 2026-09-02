@@ -34,6 +34,8 @@ make compile
   - [The Include Library Test Suite](#the-include-library-test-suite)
 - [Performance](#performance)
 - [Compatibility](#compatibility)
+  - [jsonParse and regexNew messages](#jsonparse-and-regexnew-messages)
+- [License](#license)
 
 
 ## Build
@@ -58,9 +60,9 @@ make install        # build the release and install it to $(PREFIX), default /us
 ### Release Builds
 
 `make release` is a three-stage profile-guided build: compile instrumented, run a training
-workload, then recompile with the profile and link-time optimization. It is worth about 1.2x over
-the default `-O2` build on the performance suite, and takes about ten seconds. `make install`
-installs it.
+workload, then recompile with the profile and link-time optimization. It is worth about 1.35x over
+the default `-O2` build on the performance suite and 1.3x on the include library test suite, and
+takes about ten seconds. `make install` installs it.
 
 ```sh
 make release
@@ -82,18 +84,16 @@ The flags were chosen by measurement, over the performance suite, relative to a 
 | **PGO, `-O2 -flto`**     | 0.82x | **the release build** - `-O3`'s speed, 10% less code |
 
 `-Os` is the interesting one, since trading code size for instruction cache residency often wins
-in an interpreter. It does not here: `-Os` costs 7% and `-Oz` 43%, and PGO does not close the gap.
-The dispatch loop and the value operations are small and hot enough that the inlining `-O2` and
-`-O3` do is worth more than the 11% of text section `-Os` gives back.
+in an interpreter. The dispatch loop and the value operations are small and hot enough that the
+inlining `-O2` and `-O3` do is worth more than the 11% of text section `-Os` gives back.
 
 Link-time optimization is the single largest flag-level win - 7% on its own, and still 6% on top
 of PGO - because the value system is small functions across translation unit boundaries:
 `bsRetain`, `bsRelease`, and the object treap's comparisons are called from everywhere and can
 only be inlined across the library at link time.
 
-`-O2` and `-O3` are equal in speed at every stage, and under PGO and LTO `-O2` emits 10% less
-text (171 KB against 190 KB), so the release build uses it. Also measured on the same suite, and
-not used: `-fno-stack-protector` (3% less text, 1.6% fewer instructions, no measurable time - not
+Under PGO and LTO, `-O2` emits 178 KB of text against `-O3`'s 198 KB at the same speed. Also
+measured on the same suite, and not used: `-fno-stack-protector` (3% less text, 1.6% fewer instructions, no measurable time - not
 worth a mitigation), `-fomit-frame-pointer`, `-flto=thin`, `-mcpu=native`, and disabling the
 code generator's tail merging to keep every threaded-dispatch jump distinct (8% more text, no
 gain) all land within build-to-build noise, which is about 1% between two builds of the same
@@ -104,14 +104,13 @@ The release static library keeps the profile but drops link-time optimization, s
 archive of ordinary object files rather than one of compiler intermediate code, which not every
 consumer's linker can read.
 
-The training mix is two programs, merged by execution count. A PGO profile is only as good as the
-workload that produces it - the optimizer lays out branches and inlines call sites in the
-proportion the training run exercises them.
+A PGO profile is only as good as the workload that produces it - the optimizer lays out branches
+and inlines call sites in the proportion the training run exercises them.
 
 | Program | Role |
 | ------- | ---- |
 | `perf/test.bare` | the official suite - the benchmark itself |
-| `lib/include/test/runTests.bare` | the include library test suite: parses about 200 KB of BareScript from source and runs every include library function. This is the path `bare script.bare` takes; the suite never does, since it loads bundled models. |
+| `lib/include/test/runTests.bare` | the include library test suite: parses about 2 MB of BareScript from source and runs every include library function. This is the path `bare script.bare` takes; the suite never does, since it loads bundled models. |
 
 An earlier mix added a synthetic source-parse script, this project's language tests, and a
 static-analysis run instead of the test suite. Measured against a rebuilt identical configuration,
@@ -244,8 +243,8 @@ cc -Iinclude example.c -Lbuild -lbarescript -o example
 ```
 
 The public headers are in `include/barescript`: `value.h`, `parser.h`, `runtime.h`, `library.h`,
-`json.h`, `regex.h`, `options.h`, the generated `includeSource.h`, and the `barescript.h` umbrella
-header.
+`json.h`, `regex.h`, `options.h`, `export.h` (the visibility macros), the generated
+`includeSource.h`, and the `barescript.h` umbrella header.
 
 
 ## Design
@@ -268,6 +267,7 @@ typedef struct BSValue {
         BSObject *object;
         BSFunction *function;
         BSRegex *regex;
+        void *ref;          /* any reference-counted payload */
     } u;
 } BSValue;
 ```
@@ -321,9 +321,8 @@ for a case that cannot be tested.
 typedef BSValue (*BSFunctionFn)(const BSValue *args, size_t argCount, BSOptions *options, void *data);
 ```
 
-- `args` is a **borrowed** array of `argCount` values - never an allocated array object, so a call
-  costs nothing beyond the argument evaluation itself. The evaluator uses an inline buffer for up
-  to eight arguments.
+- `args` is a **borrowed** array of `argCount` values - a slice of the interpreter's value stack,
+  never an allocated array object, so a call costs nothing beyond the argument evaluation itself.
 - The return value is an **owned** reference.
 - `data` is the function's closure data, which script functions use to carry their definition and
   `systemPartial` uses to carry its bound arguments.
@@ -349,6 +348,12 @@ static BSValue bsFnArrayGet(const BSValue *args, size_t argCount, BSOptions *opt
     ...
 }
 ```
+
+The library's own functions open with a `BS_ARGS(model, failValue)` macro that expands to exactly
+this prologue, sizing the model with `sizeof`. A few of the most-called functions - `arrayGet`,
+`objectGet`, `mathAbs`, and their kin - also carry an *intrinsic* id, and the interpreter's call
+path handles their happy-path argument shapes itself, without validation; any other shape falls
+through to the function.
 
 
 ### The Fetch Function Format
@@ -377,9 +382,8 @@ Four options ship with the library:
 | `bsFetchHTTP`       | HTTP(S) URLs only, via libcurl                               |
 | *(none)*            | Leave `options->fetchFn` NULL to disable fetching entirely   |
 
-`bsFetchHTTP` is a libcurl implementation compiled in when libcurl is found at build time;
-`bsFetchHTTPAvailable` reports whether it is. Without libcurl the file system fetch functions still
-work and URL fetches fail.
+`bsFetchHTTPAvailable` reports whether libcurl was found at build time. Without it the file system
+fetch functions still work and URL fetches fail.
 
 
 ### The Parser and Linter
@@ -439,7 +443,7 @@ script models and embedded in the library. Including one costs a JSON decode rat
 the parser.
 
 The models are gzip-compressed at level 9 by `gzip.bare` (`gzipCompress` / `gzipUncompress`, byte
-arrays in and out) and embedded as `unsigned char` arrays. That compresses about 598 KB of include
+arrays in and out) and embedded as `unsigned char` arrays. That compresses about 601 KB of include
 library source to about 201 KB of gzip. `bin/includeSource.bare` serializes the object and array
 structure itself, in `objectKeys` (insertion) order, and delegates only leaf values to
 `jsonStringify` so number formatting and string escaping stay exactly what the runtime produces.
@@ -519,7 +523,7 @@ make test-language  # this project's own BareScript language tests
 The C unit tests self-register, so adding one is a single `TEST(name) { ... }` block. Coverage is
 gathered with `gcov`/`llvm-cov` and summarized by `test/coverage.awk`, which honors
 `GCOV_EXCL_LINE` and `GCOV_EXCL_START`/`GCOV_EXCL_STOP` markers - used only for out-of-memory
-aborts, platform-specific fallbacks, and two checks that guard against a corrupted parser.
+aborts, platform-specific fallbacks, and the checks that guard against a corrupted parser.
 
 ### The Include Library Test Suite
 
@@ -528,9 +532,9 @@ aborts, platform-specific fallbacks, and two checks that guard against a corrupt
 
 | Target                    | What it runs                                                    |
 | ------------------------- | --------------------------------------------------------------- |
-| `test-include-run`        | 1372 tests, 16,754 assertions, at 100% BareScript-level coverage |
+| `test-include-run`        | 1407 tests, 18,015 statements, at 100% BareScript-level coverage |
 | `test-include-markdownup` | the 22 `markdownUp.bare` tests                                   |
-| `test-include-lint`       | static analysis of all 65 library and test scripts               |
+| `test-include-lint`       | static analysis of all 69 library and test scripts               |
 
 All three produce output identical to the JavaScript implementation's, so a diff against
 `bare-script` is a conformance check on the parser, the runtime, the library, the regex engine, the
@@ -563,42 +567,44 @@ Milliseconds per 1000 runs, best of two, on one machine - lower is better:
 
 | Test             | BareScript (C) | BareScript (JS) | BareScript (PyC) | BareScript (Py) |
 | ---------------- | --------------:| ---------------:| ----------------:| ---------------:|
-| mandelbrot       |     **80,000** |         308,000 |          110,000 |       3,528,000 |
-| markdownElements |          1,254 |             746 |          **661** |           5,252 |
-| markdownParse    |          7,724 |       **3,120** |            7,380 |          21,080 |
-| qrcodeMatrix     |      **6,033** |          13,167 |            9,067 |         124,667 |
-| schemaParse      |        **732** |           1,216 |            1,252 |           9,156 |
-| schemaValidate   |        **828** |           1,968 |            1,060 |          14,412 |
-| urlDecode        |       **42.5** |              91 |              132 |             690 |
-| urlEncode        |         **30** |            51.5 |               57 |             394 |
+| mandelbrot       |     **25,000** |         305,000 |          114,000 |       3,519,000 |
+| markdownElements |        **403** |             750 |              668 |           5,215 |
+| markdownParse    |      **2,616** |           3,028 |            7,296 |          20,960 |
+| qrcodeMatrix     |      **2,067** |          13,030 |            9,167 |         124,200 |
+| schemaParse      |        **156** |           1,224 |            1,260 |           9,192 |
+| schemaValidate   |        **204** |           1,960 |            1,072 |          14,440 |
+| urlDecode        |          **9** |              90 |              133 |             683 |
+| urlEncode        |          **7** |            50.5 |             57.5 |             394 |
 
-The C runtime is the fastest BareScript runtime on six of the eight tests. (`BareScript (PyC)` is
-the Python implementation running its C extension for the runtime core, so it is not a pure-Python
-baseline; `BareScript (Py)` is.) The two it loses are the markdown tests: `markdownParse` goes to
-JavaScript, against V8's JIT-compiled regular expression engine - it is almost entirely regex work
-- and `markdownElements` to the Python C extension.
+The C runtime is the fastest BareScript runtime on all eight tests. (`BareScript (PyC)` is the
+Python implementation running its C extension for the runtime core, so it is not a pure-Python
+baseline; `BareScript (Py)` is.) The closest race is `markdownParse`, almost entirely regular
+expression work, against V8's JIT-compiled regex engine. That test parses each project's own
+README, so its row moves when this file changes.
 
-Two other numbers are worth having. The release build is 1.3x the default build:
+The release build is about 1.35x the default build, milliseconds per test run:
 
-| Test          | C (`-O2`) | C (release) |
-| ------------- | ---------:| -----------:|
-| mandelbrot    |        87 |          59 |
-| functionCall  |        40 |          31 |
-| arraySort     |        18 |          14 |
-| stringBuild   |         9 |           7 |
+| Test                        | C (`-O2`) | C (release) |
+| --------------------------- | ---------:| -----------:|
+| mandelbrot, 1 run           |        38 |          25 |
+| markdownParse, 250 runs     |       845 |         659 |
+| qrcodeMatrix, 30 runs       |        88 |          65 |
+| schemaValidate, 250 runs    |        71 |          52 |
+| urlDecode, 2000 runs        |        27 |          19 |
 
 And parsing is its own story, because the parser is an interpreted BareScript script in every
-implementation. Running the include library's full test suite, which parses about 200 KB of
+implementation. Running the include library's full test suite, which parses about 2 MB of
 BareScript before it runs a single test:
 
-| Implementation | Time  |
-| -------------- | -----:|
-| JavaScript     | 1.47s |
-| C (release)    | 1.91s |
-| C (`-O2`)      | 2.12s |
-| Python         | 5.51s |
+| Implementation            | Time  |
+| ------------------------- | -----:|
+| C (release)               | 0.30s |
+| C (`-O2`)                 | 0.39s |
+| JavaScript                | 1.85s |
+| Python (with C extension) |  7.5s |
+| Python                    | 10.2s |
 
-The tables above predate the runtime optimization pass described under [Design](#design) - the
+Most of that margin is the runtime optimization pass described under [Design](#design) - the
 emit-time stack sizing, per-site global caches, threaded dispatch, statement stripping, lazy
 treaps, and free lists. Measured on one machine (an Apple M3 Max) before and after that pass, with
 the release build:
@@ -617,7 +623,7 @@ the release build:
 | urlDecode, ms per 2000 runs                   |     28 |     20 |
 | urlEncode, ms per 2000 runs                   |     21 |     15 |
 
-The shared library is 470 KB, of which 202 KB is the compressed include library and 195 KB is
+The shared library is 453 KB, of which 202 KB is the compressed include library and 178 KB is
 code.
 
 ## Compatibility

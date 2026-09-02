@@ -641,7 +641,7 @@ TEST(parser_lint)
     BSValue warnings = bsLintScript(script, bsNull());
     ASSERT_TRUE(bsArrayCount(warnings) >= 2);
     BSValue json = bsJSONEncode(warnings, 0);
-    ASSERT_TRUE(strstr(bsStringData(json), "Unused variable \\\"unused\\\"") != NULL);
+    ASSERT_STR_CONTAINS(bsStringData(json), "Unused variable \\\"unused\\\"");
     ASSERT_STR_CONTAINS(bsStringData(json), "Pointless global statement");
     bsRelease(json);
     bsRelease(warnings);

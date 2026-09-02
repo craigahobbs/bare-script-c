@@ -69,12 +69,7 @@ inherited rather than reimplemented, so **parser bugs are usually runtime, regex
 bugs**.
 
 The bootstrap: the bundled parser is stored as its own parser-compiled JSON model, so loading it
-needs only a JSON decode.
-
-```
-barescriptParser.bare (bundled JSON model) --decode--> BareScript model
-    --bsScriptFromModel (model.c)--> bytecode --> runs, and parses your script
-```
+needs only a JSON decode (README's **The Parser and Linter** draws it).
 
 `src/model.c` compiles the model to bytecode and keeps the original model on the script for lint
 and coverage (`bsScriptToModel` retains it). Jump labels become instruction indexes and
@@ -94,52 +89,40 @@ every statement in a cached include's code.
 
 ### The bundled include library
 
-The include library scripts are compiled to JSON models, gzip-compressed at level 9 with
-`gzip.bare`, and embedded as byte arrays in `src/includeSource.c`, which is
-**generated and checked in** so a fresh clone builds with no bootstrap. `make includes`
-regenerates it by running `bin/includeSource.bare` - itself a BareScript program - under a CLI
-built from the *existing* generated source.
-
-`bin/includeSource.bare` serializes objects in insertion order itself, delegating only leaf values
-to `jsonStringify`.
+`src/includeSource.c` is **generated and checked in** so a fresh clone builds with no bootstrap;
+`make includes` regenerates it by running `bin/includeSource.bare` - itself a BareScript program -
+under a CLI built from the *existing* generated source. README's **The Bundled Include Library**
+describes the encoding.
 
 ### Values and reference counting
 
-`BSValue` is a 16-byte tagged struct passed by value. Null, boolean, number, and datetime are
-immediate; string, array, object, function, and regex point at a refcounted heap object. The rules
-are uniform and are the single easiest thing to get wrong:
+`BSValue` is a 16-byte tagged struct passed by value; README's **The Value System** gives the
+layout and the ownership rules (returns are owned, arguments and container accessors are borrowed),
+which are uniform and the single easiest thing to get wrong.
 
-- A function that **returns** a `BSValue` returns an **owned** reference - the caller releases it.
-- A function that **takes** a `BSValue` takes a **borrowed** reference - retain only to keep it
-  past the call.
-- Container accessors (`bsArrayGet`, `bsObjectGet`) return **borrowed** references.
-
-Objects hold up to four pairs inline, then an insertion-order list of nodes indexed past 32 keys
-by an interned-pointer hash table; the inline and list forms share a union. The **treap** (a BST
-with a max-heap on a pseudo-random priority) over the same nodes gives the sorted traversal that
-JSON encoding and value comparison are defined over, and is built lazily - only for a sorted walk
-or a key that must be matched by content. Invariants: past 32 keys the hash table exists; if the
-object has any uninterned key past 32 keys, the treap exists. Two distinct interned strings never
-compare equal, so interned key compares are pointer compares. Strings, arrays, objects, and nodes
-are recycled through free lists.
+Object invariants the code relies on: past 32 keys the interned-pointer hash table exists; if the
+object has any uninterned key past 32 keys, the treap exists (otherwise it is built lazily, for a
+sorted walk or a key matched by content). Two distinct interned strings never compare equal, so
+interned key compares are pointer compares. Strings, arrays, objects, and nodes are recycled
+through free lists.
 
 Allocation failure is fatal (`bsAlloc` aborts); do not thread out-of-memory results through value
 operations.
 
 ### Library functions
 
-```c
-typedef BSValue (*BSFunctionFn)(const BSValue *args, size_t argCount, BSOptions *options, void *data);
-```
-
-`args` is a borrowed, non-allocated array (the evaluator uses an inline buffer for up to eight
-arguments); the return is owned. Two distinct error paths:
+The function format is README's **The Function Format**: `args` is a borrowed slice of the
+interpreter's value stack, the return is owned. Two distinct error paths:
 
 - **Runtime error** (halts the script): `bsErrorSet` / `bsErrorSetStatement`.
 - **Argument error** (does not halt): reported by `bsArgsValidate` from a static `BSArgModel[]`,
   which applies the same coercion and range rules as the references' `value_args_validate`, or by
   `bsFunctionError` for a failure the argument model cannot express (an unparseable JSON string,
   an invalid regular expression). The function then returns its documented error value.
+
+The library's functions open with the `BS_ARGS(model, failValue)` macro. Functions with an
+`intrinsic` id are handled by the interpreter's call path on their happy-path argument shapes
+(`bsIntrinsicCall` in `src/runtime.c`); a miss falls through to the function itself.
 
 ### Regular expressions
 
@@ -160,6 +143,9 @@ BareScript exposes - see README's **Regular Expressions** table.
 | `src/model.c`             | BareScript model -> bytecode; saved model for lint/coverage   |
 | `src/parser.c`            | thin wrapper running the BareScript parser and linter         |
 | `src/include.c`           | the bundled include registry and model decompression          |
+| `src/json.c`              | JSON encode and decode                                        |
+| `src/regex.c`             | the regular expression compiler and matcher                   |
+| `src/options.c`           | the fetch, log, and URL option implementations                |
 | `src/includeSource.c`     | **generated** - compressed include library models             |
 | `src/bare.c`, `src/main.c`| the CLI (`bsMain`) and its entry point                        |
 | `src/internal.h`          | declarations shared across implementation files               |
