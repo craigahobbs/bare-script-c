@@ -89,6 +89,8 @@ typedef enum {
 /* An expression */
 struct BSExpr {
     BSExprType type;
+    unsigned char pure;           /* 1 if evaluating this cannot reassign a name */
+    unsigned char laterEffectful; /* bit i set if some call argument after i is not pure (i < 8) */
     union {
         double number;
         BSValue string;

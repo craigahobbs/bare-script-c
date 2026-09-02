@@ -1209,34 +1209,57 @@ static BSValue bsFnRegexEscape(const BSValue *args, size_t argCount, BSOptions *
 }
 
 
+static BSValue bsMatchKeyIndex;
+static BSValue bsMatchKeyInput;
+static BSValue bsMatchKeyGroups;
+static BSValue bsMatchKeyDigit[10];
+
+static void bsMatchKeysInit(void)
+{
+    if (bsMatchKeyIndex.type == BS_STRING) {
+        return;
+    }
+    bsMatchKeyIndex = bsStringIntern("index", 5);
+    bsMatchKeyInput = bsStringIntern("input", 5);
+    bsMatchKeyGroups = bsStringIntern("groups", 6);
+    for (int ix = 0; ix < 10; ix++) {
+        char digit = (char) ('0' + ix);
+        bsMatchKeyDigit[ix] = bsStringIntern(&digit, 1);
+    }
+}
+
+
 /* Create a match model object - the "index", "input", and "groups" members */
 static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSubject *subject,
                                  const BSRegexMatch *match)
 {
+    bsMatchKeysInit();
     BSValue groups = bsObjectNew();
     for (size_t ix = 0; ix < match->groupCount; ix++) {
-        /* The group's number, formatted without the cost of snprintf - this runs per group of
-           every match, and the parser matches once per token of every line it parses */
-        char key[8];
-        size_t keySize = 0;
-        size_t number = ix;
-        do {
-            key[keySize++] = (char) ('0' + number % 10);
-            number /= 10;
-        } while (number != 0);
-        key[keySize] = '\0';
-        for (size_t ixKey = 0; ixKey < keySize / 2; ixKey++) {
-            char swap = key[ixKey];
-            key[ixKey] = key[keySize - 1 - ixKey];
-            key[keySize - 1 - ixKey] = swap;
-        }
         BSValue text = bsNull();
         if (match->matched[ix]) {
             size_t begin = bsStringOffset(string, match->groups[ix].begin);
             size_t end = bsStringOffset(string, match->groups[ix].end);
             text = bsStringNewSize(bsStringData(string) + begin, end - begin);
         }
-        bsObjectSet(groups, key, text);
+        if (ix < 10) {
+            bsObjectSetString(groups, bsMatchKeyDigit[ix], text);
+        } else {
+            char key[8];
+            size_t keySize = 0;
+            size_t number = ix;
+            do {
+                key[keySize++] = (char) ('0' + number % 10);
+                number /= 10;
+            } while (number != 0);
+            key[keySize] = '\0';
+            for (size_t ixKey = 0; ixKey < keySize / 2; ixKey++) {
+                char swap = key[ixKey];
+                key[ixKey] = key[keySize - 1 - ixKey];
+                key[keySize - 1 - ixKey] = swap;
+            }
+            bsObjectSet(groups, key, text);
+        }
 
         /* A named group is keyed by both its number and its name */
         const char *name = bsRegexGroupName(regex, ix);
@@ -1246,9 +1269,9 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
     }
 
     BSValue model = bsObjectNew();
-    bsObjectSet(model, "index", bsNumber((double) match->begin));
-    bsObjectSet(model, "input", bsRetain(string));
-    bsObjectSet(model, "groups", groups);
+    bsObjectSetString(model, bsMatchKeyIndex, bsNumber((double) match->begin));
+    bsObjectSetString(model, bsMatchKeyInput, bsRetain(string));
+    bsObjectSetString(model, bsMatchKeyGroups, groups);
     (void) subject;
     return model;
 }

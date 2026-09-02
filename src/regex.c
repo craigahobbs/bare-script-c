@@ -1336,6 +1336,24 @@ static bool rxMatchOne(const RxState *state, const RxNode *node, size_t pos)
 }
 
 
+/* ASCII subjects: code point i is bytes[i], and U+2028 / U+2029 cannot appear */
+static bool rxMatchOneByte(const RxState *state, const RxNode *node, size_t pos)
+{
+    if (pos >= state->length) {
+        return false;
+    }
+    uint32_t ch = state->bytes[pos];
+    switch (node->kind) {
+    case RX_CHAR:
+        return (state->flags & BS_REGEX_IGNORECASE) != 0 ? rxFold(ch) == node->u.ch : ch == node->u.ch;
+    case RX_ANY:
+        return (state->flags & BS_REGEX_DOTALL) != 0 || (ch != '\n' && ch != '\r');
+    default:
+        return rxClassMatch(state, node, ch);
+    }
+}
+
+
 static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos);
 
 
@@ -1388,13 +1406,21 @@ static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size
     RxNode *sub = node->u.repeat.sub;
     int min = node->u.repeat.min;
     int max = node->u.repeat.max;
+    bool ascii = state->codes == NULL;
 
     if (node->u.repeat.greedy) {
         size_t end = pos;
         int count = 0;
-        while ((max < 0 || count < max) && rxMatchOne(state, sub, end)) {
-            end++;
-            count++;
+        if (ascii) {
+            while ((max < 0 || count < max) && rxMatchOneByte(state, sub, end)) {
+                end++;
+                count++;
+            }
+        } else {
+            while ((max < 0 || count < max) && rxMatchOne(state, sub, end)) {
+                end++;
+                count++;
+            }
         }
         if (count < min) {
             return false;
@@ -1415,7 +1441,7 @@ static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size
     size_t end = pos;
     int count = 0;
     while (count < min) {
-        if (!rxMatchOne(state, sub, end)) {
+        if (ascii ? !rxMatchOneByte(state, sub, end) : !rxMatchOne(state, sub, end)) {
             return false;
         }
         end++;
@@ -1425,7 +1451,8 @@ static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size
         if (rxMatchNode(state, node->next, cont, end)) {
             return true;
         }
-        if ((max >= 0 && count >= max) || !rxMatchOne(state, sub, end)) {
+        if ((max >= 0 && count >= max) ||
+            (ascii ? !rxMatchOneByte(state, sub, end) : !rxMatchOne(state, sub, end))) {
             return false;
         }
         end++;
@@ -1450,14 +1477,26 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
     case RX_ANY:
     case RX_CLASS: {
         bool matched = true;
-        while (node != NULL &&
-               (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS)) {
-            if (!rxMatchOne(state, node, pos)) {
-                matched = false;
-                break;
+        if (state->codes == NULL) {
+            while (node != NULL &&
+                   (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS)) {
+                if (!rxMatchOneByte(state, node, pos)) {
+                    matched = false;
+                    break;
+                }
+                pos++;
+                node = node->next;
             }
-            pos++;
-            node = node->next;
+        } else {
+            while (node != NULL &&
+                   (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS)) {
+                if (!rxMatchOne(state, node, pos)) {
+                    matched = false;
+                    break;
+                }
+                pos++;
+                node = node->next;
+            }
         }
         result = matched && rxMatchNode(state, node, cont, pos);
         break;

@@ -800,7 +800,7 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
 
 static BSObject *bsObjectPool;
 static unsigned bsObjectPoolCount;
-#define BS_OBJECT_POOL_MAX 1024
+#define BS_OBJECT_POOL_MAX 8192
 
 static BSObject *bsObjectAlloc(void)
 {
@@ -864,7 +864,7 @@ static uint32_t bsObjectPriorityState = 0x9E3779B9u;
 /* Recycled treap nodes - BareScript allocates and frees objects constantly */
 static BSObjectNode *bsObjectNodePool;
 static unsigned bsObjectNodePoolCount;
-#define BS_OBJECT_NODE_POOL_MAX 1024
+#define BS_OBJECT_NODE_POOL_MAX 8192
 
 static BSObjectNode *bsObjectNodeAlloc(void)
 {
@@ -913,9 +913,11 @@ typedef struct {
     uint32_t hash;
 } BSInternSlot;
 
-static BSInternSlot *bsInternSlots;
-static size_t bsInternMask;
+static BSInternSlot bsInternInitial[BS_INTERN_INITIAL];
+static BSInternSlot *bsInternSlots = bsInternInitial;
+static size_t bsInternMask = BS_INTERN_INITIAL - 1;
 static size_t bsInternCount;
+static int bsInternHeap;
 
 static uint32_t bsInternHash(const char *data, size_t size, bool *ascii)
 {
@@ -943,17 +945,6 @@ static uint32_t bsInternHash(const char *data, size_t size, bool *ascii)
     return hash;
 }
 
-static void bsInternEnsure(void)
-{
-    if (bsInternSlots != NULL) {
-        return;
-    }
-    size_t capacity = BS_INTERN_INITIAL;
-    bsInternMask = capacity - 1;
-    bsInternSlots = bsAlloc(capacity * sizeof(BSInternSlot));
-    memset(bsInternSlots, 0, capacity * sizeof(BSInternSlot));
-}
-
 static void bsInternGrow(void)
 {
     size_t oldCapacity = bsInternMask + 1;
@@ -977,12 +968,14 @@ static void bsInternGrow(void)
             }
         }
     }
-    free(old);
+    if (bsInternHeap) {
+        free(old);
+    }
+    bsInternHeap = 1;
 }
 
 static BSString *bsInternLookupHash(const char *data, size_t size, uint32_t hash)
 {
-    bsInternEnsure();
     for (size_t probe = 0;; probe++) {
         size_t slot = (hash + probe) & bsInternMask;
         BSString *string = bsInternSlots[slot].string;
@@ -1157,53 +1150,97 @@ static BSObjectNode *bsObjectLookupGet(const BSObject *object, BSString *interne
 }
 
 
+static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *object)
+{
+    BSObjectNode *created = bsObjectNodeAlloc();
+    created->left = NULL;
+    created->right = NULL;
+    created->priority = bsObjectPriority();
+    created->key = bsRetain(key).u.string;
+    created->value = item;
+
+    created->insertPrev = object->insertTail;
+    created->insertNext = NULL;
+    if (object->insertTail != NULL) {
+        object->insertTail->insertNext = created;
+    } else {
+        object->insertHead = created;
+    }
+    object->insertTail = created;
+
+    object->count++;
+    object->generation++;
+    bsObjectLookupPut(object, created);
+    return created;
+}
+
+
 /* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created.
  * Short keys must already be interned. */
-static BSObjectNode *bsObjectInsert(BSObjectNode *node, BSValue key, BSValue item, BSObject *object)
+static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
 {
-    if (node == NULL) {
-        BSObjectNode *created = bsObjectNodeAlloc();
-        created->left = NULL;
-        created->right = NULL;
-        created->priority = bsObjectPriority();
-        created->key = bsRetain(key).u.string;
-        created->value = item;
+    const char *keyData = bsStringData(key);
+    size_t keySize = bsStringSize(key);
+    if (object->root == NULL) {
+        object->root = bsObjectNodeCreate(key, item, object);
+        return;
+    }
 
-        /* Append to the insertion-order list */
-        created->insertPrev = object->insertTail;
-        created->insertNext = NULL;
-        if (object->insertTail != NULL) {
-            object->insertTail->insertNext = created;
+    BSObjectNode *path[128];
+    signed char dirs[128];
+    int depth = 0;
+    BSObjectNode *node = object->root;
+    for (;;) {
+        int compare = bsKeyCompare(node->key, keyData, keySize);
+        if (compare == 0) {
+            bsRelease(node->value);
+            node->value = item;
+            object->generation++;
+            return;
+        }
+        /* GCOV_EXCL_START */
+        if (depth >= 128) {
+            abort();
+        }
+        /* GCOV_EXCL_STOP */
+        path[depth] = node;
+        if (compare > 0) {
+            dirs[depth] = -1;
+            if (node->left == NULL) {
+                node->left = bsObjectNodeCreate(key, item, object);
+                depth++;
+                break;
+            }
+            node = node->left;
         } else {
-            object->insertHead = created;
+            dirs[depth] = 1;
+            if (node->right == NULL) {
+                node->right = bsObjectNodeCreate(key, item, object);
+                depth++;
+                break;
+            }
+            node = node->right;
         }
-        object->insertTail = created;
-
-        object->count++;
-        object->generation++;
-        bsObjectLookupPut(object, created);
-        return created;
+        depth++;
     }
 
-    int compare = bsKeyCompare(node->key, bsStringData(key), bsStringSize(key));
-    if (compare == 0) {
-        bsRelease(node->value);
-        node->value = item;
-        object->generation++;
-        return node;
-    }
-    if (compare > 0) {
-        node->left = bsObjectInsert(node->left, key, item, object);
-        if (node->left->priority > node->priority) {
-            node = bsObjectRotateRight(node);
+    while (depth > 0) {
+        int d = depth - 1;
+        BSObjectNode *parent = path[d];
+        BSObjectNode *child = dirs[d] < 0 ? parent->left : parent->right;
+        if (child->priority <= parent->priority) {
+            break;
         }
-    } else {
-        node->right = bsObjectInsert(node->right, key, item, object);
-        if (node->right->priority > node->priority) {
-            node = bsObjectRotateLeft(node);
+        BSObjectNode *rotated = dirs[d] < 0 ? bsObjectRotateRight(parent) : bsObjectRotateLeft(parent);
+        if (d == 0) {
+            object->root = rotated;
+        } else if (dirs[d - 1] < 0) {
+            path[d - 1]->left = rotated;
+        } else {
+            path[d - 1]->right = rotated;
         }
+        depth--;
     }
-    return node;
 }
 
 
@@ -1325,11 +1362,11 @@ void bsObjectSetString(BSValue value, BSValue key, BSValue item)
     BSObject *object = value.u.object;
     if (key.type == BS_STRING && !key.u.string->interned && key.u.string->size <= BS_INTERN_MAX) {
         BSValue interned = bsStringIntern(key.u.string->data, key.u.string->size);
-        object->root = bsObjectInsert(object->root, interned, item, object);
+        bsObjectInsert(object, interned, item);
         bsRelease(interned);
         return;
     }
-    object->root = bsObjectInsert(object->root, key, item, object);
+    bsObjectInsert(object, key, item);
 }
 
 

@@ -817,6 +817,10 @@ TEST(runtime_eval_borrow)
         "function g(a, b, c, d, e, f, g, h, i, j):\n    return a + j\nendfunction\n"
         "function mutate():\n    s = 'b'\n    return 'z'\nendfunction\n"
         "s = 'a'\nreturn g(s, 1, 2, 3, 4, 5, 6, 7, 8, mutate())"), "\"az\"");
+    ASSERT_VALUE(bsTestExecute(
+        "function g(a, b, c, d, e, f, g, h, i, j):\n    return i + j\nendfunction\n"
+        "function mutate():\n    s = 'b'\n    return 'z'\nendfunction\n"
+        "s = 'a'\nreturn g(1, 2, 3, 4, 5, 6, 7, 8, s, mutate())"), "\"az\"");
 }
 
 

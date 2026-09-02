@@ -453,6 +453,20 @@ TEST(value_object_intern)
 }
 
 
+TEST(value_object_pool)
+{
+    /* Overflow the recycled-object pool so a free actually returns memory */
+    enum { COUNT = 8193 };
+    BSValue objects[COUNT];
+    for (int ix = 0; ix < COUNT; ix++) {
+        objects[ix] = bsObjectNew();
+    }
+    for (int ix = 0; ix < COUNT; ix++) {
+        bsRelease(objects[ix]);
+    }
+}
+
+
 TEST(value_object_tree)
 {
     /* Insert enough keys, in sorted and reverse order, to exercise both treap rotations */

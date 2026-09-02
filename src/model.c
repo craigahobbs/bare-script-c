@@ -164,6 +164,42 @@ static BSExpr *bsExprNew(BSExprType type)
     return expr;
 }
 
+/* Number, string, and variable expressions cannot reassign a name. A call can. */
+static void bsExprFinish(BSExpr *expr)
+{
+    switch (expr->type) {
+    case BS_EXPR_NUMBER:
+    case BS_EXPR_STRING:
+    case BS_EXPR_VARIABLE:
+        expr->pure = 1;
+        break;
+    case BS_EXPR_FUNCTION: {
+        size_t argCount = expr->u.function.argCount;
+        unsigned char later = 0;
+        bool seen = false;
+        for (size_t ix = argCount; ix-- > 0; ) {
+            if (seen && ix < 8) {
+                later |= (unsigned char) (1u << ix);
+            }
+            if (!expr->u.function.args[ix]->pure) {
+                seen = true;
+            }
+        }
+        expr->laterEffectful = later;
+        break;
+    }
+    case BS_EXPR_BINARY:
+        expr->pure = (unsigned char) (expr->u.binary.left->pure & expr->u.binary.right->pure);
+        break;
+    case BS_EXPR_UNARY:
+        expr->pure = expr->u.unary.expr->pure;
+        break;
+    default:
+        expr->pure = expr->u.group->pure;
+        break;
+    }
+}
+
 static BSValue bsInternName(BSValue name)
 {
     return bsStringIntern(bsStringData(name), bsStringSize(name));
@@ -180,6 +216,7 @@ BSExpr *bsExprFromModel(BSValue model)
     if (number.type == BS_NUMBER) {
         BSExpr *expr = bsExprNew(BS_EXPR_NUMBER);
         expr->u.number = number.u.number;
+        bsExprFinish(expr);
         return expr;
     }
 
@@ -187,6 +224,7 @@ BSExpr *bsExprFromModel(BSValue model)
     if (string.type == BS_STRING) {
         BSExpr *expr = bsExprNew(BS_EXPR_STRING);
         expr->u.string = bsRetain(string);
+        bsExprFinish(expr);
         return expr;
     }
 
@@ -203,6 +241,7 @@ BSExpr *bsExprFromModel(BSValue model)
         } else if (strcmp(name, "false") == 0) {
             expr->u.variable.special = BS_SPECIAL_FALSE;
         }
+        bsExprFinish(expr);
         return expr;
     }
 
@@ -229,6 +268,7 @@ BSExpr *bsExprFromModel(BSValue model)
                 expr->u.function.args[expr->u.function.argCount++] = arg;
             }
         }
+        bsExprFinish(expr);
         return expr;
     }
 
@@ -259,6 +299,7 @@ BSExpr *bsExprFromModel(BSValue model)
         expr->u.binary.op = (BSBinaryOp) opIndex;
         expr->u.binary.left = left;
         expr->u.binary.right = right;
+        bsExprFinish(expr);
         return expr;
     }
 
@@ -285,6 +326,7 @@ BSExpr *bsExprFromModel(BSValue model)
         BSExpr *expr = bsExprNew(BS_EXPR_UNARY);
         expr->u.unary.op = (BSUnaryOp) opIndex;
         expr->u.unary.expr = operand;
+        bsExprFinish(expr);
         return expr;
     }
 
@@ -295,6 +337,7 @@ BSExpr *bsExprFromModel(BSValue model)
         }
         BSExpr *expr = bsExprNew(BS_EXPR_GROUP);
         expr->u.group = inner;
+        bsExprFinish(expr);
         return expr;
     }
 

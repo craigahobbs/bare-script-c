@@ -122,6 +122,14 @@ TEST(regex_dot_and_classes)
     ASSERT_VALUE_STRING(bsTestMatch("[\\u2600]", "x\xe2\x98\x80y", 0), "\xe2\x98\x80");
     ASSERT_VALUE_STRING(bsTestMatch("[^\\u2600]", "\xe2\x98\x80" "a", 0), "a");
     ASSERT_VALUE_STRING(bsTestMatch("[^\\s]", "\xe2\x98\x80", 0), "\xe2\x98\x80");
+
+    /* Unicode subjects take the code-point matcher, not the ASCII byte path */
+    ASSERT_VALUE_STRING(bsTestMatch(".", "\xc3\xa9", 0), "\xc3\xa9");
+    ASSERT_VALUE_STRING(bsTestMatch(".", "\xe2\x80\xa8", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch(".", "\xe2\x80\xa8", BS_REGEX_DOTALL), "\xe2\x80\xa8");
+    ASSERT_VALUE_STRING(bsTestMatch("ab", "\xc3\xa9" "ab", 0), "ab");
+    ASSERT_VALUE_STRING(bsTestMatch(".+", "a" "\xc3\xa9" "z", 0), "a" "\xc3\xa9" "z");
+    ASSERT_VALUE_STRING(bsTestMatch(".+?", "a" "\xc3\xa9" "z", 0), "a");
 }
 
 

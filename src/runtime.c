@@ -286,34 +286,7 @@ typedef struct {
 static BSEval bsEvalExpr(BSExpr *expr, const BSEvalCtx *ctx, int depth);
 
 
-static bool bsExprPure(const BSExpr *expr)
-{
-    for (;;) {
-        switch (expr->type) {
-        case BS_EXPR_NUMBER:
-        case BS_EXPR_STRING:
-        case BS_EXPR_VARIABLE:
-            return true;
-        case BS_EXPR_FUNCTION:
-            return false;
-        case BS_EXPR_BINARY:
-            if (!bsExprPure(expr->u.binary.left)) {
-                return false;
-            }
-            expr = expr->u.binary.right;
-            break;
-        case BS_EXPR_UNARY:
-            expr = expr->u.unary.expr;
-            break;
-        default:
-            expr = expr->u.group;
-            break;
-        }
-    }
-}
-
-
-/* Look up a variable in a locals object or the globals. Slot hits are handled by bsEvalExpr. */
+/* Look up a variable in a locals object or the globals. Slot hits are handled by bsEvalVariable. */
 static BSValue bsLookup(BSValue name, BSOptions *options, BSScope *scope)
 {
     if (scope != NULL && scope->slots == NULL && scope->object.type == BS_OBJECT) {
@@ -364,6 +337,57 @@ static BSValue bsLookupFunction(BSExpr *expr, const BSEvalCtx *ctx)
 }
 
 
+static inline BSEval bsEvalVariable(const BSExpr *expr, const BSEvalCtx *ctx)
+{
+    switch (expr->u.variable.special) {
+    case BS_SPECIAL_NULL:
+        return bsEvalBorrowed(bsNull());
+    case BS_SPECIAL_TRUE:
+        return bsEvalBorrowed(bsBoolean(true));
+    case BS_SPECIAL_FALSE:
+        return bsEvalBorrowed(bsBoolean(false));
+    default: {
+        int slot = expr->u.variable.slot;
+        BSScope *scope = ctx->scope;
+        if (scope != NULL && scope->slots != NULL && slot >= 0) {
+            BSValue value = scope->slots[slot];
+            if (!BS_IS_UNSET(value)) {
+                return bsEvalBorrowed(value);
+            }
+        }
+        return bsEvalBorrowed(bsLookup(expr->u.variable.name, ctx->options, scope));
+    }
+    }
+}
+
+
+static inline BSEval bsEvalArg(BSExpr *expr, const BSEvalCtx *ctx, int depth)
+{
+    switch (expr->type) {
+    case BS_EXPR_NUMBER:
+        return bsEvalBorrowed(bsNumber(expr->u.number));
+    case BS_EXPR_STRING:
+        return bsEvalBorrowed(expr->u.string);
+    case BS_EXPR_VARIABLE:
+        return bsEvalVariable(expr, ctx);
+    default:
+        return bsEvalExpr(expr, ctx, depth);
+    }
+}
+
+
+static bool bsArgsAfterAreEffectful(const BSExpr *expr, size_t ix)
+{
+    size_t argCount = expr->u.function.argCount;
+    for (size_t j = ix + 1; j < argCount; j++) {
+        if (!expr->u.function.args[j]->pure) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
 static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
     /* The built-in "if" function evaluates only the selected branch */
@@ -371,7 +395,7 @@ static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
         size_t argCount = expr->u.function.argCount;
         bool test = false;
         if (argCount >= 1) {
-            BSEval value = bsEvalExpr(expr->u.function.args[0], ctx, depth);
+            BSEval value = bsEvalArg(expr->u.function.args[0], ctx, depth);
             test = bsValueBoolean(value.value);
             bsEvalDrop(value);
         }
@@ -381,32 +405,24 @@ static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
         } else {
             branch = argCount >= 3 ? expr->u.function.args[2] : NULL;
         }
-        return branch != NULL ? bsEvalExpr(branch, ctx, depth) : bsEvalBorrowed(bsNull());
+        return branch != NULL ? bsEvalArg(branch, ctx, depth) : bsEvalBorrowed(bsNull());
     }
 
     /* Evaluate the function arguments. A later effectful arg can reassign a borrowed heap value. */
     size_t argCount = expr->u.function.argCount;
     BSValue argsInline[8];
     bool ownedInline[8];
-    bool laterInline[8];
     BSValue *args = argsInline;
     bool *owned = ownedInline;
-    bool *later = laterInline;
     if (argCount > 8) {
         args = bsAlloc(argCount * sizeof(BSValue));
         owned = bsAlloc(argCount * sizeof(bool));
-        later = bsAlloc(argCount * sizeof(bool));
-    }
-    bool effectful = false;
-    for (size_t ix = argCount; ix-- > 0; ) {
-        later[ix] = effectful;
-        if (!effectful && !bsExprPure(expr->u.function.args[ix])) {
-            effectful = true;
-        }
     }
     for (size_t ix = 0; ix < argCount; ix++) {
-        BSEval eval = bsEvalExpr(expr->u.function.args[ix], ctx, depth);
-        if (!eval.owned && eval.value.type >= BS_STRING && later[ix]) {
+        BSEval eval = bsEvalArg(expr->u.function.args[ix], ctx, depth);
+        bool later = ix < 8 ? (expr->laterEffectful & (unsigned char) (1u << ix)) != 0 :
+            bsArgsAfterAreEffectful(expr, ix);
+        if (!eval.owned && eval.value.type >= BS_STRING && later) {
             eval.value = bsRetain(eval.value);
             eval.owned = true;
         }
@@ -414,7 +430,6 @@ static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
         owned[ix] = eval.owned;
     }
 
-    /* Resolve the function value */
     BSValue function = bsLookupFunction(expr, ctx);
     if (function.type == BS_NULL && ctx->builtins) {
         function = bsLibraryExpressionFunction(expr->u.function.name);
@@ -422,33 +437,29 @@ static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 
     BSValue result = bsNull();
     BSOptions *options = ctx->options;
-    BSScript *script = ctx->script;
-    BSStatement *statement = ctx->statement;
     if (function.type == BS_FUNCTION) {
         int savedDepth = options->depth;
         options->depth = depth;
         result = bsFunctionInvoke(function, args, argCount, options);
         options->depth = savedDepth;
 
-        /* Log a library function argument error, which is not a runtime error */
         if (options->argsError.type == BS_STRING) {
             if (options->debug && options->logFn != NULL) {
-                const char *scriptName = (script != NULL && script->scriptName.type == BS_STRING) ?
-                    bsStringData(script->scriptName) : "";
-                int lineNumber = statement != NULL ? statement->lineNumber : 0;
+                const char *scriptName = (ctx->script != NULL && ctx->script->scriptName.type == BS_STRING) ?
+                    bsStringData(ctx->script->scriptName) : "";
+                int lineNumber = ctx->statement != NULL ? ctx->statement->lineNumber : 0;
                 bsLog(options, "%s:%d: BareScript: Function \"%s\" failed with error: %s", scriptName,
                       lineNumber, bsStringData(expr->u.function.name), bsStringData(options->argsError));
             }
             bsAssign(&options->argsError, bsNull());
         }
     } else if (function.type != BS_NULL) {
-        /* A non-function value is not callable - the reference logs and evaluates to null */
         if (options->debug) {
             bsLog(options, "BareScript: Function \"%s\" failed with error: not a function",
                   bsStringData(expr->u.function.name));
         }
     } else {
-        bsErrorSetStatement(options, script, statement, "Undefined function \"%s\"",
+        bsErrorSetStatement(options, ctx->script, ctx->statement, "Undefined function \"%s\"",
                             bsStringData(expr->u.function.name));
     }
 
@@ -460,7 +471,6 @@ static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
     if (args != argsInline) {
         free(args);
         free(owned);
-        free(later);
     }
     return bsEvalOwned(result);
 }
@@ -469,7 +479,7 @@ static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 static BSEval bsEvalBinary(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
     BSBinaryOp op = expr->u.binary.op;
-    BSEval left = bsEvalExpr(expr->u.binary.left, ctx, depth);
+    BSEval left = bsEvalArg(expr->u.binary.left, ctx, depth);
 
     /* The short-circuiting logical operators */
     if (op == BS_BINARY_LAND) {
@@ -477,23 +487,23 @@ static BSEval bsEvalBinary(BSExpr *expr, const BSEvalCtx *ctx, int depth)
             return left;
         }
         bsEvalDrop(left);
-        return bsEvalExpr(expr->u.binary.right, ctx, depth);
+        return bsEvalArg(expr->u.binary.right, ctx, depth);
     }
     if (op == BS_BINARY_LOR) {
         if (bsValueBoolean(left.value)) {
             return left;
         }
         bsEvalDrop(left);
-        return bsEvalExpr(expr->u.binary.right, ctx, depth);
+        return bsEvalArg(expr->u.binary.right, ctx, depth);
     }
 
     /* A later operand can reassign the slot a borrowed heap value came from */
-    if (!left.owned && left.value.type >= BS_STRING && !bsExprPure(expr->u.binary.right)) {
+    if (!left.owned && left.value.type >= BS_STRING && !expr->u.binary.right->pure) {
         left.value = bsRetain(left.value);
         left.owned = true;
     }
 
-    BSEval right = bsEvalExpr(expr->u.binary.right, ctx, depth);
+    BSEval right = bsEvalArg(expr->u.binary.right, ctx, depth);
     bool bothNumber = (left.value.type == BS_NUMBER && right.value.type == BS_NUMBER);
     BSValue result = bsNull();
     bool owned = false;
@@ -620,25 +630,7 @@ static BSEval bsEvalExpr(BSExpr *expr, const BSEvalCtx *ctx, int depth)
             return bsEvalBorrowed(expr->u.string);
 
         case BS_EXPR_VARIABLE:
-            switch (expr->u.variable.special) {
-            case BS_SPECIAL_NULL:
-                return bsEvalBorrowed(bsNull());
-            case BS_SPECIAL_TRUE:
-                return bsEvalBorrowed(bsBoolean(true));
-            case BS_SPECIAL_FALSE:
-                return bsEvalBorrowed(bsBoolean(false));
-            default: {
-                int slot = expr->u.variable.slot;
-                BSScope *scope = ctx->scope;
-                if (scope != NULL && scope->slots != NULL && slot >= 0) {
-                    BSValue value = scope->slots[slot];
-                    if (!BS_IS_UNSET(value)) {
-                        return bsEvalBorrowed(value);
-                    }
-                }
-                return bsEvalBorrowed(bsLookup(expr->u.variable.name, ctx->options, scope));
-            }
-            }
+            return bsEvalVariable(expr, ctx);
 
         default:
             break;
@@ -664,7 +656,7 @@ static BSEval bsEvalExpr(BSExpr *expr, const BSEvalCtx *ctx, int depth)
             return bsEvalBinary(expr, ctx, depth);
 
         default: {
-            BSEval value = bsEvalExpr(expr->u.unary.expr, ctx, depth);
+            BSEval value = bsEvalArg(expr->u.unary.expr, ctx, depth);
             BSValue result;
             switch (expr->u.unary.op) {
             case BS_UNARY_NOT:
@@ -924,7 +916,7 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
 
         switch (statement->type) {
         case BS_STMT_EXPR: {
-            BSEval eval = bsEvalExpr(statement->u.expr.expr, &ctx, options->depth);
+            BSEval eval = bsEvalArg(statement->u.expr.expr, &ctx, options->depth);
             if (statement->u.expr.name.type == BS_STRING) {
                 /*
                  * A function body always has a slot for every name it assigns, so an assignment
@@ -949,7 +941,7 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
         case BS_STMT_JUMP: {
             bool jump = true;
             if (statement->u.jump.expr != NULL) {
-                BSEval eval = bsEvalExpr(statement->u.jump.expr, &ctx, options->depth);
+                BSEval eval = bsEvalArg(statement->u.jump.expr, &ctx, options->depth);
                 jump = bsValueBoolean(eval.value);
                 bsEvalDrop(eval);
             }
@@ -969,7 +961,7 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
 
         case BS_STMT_RETURN: {
             return statement->u.ret.expr != NULL ?
-                bsEvalTake(bsEvalExpr(statement->u.ret.expr, &ctx, options->depth)) : bsNull();
+                bsEvalTake(bsEvalArg(statement->u.ret.expr, &ctx, options->depth)) : bsNull();
         }
 
         case BS_STMT_FUNCTION: {
