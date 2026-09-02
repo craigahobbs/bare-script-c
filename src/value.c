@@ -246,11 +246,45 @@ size_t bsUTF8Length(const char *data, size_t size)
  */
 
 
+/*
+ * Small string recycling
+ *
+ * Strings are the runtime's most frequent allocation - a match group, a slice, a computed key -
+ * and most are short. An allocation that fits one of four size classes is rounded up to it and
+ * recycled through that class's free list; the class is kept in the string's flags so release
+ * knows where the block goes. The free-list link reuses the offsets pointer.
+ */
+#define BS_STRING_POOL_CLASSES 4
+#define BS_STRING_POOL_MAX 256
+#define BS_STR_POOL_SHIFT 4
+static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128};
+static BSString *bsStringPool[BS_STRING_POOL_CLASSES];
+static unsigned bsStringPoolCount[BS_STRING_POOL_CLASSES];
+
+
 static BSString *bsStringAlloc(size_t size)
 {
-    BSString *string = bsAlloc(sizeof(BSString) + size + 1);
+    size_t total = sizeof(BSString) + size + 1;
+    BSString *string = NULL;
+    uint8_t flags = 0;
+    for (unsigned ix = 0; ix < BS_STRING_POOL_CLASSES; ix++) {
+        if (total <= bsStringPoolSize[ix]) {
+            flags = (uint8_t) ((ix + 1) << BS_STR_POOL_SHIFT);
+            if (bsStringPool[ix] != NULL) {
+                string = bsStringPool[ix];
+                bsStringPool[ix] = (BSString *) string->offsets;
+                bsStringPoolCount[ix]--;
+            } else {
+                string = bsAlloc(bsStringPoolSize[ix]);
+            }
+            break;
+        }
+    }
+    if (string == NULL) {
+        string = bsAlloc(total);
+    }
     string->refcount = 1;
-    string->flags = 0;
+    string->flags = flags;
     string->size = (uint32_t) size;
     string->length = 0;
     string->offsets = NULL;
@@ -283,12 +317,26 @@ static bool bsUtf8IsAscii(const char *data, size_t size)
 }
 
 
+static void bsStringFree(BSString *string)
+{
+    free(string->offsets);
+    unsigned class = string->flags >> BS_STR_POOL_SHIFT;
+    if (class != 0 && bsStringPoolCount[class - 1] < BS_STRING_POOL_MAX) {
+        string->offsets = (uint32_t *) bsStringPool[class - 1];
+        bsStringPool[class - 1] = string;
+        bsStringPoolCount[class - 1]++;
+        return;
+    }
+    free(string);
+}
+
+
 BSValue bsStringNewAscii(const char *text, size_t size)
 {
     BSString *string = bsStringAlloc(size);
     memcpy(string->data, text, size);
     string->length = (uint32_t) size;
-    string->flags = BS_STR_ASCII;
+    string->flags |= BS_STR_ASCII;
     return bsStringTake(string);
 }
 
@@ -337,7 +385,7 @@ BSValue bsStringNewVFormat(const char *format, va_list args)
     vsnprintf(string->data, (size_t) size + 1, format, args);
     if (bsUtf8IsAscii(string->data, (size_t) size)) {
         string->length = (uint32_t) size;
-        string->flags = BS_STR_ASCII;
+        string->flags |= BS_STR_ASCII;
         return bsStringTake(string);
     }
     size_t length = bsUTF8Length(string->data, (size_t) size);
@@ -417,7 +465,7 @@ BSValue bsStringConcat(BSValue left, BSValue right)
     memcpy(string->data + leftSize, rightData, rightSize);
     string->length = (uint32_t) (leftLength + rightLength);
     if (leftLength == leftSize && rightLength == rightSize) {
-        string->flags = BS_STR_ASCII;
+        string->flags |= BS_STR_ASCII;
     }
 
     bsRelease(leftText);
@@ -1985,8 +2033,7 @@ void bsReleaseDestroyed(BSValue value)
 {
     switch (value.type) {
     case BS_STRING:
-        free(value.u.string->offsets);
-        free(value.u.string);
+        bsStringFree(value.u.string);
         break;
     case BS_ARRAY: {
         BSArray *array = value.u.array;

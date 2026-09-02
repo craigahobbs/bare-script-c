@@ -73,7 +73,7 @@ typedef struct BSValue {
 } BSValue;
 
 
-/* String flags */
+/* String flags - the high bits record the allocation's recycling size class */
 #define BS_STR_INTERNED 0x01u /* the intern table holds a reference */
 #define BS_STR_ASCII    0x02u /* every byte is ASCII; length == size */
 
