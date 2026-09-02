@@ -37,6 +37,30 @@ static void bsTestJSONError(const char *text, const char *expectedError)
 }
 
 
+TEST(json_encode_deep_indent)
+{
+    /* Indentation deeper than one chunk of spaces is appended in pieces */
+    BSValue inner = bsArrayNew();
+    bsArrayPush(inner, bsNumber(1));
+    BSValue value = inner;
+    for (int depth = 0; depth < 20; depth++) {
+        BSValue outer = bsArrayNew();
+        bsArrayPush(outer, value);
+        value = outer;
+    }
+    BSValue json = bsJSONEncode(value, 4);
+
+    /* The innermost value is at depth 21, so its line is indented by 84 spaces */
+    char needle[88];
+    needle[0] = '\n';
+    memset(needle + 1, ' ', 84);
+    memcpy(needle + 85, "1\n", 3);
+    ASSERT_NOT_NULL(strstr(bsStringData(json), needle));
+    bsRelease(json);
+    bsRelease(value);
+}
+
+
 TEST(json_encode_scalars)
 {
     ASSERT_VALUE_STRING(bsJSONEncode(bsNull(), 0), "null");

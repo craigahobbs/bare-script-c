@@ -25,6 +25,13 @@
  */
 
 
+/* The bytes an encoded string escapes: the control characters, the quote, and the backslash */
+static bool bsJSONEscaped(unsigned char ch)
+{
+    return ch < 0x20 || ch == '"' || ch == '\\';
+}
+
+
 static void bsJSONEncodeString(BSStringBuilder *sb, BSValue value)
 {
     const char *data = bsStringData(value);
@@ -33,6 +40,9 @@ static void bsJSONEncodeString(BSStringBuilder *sb, BSValue value)
     size_t begin = 0;
     for (size_t ix = 0; ix < size; ix++) {
         unsigned char ch = (unsigned char) data[ix];
+        if (!bsJSONEscaped(ch)) {
+            continue;
+        }
         const char *escape = NULL;
         char buffer[8];
         switch (ch) {
@@ -78,10 +88,15 @@ static void bsJSONEncodeString(BSStringBuilder *sb, BSValue value)
 static void bsJSONIndent(BSStringBuilder *sb, int indent, int depth)
 {
     if (indent > 0) {
+        static const char spaces[] = "                                                                ";
+        const size_t spaceCount = sizeof(spaces) - 1;
         bsSBAppendChar(sb, '\n');
-        for (int ix = 0; ix < indent * depth; ix++) {
-            bsSBAppendChar(sb, ' ');
+        size_t count = (size_t) indent * (size_t) depth;
+        while (count > spaceCount) {
+            bsSBAppend(sb, spaces, spaceCount);
+            count -= spaceCount;
         }
+        bsSBAppend(sb, spaces, count);
     }
 }
 
