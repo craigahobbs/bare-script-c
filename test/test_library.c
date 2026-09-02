@@ -381,6 +381,12 @@ TEST(library_regex)
     bsTestExpr("regexMatch(regexNew('(?<name>b)'), 'abc')",
                "{\"groups\":{\"0\":\"b\",\"1\":\"b\",\"name\":\"b\"},\"index\":1,\"input\":\"abc\"}");
     bsTestExpr("objectGet(objectGet(regexMatch(regexNew('(a*)b'), 'b'), 'groups'), '1')", "\"\"");
+    bsTestExpr("regexMatch(regexNew('(\xc3\xa9+)'), 'a\xc3\xa9\xc3\xa9')",
+               "{\"groups\":{\"0\":\"\xc3\xa9\xc3\xa9\",\"1\":\"\xc3\xa9\xc3\xa9\"},\"index\":1,\"input\":\"a\xc3\xa9\xc3\xa9\"}");
+    bsTestExpr("regexMatch(regexNew('a+', 'i'), 'AAab')",
+               "{\"groups\":{\"0\":\"AAa\"},\"index\":0,\"input\":\"AAab\"}");
+    bsTestExpr("regexMatch(regexNew('.*', 's'), 'a\\nb')",
+               "{\"groups\":{\"0\":\"a\\nb\"},\"index\":0,\"input\":\"a\\nb\"}");
     bsTestExpr("regexReplace(regexNew('(\\\\w+) (\\\\w+)'), 'John Smith', '$2, $1')", "\"Smith, John\"");
     bsTestExpr("regexReplace(regexNew('(?<a>x)'), 'axb', '[$<a>]')", "\"a[x]b\"");
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$$')", "\"a$b\"");

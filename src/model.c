@@ -19,20 +19,51 @@
 #include "internal.h"
 
 
-/* Drop the parser model from a cached system include. Coverage is never recorded for those
-   scripts, so the borrowed statement models are unused; line numbers stay in coverLines. */
-static void bsCodeDropCoverModels(BSCode *code)
+/*
+ * Finish a cached system include's chunk
+ *
+ * A system script is never statement-counted or coverage-recorded, so its STMT markers only cost
+ * dispatch: they are stripped, with jump targets remapped and each statement's start index kept
+ * in coverPcs for error line numbers. The borrowed statement models are dropped with the parser
+ * model. Data words (an argument count, a trap's line) are never STMT and never jumps.
+ */
+static void bsCodeFinishSystem(BSCode *code)
 {
     free(code->cover);
     code->cover = NULL;
+
+    size_t count = code->count;
+    uint32_t *map = bsAlloc((count + 1) * sizeof(uint32_t));
+    uint32_t *inst = bsAlloc(count * sizeof(uint32_t));
+    size_t stripped = 0;
+    for (size_t pc = 0; pc < count; pc++) {
+        uint32_t word = code->inst[pc];
+        map[pc] = (uint32_t) stripped;
+        if (BS_OP(word) == BS_OP_STMT) {
+            code->coverPcs[BS_ARG(word)] = (uint32_t) stripped;
+        } else {
+            inst[stripped++] = word;
+        }
+    }
+    map[count] = (uint32_t) stripped;
+    for (size_t pc = 0; pc < stripped; pc++) {
+        uint8_t op = BS_OP(inst[pc]);
+        if (op == BS_OP_JUMP || op == BS_OP_JUMP_FALSE || op == BS_OP_JUMP_TRUE) {
+            inst[pc] = BS_INST(op, map[BS_ARG(inst[pc])]);
+        }
+    }
+    free(map);
+    free(code->inst);
+    code->inst = inst;
+    code->count = stripped;
 }
 
 
 void bsScriptDropModel(BSScript *script)
 {
-    bsCodeDropCoverModels(&script->code);
+    bsCodeFinishSystem(&script->code);
     for (size_t ix = 0; ix < script->functionCount; ix++) {
-        bsCodeDropCoverModels(&script->functions[ix]->code);
+        bsCodeFinishSystem(&script->functions[ix]->code);
     }
     bsRelease(script->model);
     script->model = bsNull();
@@ -56,6 +87,7 @@ void bsCodeFree(BSCode *code)
     free(code->includes);
     free(code->cover);
     free(code->coverLines);
+    free(code->coverPcs);
     for (size_t ix = 0; ix < code->slotCount; ix++) {
         bsRelease(code->slotNames[ix]);
     }
@@ -132,6 +164,7 @@ typedef struct {
     size_t constCap;
     BSValue *cover;
     int *coverLines;
+    uint32_t *coverPcs;
     size_t coverCount;
     size_t coverCap;
     BSInclude *includes;
@@ -544,9 +577,11 @@ static uint32_t bsEmitCover(BSEmit *e, BSValue statementModel)
         e->coverCap = e->coverCap != 0 ? e->coverCap * 2 : 8;
         e->cover = bsRealloc(e->cover, e->coverCap * sizeof(BSValue));
         e->coverLines = bsRealloc(e->coverLines, e->coverCap * sizeof(int));
+        e->coverPcs = bsRealloc(e->coverPcs, e->coverCap * sizeof(uint32_t));
     }
     e->cover[e->coverCount] = statementModel;
     e->coverLines[e->coverCount] = bsStatementModelLine(statementModel);
+    e->coverPcs[e->coverCount] = (uint32_t) e->count;
     uint32_t index = (uint32_t) e->coverCount++;
     bsEmitInst(e, BS_OP_STMT, index);
     return index;
@@ -728,6 +763,7 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
     code->includeCount = e->includeCount;
     code->cover = e->cover;
     code->coverLines = e->coverLines;
+    code->coverPcs = e->coverPcs;
     code->coverCount = e->coverCount;
     code->slotNames = e->slotNames;
     code->slotCount = e->slotCount;
@@ -756,6 +792,7 @@ static void bsEmitDiscard(BSEmit *e)
     free(e->includes);
     free(e->cover);
     free(e->coverLines);
+    free(e->coverPcs);
     free(e->callNames);
     for (size_t ix = 0; ix < e->slotCount; ix++) {
         bsRelease(e->slotNames[ix]);

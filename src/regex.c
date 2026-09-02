@@ -1488,36 +1488,75 @@ static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size
     RxNode *sub = node->u.repeat.sub;
     int min = node->u.repeat.min;
     int max = node->u.repeat.max;
+    size_t length = state->length;
+    size_t limit = (max < 0 || (size_t) max > length - pos) ? length : pos + (size_t) max;
     bool ascii = state->codes == NULL;
 
     if (node->u.repeat.greedy) {
+        /* Consume as much as the body matches - an ASCII subject scans by the body's kind */
         size_t end = pos;
-        int count = 0;
         if (ascii) {
-            while ((max < 0 || count < max) && rxMatchOneByte(state, sub, end)) {
-                end++;
-                count++;
-            }
-        } else {
-            while ((max < 0 || count < max) && rxMatchOne(state, sub, end)) {
-                end++;
-                count++;
-            }
-        }
-        if (count < min) {
-            return false;
-        }
-        while (count >= min) {
-            if (rxMatchNode(state, node->next, cont, end)) {
-                return true;
-            }
-            if (count == 0) {
+            const unsigned char *bytes = state->bytes;
+            switch (sub->kind) {
+            case RX_CHAR:
+                if ((state->flags & BS_REGEX_IGNORECASE) != 0) {
+                    while (end < limit && rxFold(bytes[end]) == sub->u.ch) {
+                        end++;
+                    }
+                } else {
+                    while (end < limit && bytes[end] == sub->u.ch) {
+                        end++;
+                    }
+                }
+                break;
+            case RX_ANY:
+                if ((state->flags & BS_REGEX_DOTALL) != 0) {
+                    end = limit;
+                } else {
+                    while (end < limit && bytes[end] != '\n' && bytes[end] != '\r') {
+                        end++;
+                    }
+                }
+                break;
+            default: {
+                const uint8_t *table = sub->u.cls.ascii;
+                while (end < limit && ((table[bytes[end] >> 3] >> (bytes[end] & 7)) & 1u) != 0) {
+                    end++;
+                }
                 break;
             }
-            count--;
-            end--;
+            }
+        } else {
+            while (end < limit && rxMatchOne(state, sub, end)) {
+                end++;
+            }
         }
-        return false;
+        if (end - pos < (size_t) min) {
+            return false;
+        }
+        size_t stop = pos + (size_t) min;
+
+        /* Give back one at a time. When a literal must follow, only positions holding it can go on. */
+        RxNode *next = node->next;
+        if (next != NULL && next->kind == RX_CHAR && (state->flags & BS_REGEX_IGNORECASE) == 0) {
+            uint32_t ch = next->u.ch;
+            for (;; end--) {
+                if (end < length && rxCode(state, end) == ch && rxMatchNode(state, next, cont, end)) {
+                    return true;
+                }
+                if (end == stop) {
+                    return false;
+                }
+            }
+        }
+        for (;; end--) {
+            if (rxMatchNode(state, next, cont, end)) {
+                return true;
+            }
+            if (end == stop) {
+                return false;
+            }
+        }
     }
 
     size_t end = pos;

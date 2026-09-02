@@ -1244,6 +1244,8 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
             size_t end = bsStringOffset(string, match->groups[ix].end);
             if (end == begin) {
                 text = bsRetain(bsMatchEmpty);
+            } else if (subject->codes == NULL) {
+                text = bsStringNewAscii(bsStringData(string) + begin, end - begin);
             } else {
                 text = bsStringNewSize(bsStringData(string) + begin, end - begin);
             }
@@ -1278,7 +1280,6 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
     bsObjectSetString(model, bsMatchKeyIndex, bsNumber((double) match->begin));
     bsObjectSetString(model, bsMatchKeyInput, bsRetain(string));
     bsObjectSetString(model, bsMatchKeyGroups, groups);
-    (void) subject;
     return model;
 }
 

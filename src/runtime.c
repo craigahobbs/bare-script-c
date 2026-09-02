@@ -299,18 +299,22 @@ static BSValue bsBitwise(uint8_t op, BSValue left, BSValue right)
 
 
 /*
- * The line number of the statement containing the instruction at "pc" - the nearest preceding
- * STMT. Only error paths need a line, so the interpreter loop does not track one.
+ * The line number of the statement containing the instruction at "pc" - the last statement that
+ * begins at or before it. Only error paths need a line, so the interpreter loop does not track one.
  */
 static int bsCodeLine(const BSCode *code, size_t pc)
 {
-    while (pc > 0) {
-        uint32_t inst = code->inst[--pc];
-        if (BS_OP(inst) == BS_OP_STMT) {
-            return code->coverLines[BS_ARG(inst)];
+    size_t low = 0;
+    size_t high = code->coverCount;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if (code->coverPcs[middle] <= pc) {
+            low = middle + 1;
+        } else {
+            high = middle;
         }
     }
-    return 0;
+    return low != 0 ? code->coverLines[low - 1] : 0;
 }
 
 
@@ -837,7 +841,7 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
         case BS_OP_JUMP_UNDEF: {
             /* A trap past the chunk's return carries the jump statement's line in a data word */
             int line = (pc < code->count && BS_OP(insts[pc]) == BS_OP_ARGC) ? (int) BS_ARG(insts[pc]) :
-                bsCodeLine(code, pc);
+                bsCodeLine(code, pc - 1);
             bsErrorSetStatement(options, script, line, "Unknown jump label \"%s\"",
                                 bsStringData(code->constants[arg]));
             goto fail;
@@ -1025,7 +1029,7 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
         }
 
         case BS_OP_INCLUDE:
-            if (!bsExecuteInclude(script, &code->includes[arg], bsCodeLine(code, pc), options)) {
+            if (!bsExecuteInclude(script, &code->includes[arg], bsCodeLine(code, pc - 1), options)) {
                 goto fail;
             }
             break;

@@ -73,6 +73,7 @@ typedef struct BSCode {
     size_t includeCount;
     BSValue *cover;
     int *coverLines;
+    uint32_t *coverPcs;  /* per statement, the index of its first instruction */
     size_t coverCount;
     BSValue *slotNames;
     size_t slotCount;
