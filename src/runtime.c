@@ -490,6 +490,111 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
 }
 
 
+/*
+ * Happy-path library calls that dominate the include-test profile. Returns true if *result is the
+ * owned return value; false means the caller should run the full invoke (validation, overrides).
+ */
+static bool bsCallIntrinsic(unsigned char id, const BSValue *args, size_t argCount, BSValue *result)
+{
+    switch (id) {
+    case BS_INTRIN_ARRAY_GET:
+        if (argCount == 2 && args[0].type == BS_ARRAY && args[1].type == BS_NUMBER) {
+            double number = args[1].u.number;
+            if (isfinite(number) && trunc(number) == number && number >= 0) {
+                size_t index = (size_t) number;
+                if (index < args[0].u.array->count) {
+                    *result = bsRetain(args[0].u.array->values[index]);
+                    return true;
+                }
+            }
+        }
+        return false;
+    case BS_INTRIN_OBJECT_GET:
+        if (argCount >= 2 && argCount <= 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            BSValue found;
+            if (bsObjectLookupString(args[0], args[1], &found)) {
+                *result = bsRetain(found);
+            } else {
+                *result = argCount >= 3 ? bsRetain(args[2]) : bsNull();
+            }
+            return true;
+        }
+        return false;
+    case BS_INTRIN_ARRAY_NEW: {
+        BSValue array = bsArrayNewCapacity(argCount);
+        for (size_t ix = 0; ix < argCount; ix++) {
+            bsArrayPush(array, bsRetain(args[ix]));
+        }
+        *result = array;
+        return true;
+    }
+    case BS_INTRIN_OBJECT_NEW:
+        for (size_t ix = 0; ix < argCount; ix += 2) {
+            if (args[ix].type != BS_STRING) {
+                return false;
+            }
+        }
+        {
+            BSValue object = bsObjectNew();
+            for (size_t ix = 0; ix < argCount; ix += 2) {
+                bsObjectSetString(object, args[ix],
+                                  bsRetain(ix + 1 < argCount ? args[ix + 1] : bsNull()));
+            }
+            *result = object;
+            return true;
+        }
+    case BS_INTRIN_ARRAY_LENGTH:
+        if (argCount == 1 && args[0].type == BS_ARRAY) {
+            *result = bsNumber((double) args[0].u.array->count);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_STRING_LENGTH:
+        if (argCount == 1 && args[0].type == BS_STRING) {
+            *result = bsNumber((double) args[0].u.string->length);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_HAS:
+        if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            *result = bsBoolean(bsObjectHasString(args[0], args[1]));
+            return true;
+        }
+        return false;
+    case BS_INTRIN_ARRAY_PUSH:
+        if (argCount >= 1 && args[0].type == BS_ARRAY) {
+            for (size_t ix = 1; ix < argCount; ix++) {
+                bsArrayPush(args[0], bsRetain(args[ix]));
+            }
+            *result = bsRetain(args[0]);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_KEYS:
+        if (argCount == 1 && args[0].type == BS_OBJECT) {
+            *result = bsObjectKeys(args[0]);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_OBJECT_SET:
+        if (argCount == 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+            bsObjectSetString(args[0], args[1], bsRetain(args[2]));
+            *result = bsRetain(args[2]);
+            return true;
+        }
+        return false;
+    case BS_INTRIN_REGEX_MATCH:
+        if (argCount == 2 && args[0].type == BS_REGEX && args[1].type == BS_STRING) {
+            *result = bsRegexMatchImpl(args[0], args[1]);
+            return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+
 static BSValue bsCall(const BSCode *code, size_t callPc, uint8_t op, uint32_t arg, BSValue *args,
                       size_t argCount, BSScript *script, BSOptions *options, BSScope *scope,
                       bool builtins, int stmtLine)
@@ -547,7 +652,13 @@ static BSValue bsCall(const BSCode *code, size_t callPc, uint8_t op, uint32_t ar
             return bsNull();
         }
         options->depth++;
-        BSValue result = bsFunctionInvoke(function, args, argCount, options);
+        BSValue result;
+        unsigned char id = function.u.function->intrinsic;
+        if (id != 0 && bsCallIntrinsic(id, args, argCount, &result)) {
+            options->depth--;
+            return result;
+        }
+        result = bsFunctionInvoke(function, args, argCount, options);
         options->depth--;
         if (options->argsError.type == BS_STRING) {
             if (options->debug && options->logFn != NULL) {

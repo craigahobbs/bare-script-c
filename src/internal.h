@@ -240,5 +240,8 @@ enum {
 /* Call a function, taking a library intrinsic fast path when the function has one */
 BSValue bsFunctionInvoke(BSValue function, const BSValue *args, size_t argCount, BSOptions *options);
 
+/* Happy-path regexMatch; the argument types must already be regex and string */
+BSValue bsRegexMatchImpl(BSValue regex, BSValue string);
+
 
 #endif

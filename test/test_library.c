@@ -760,6 +760,7 @@ TEST(library_direct_call)
 
     args[0] = array;
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayNew"), args, 0, options), "[]");
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayNew"), args, 1, options), "[[1,2]]");
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectNew"), args, 0, options), "{}");
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayCopy"), args, 1, options), "[1,2]");
     args[1] = bsNumber(1);
@@ -772,7 +773,9 @@ TEST(library_direct_call)
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arraySet"), args, 3, options), "9");
     args[1] = bsNumber(3);
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayPush"), args, 2, options), "[9,2,3]");
-    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayPop"), args, 1, options), "3");
+    args[1] = bsNumber(4);
+    ASSERT_VALUE(bsFunctionInvoke(bsLibraryScriptFunction("arrayPush"), args, 2, options), "[9,2,3,4]");
+    ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayPop"), args, 1, options), "4");
 
     args[0] = bsNumber(-2);
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("mathAbs"), args, 1, options), "2");
@@ -800,6 +803,7 @@ TEST(library_direct_call)
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectHas"), args, 2, options), "true");
     ASSERT_VALUE(bsFunctionInvoke(bsLibraryScriptFunction("objectHas"), args, 2, options), "true");
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectKeys"), args, 1, options), "[\"a\"]");
+    ASSERT_VALUE(bsFunctionInvoke(bsLibraryScriptFunction("objectKeys"), args, 1, options), "[\"a\"]");
     args[2] = bsNumber(2);
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("objectSet"), args, 3, options), "2");
     ASSERT_VALUE(bsFunctionInvoke(bsLibraryScriptFunction("objectSet"), args, 3, options), "2");

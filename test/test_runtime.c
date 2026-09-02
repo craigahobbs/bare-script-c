@@ -267,6 +267,42 @@ TEST(runtime_builtin_if)
 }
 
 
+TEST(runtime_call_intrinsics)
+{
+    /* Happy paths that the VM takes without bsFunctionInvoke */
+    ASSERT_VALUE(bsTestExecute("return arrayGet([1, 2], 1)"), "2");
+    ASSERT_VALUE(bsTestExecute("return objectGet({'a': 1}, 'a')"), "1");
+    ASSERT_VALUE(bsTestExecute("return objectGet({'a': 1}, 'b')"), "null");
+    ASSERT_VALUE(bsTestExecute("return objectGet({'a': 1}, 'b', 9)"), "9");
+    ASSERT_VALUE(bsTestExecute("return arrayNew()"), "[]");
+    ASSERT_VALUE(bsTestExecute("return arrayNew(1, 2)"), "[1,2]");
+    ASSERT_VALUE(bsTestExecute("return objectNew()"), "{}");
+    ASSERT_VALUE(bsTestExecute("return objectNew('a', 1, 'b')"), "{\"a\":1,\"b\":null}");
+    ASSERT_VALUE(bsTestExecute("return arrayLength([1, 2, 3])"), "3");
+    ASSERT_VALUE(bsTestExecute("return stringLength('ab')"), "2");
+    ASSERT_VALUE(bsTestExecute("return objectHas({'a': 1}, 'a')"), "true");
+    ASSERT_VALUE(bsTestExecute("return arrayPush([], 1, 2)"), "[1,2]");
+    ASSERT_VALUE(bsTestExecute("return objectKeys({'b': 1, 'a': 2})"), "[\"b\",\"a\"]");
+    ASSERT_VALUE(bsTestExecute("o = {}\nreturn [objectSet(o, 'k', 3), o]"), "[3,{\"k\":3}]");
+    ASSERT_VALUE(bsTestExecute("return objectGet(regexMatch(regexNew('a+'), 'xaa'), 'index')"), "1");
+
+    /* Misses fall through to argument validation */
+    ASSERT_VALUE(bsTestExecute("return arrayGet(1, 0)"), "null");
+    ASSERT_VALUE(bsTestExecute("return arrayGet([1], 1.5)"), "null");
+    ASSERT_VALUE(bsTestExecute("return arrayGet([1], -1)"), "null");
+    ASSERT_VALUE(bsTestExecute("return arrayGet([1], 5)"), "null");
+    ASSERT_VALUE(bsTestExecute("return objectGet(1, 'a')"), "null");
+    ASSERT_VALUE(bsTestExecute("return objectNew(1, 2)"), "null");
+    ASSERT_VALUE(bsTestExecute("return arrayLength(1)"), "0");
+    ASSERT_VALUE(bsTestExecute("return stringLength(1)"), "0");
+    ASSERT_VALUE(bsTestExecute("return objectHas(1, 'a')"), "false");
+    ASSERT_VALUE(bsTestExecute("return arrayPush(1, 2)"), "null");
+    ASSERT_VALUE(bsTestExecute("return objectKeys(1)"), "null");
+    ASSERT_VALUE(bsTestExecute("return objectSet(1, 'a', 2)"), "null");
+    ASSERT_VALUE(bsTestExecute("return regexMatch(1, 'a')"), "null");
+}
+
+
 TEST(runtime_errors)
 {
     ASSERT_VALUE(bsTestExecute("undefinedFunc()"), "null");

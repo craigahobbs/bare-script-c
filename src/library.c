@@ -1283,7 +1283,7 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
 }
 
 
-static BSValue bsRegexMatchImpl(BSValue regex, BSValue string)
+BSValue bsRegexMatchImpl(BSValue regex, BSValue string)
 {
     BSRegexSubject subject;
     bsRegexSubjectInit(&subject, string);
