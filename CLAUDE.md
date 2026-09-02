@@ -82,6 +82,16 @@ function-local names become slot indexes during emit. A slot holding the interna
 falls through to the globals object. Group nodes stay in the model and flatten only in the code
 stream. The interpreter is `bsRunCode` in `src/runtime.c`.
 
+Invariants the interpreter trusts rather than checks: the emitter computes each chunk's maximum
+stack depth (`stackMax`), so pushes have no bounds checks; `LOAD_SLOT`/`STORE_SLOT` are only
+emitted in function bodies, which always run with a slot array; `CALL_NAME` and `LOAD_NAME`
+operands index the chunk's per-site caches (`caches[]`), which hold a pointer to the globals
+object's value slot validated by the object's *structural* `generation` (bumped only when a key is
+added or removed - an in-place update does not move slots). Runtime errors are checked after each
+call, not per statement; line numbers come from `coverPcs` on demand. Bundled (system) includes
+have their `STMT` instructions stripped by `bsScriptDropModel`, so never assume a `STMT` precedes
+every statement in a cached include's code.
+
 ### The bundled include library
 
 The include library scripts are compiled to JSON models, gzip-compressed at level 9 with
@@ -104,10 +114,14 @@ are uniform and are the single easiest thing to get wrong:
   past the call.
 - Container accessors (`bsArrayGet`, `bsObjectGet`) return **borrowed** references.
 
-Objects are **treaps** (a BST with a max-heap on a pseudo-random priority) threaded on a
-doubly-linked insertion-order list: the tree gives the sorted traversal that JSON encoding and
-value comparison are defined over, while iteration stays in insertion order to match the
-references. The treap matters because BareScript code routinely inserts keys in sorted order.
+Objects hold up to four pairs inline, then an insertion-order list of nodes indexed past 32 keys
+by an interned-pointer hash table; the inline and list forms share a union. The **treap** (a BST
+with a max-heap on a pseudo-random priority) over the same nodes gives the sorted traversal that
+JSON encoding and value comparison are defined over, and is built lazily - only for a sorted walk
+or a key that must be matched by content. Invariants: past 32 keys the hash table exists; if the
+object has any uninterned key past 32 keys, the treap exists. Two distinct interned strings never
+compare equal, so interned key compares are pointer compares. Strings, arrays, objects, and nodes
+are recycled through free lists.
 
 Allocation failure is fatal (`bsAlloc` aborts); do not thread out-of-memory results through value
 operations.

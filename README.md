@@ -270,29 +270,36 @@ The reference counting rules are uniform:
   it keeps it beyond the call.
 - Container accessors (`bsArrayGet`, `bsObjectGet`) return *borrowed* references.
 
-**Strings** are immutable, reference-counted UTF-8 buffers. The header is 40 bytes plus a pointer
-to a NUL-terminated payload allocated with it. They cache their code point length, so an
+**Strings** are immutable, reference-counted UTF-8 buffers: a 32-byte header followed by the
+NUL-terminated payload in the same allocation. They cache their code point length, so an
 all-ASCII string - the common case - indexes by byte. Construction skips the UTF-8 walk when the
 buffer has no high bit. Non-ASCII indexing keeps a cursor and, after a backward lookup, a sparse
-stride-16 offset table. String library functions index by Unicode code point.
+stride-16 offset table. String library functions index by Unicode code point. Strings are the
+runtime's most frequent allocation and most are short, so an allocation that fits one of four size
+classes is rounded up and recycled through that class's free list.
 
 **Arrays** are vectors of values with amortized growth.
 
-**Objects** are binary search trees of key/value pairs, ordered by key. The tree is a *treap*: a
-binary search tree that also satisfies a max-heap property on a pseudo-random per-node priority.
-This keeps it balanced in expectation without the bookkeeping of an AVL or red-black tree, which
-matters because BareScript code routinely inserts keys in sorted order - the worst case for a
-plain binary search tree. Nodes are additionally threaded on a doubly-linked list in insertion
-order, so objects iterate in insertion order (matching the reference implementations, whose
-objects are JavaScript objects and Python dictionaries) while the tree still provides the sorted
-traversal that JSON encoding and value comparison are defined over. C-string keys and compiled
-names of at most 64 bytes are interned, so a hit can compare interned `BSString` pointers
-instead of `memcmp`. JSON and computed keys reuse an interned name when it is already in the
-table and otherwise stay ordinary strings, so untrusted unique keys cannot grow the table.
-The intern table is also capped. Interned names on the compiled script skip hashing entirely.
-Objects of more than 32 keys keep an interned-pointer hash table for lookup; a miss there is
-definitive unless the object also has uninterned keys. The intern table holds one
-reference; interned strings live until process exit.
+**Objects** are key/value pairs in insertion order, with a sorted view for the operations defined
+over sorted keys. Up to four pairs are stored in the 112-byte object itself; past that, pairs
+live on a doubly-linked list of nodes, so objects iterate in insertion order (matching the
+reference implementations, whose objects are JavaScript objects and Python dictionaries). Objects
+of more than 32 keys index the list with an interned-pointer hash table for lookup, and the two
+storage forms share the object's storage since an object is only ever one of them.
+
+The sorted view is a *treap*: a binary search tree ordered by key that also satisfies a max-heap
+property on a pseudo-random per-node priority, which keeps it balanced in expectation without the
+bookkeeping of an AVL or red-black tree - BareScript code routinely inserts keys in sorted order,
+the worst case for a plain binary search tree. It is built lazily, over the same nodes, the first
+time an object past 32 keys is JSON-encoded, compared, or given a key that can only be matched
+by content; an object whose keys are all interned never builds it otherwise. C-string keys and
+compiled names of at most 64 bytes are interned, so a hit compares interned `BSString` pointers
+instead of `memcmp` - and two distinct interned strings are known to differ without one. JSON
+and computed keys reuse an interned name when it is already in the table and otherwise stay
+ordinary strings, so untrusted unique keys cannot grow the table. The intern table is also
+capped. Interned names on the compiled script skip hashing entirely. A hash-table miss is
+definitive unless the object also has uninterned keys. The intern table holds one reference;
+interned strings live until process exit.
 
 Allocation failure is fatal: there is no useful way for a script runtime to continue without
 memory, and threading an out-of-memory result through every value operation would obscure the code
@@ -393,6 +400,18 @@ during emit - there is no executable expression tree. A slot holding the interna
 falls through to the globals object, matching the reference behavior where an unassigned local
 simply is not a key of the locals dictionary. Group nodes stay in the model (the parser and linter
 observe them) and flatten only in the code stream.
+
+The emitter tracks the value stack depth, so the interpreter allocates each chunk's stack once and
+pushes without bounds checks, and it folds `jumpif (!expr)` into a jump-if-false. Every global
+function call and global variable read compiles to a per-site cache that points at the globals
+object's value slot for the name; the cache is re-resolved only when a key is added to or removed
+from the globals object (its *structural generation*), so an assignment to a global never
+invalidates other sites. Under GNU C the interpreter dispatches through a label table, one indirect
+branch per opcode. A runtime error is detected at entry, after each call, and at the statements
+that raise one; the statement's line number is found from a per-chunk table only when an error
+message needs it. Bundled include scripts - the parser, the linter, and the library - are never
+statement-counted or coverage-recorded, so their statement markers are stripped from the code
+stream when the cached script is finished.
 
 When `__barescriptCoverage` is enabled, each compiled script keeps a line-indexed array of
 pointers into the coverage object's per-line counts, so a loop increments a number instead of
@@ -569,6 +588,28 @@ BareScript before it runs a single test:
 | C (release)    | 1.91s |
 | C (`-O2`)      | 2.12s |
 | Python         | 5.51s |
+
+The tables above predate the runtime optimization pass described under [Design](#design) - the
+emit-time stack sizing, per-site global caches, threaded dispatch, statement stripping, lazy
+treaps, and free lists. Measured on one machine (an Apple M3 Max) before and after that pass, with
+the release build:
+
+| Measurement                                   | Before | After  |
+| --------------------------------------------- | ------:| ------:|
+| Include library test suite (`make test-include-run`) | 0.42s  | 0.32s  |
+| ... instructions retired                      | 7.75G  | 5.65G  |
+| ... peak memory                               | 87 MB  | 69 MB  |
+| mandelbrot, ms per run                        |     39 |     26 |
+| markdownElements, ms per 1000 runs            |    501 |    402 |
+| markdownParse, ms per 250 runs                |    967 |    524 |
+| qrcodeMatrix, ms per 30 runs                  |     84 |     68 |
+| schemaParse, ms per 250 runs                  |     62 |     42 |
+| schemaValidate, ms per 250 runs               |     71 |     55 |
+| urlDecode, ms per 2000 runs                   |     28 |     20 |
+| urlEncode, ms per 2000 runs                   |     21 |     15 |
+
+The shared library is 470 KB, of which 202 KB is the compressed include library and 195 KB is
+code.
 
 ## Compatibility
 
