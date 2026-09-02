@@ -256,7 +256,6 @@ static BSString *bsStringAlloc(size_t size)
     string->offsets = NULL;
     string->cursorIndex = 0;
     string->cursorOffset = 0;
-    string->data = (char *) (string + 1);
     string->data[size] = '\0';
     return string;
 }

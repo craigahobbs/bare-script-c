@@ -86,7 +86,7 @@ struct BSString {
     uint32_t cursorIndex;  /* last code-point index passed to bsStringOffsetSlow */
     uint32_t cursorOffset; /* corresponding byte offset */
     uint32_t *offsets;     /* sparse code-point-to-byte map, or NULL */
-    char *data;            /* NUL-terminated UTF-8; owned payload follows the header */
+    char data[];           /* NUL-terminated UTF-8; allocated with the header */
 };
 
 
