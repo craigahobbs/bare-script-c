@@ -155,37 +155,52 @@ static struct {
 static bool bsKeysReady;
 
 
-static void bsKeysInit(void)
+void bsModelKeysInit(void)
 {
     if (bsKeysReady) {
         return;
     }
-    bsKeys.args = bsStringIntern("args", 4);
-    bsKeys.binary = bsStringIntern("binary", 6);
-    bsKeys.expr = bsStringIntern("expr", 4);
-    bsKeys.function = bsStringIntern("function", 8);
-    bsKeys.group = bsStringIntern("group", 5);
-    bsKeys.include = bsStringIntern("include", 7);
-    bsKeys.includes = bsStringIntern("includes", 8);
-    bsKeys.jump = bsStringIntern("jump", 4);
-    bsKeys.label = bsStringIntern("label", 5);
-    bsKeys.lastArgArray = bsStringIntern("lastArgArray", 12);
-    bsKeys.left = bsStringIntern("left", 4);
-    bsKeys.lineNumber = bsStringIntern("lineNumber", 10);
-    bsKeys.name = bsStringIntern("name", 4);
-    bsKeys.number = bsStringIntern("number", 6);
-    bsKeys.op = bsStringIntern("op", 2);
-    bsKeys.return_ = bsStringIntern("return", 6);
-    bsKeys.right = bsStringIntern("right", 5);
-    bsKeys.scriptLines = bsStringIntern("scriptLines", 11);
-    bsKeys.scriptName = bsStringIntern("scriptName", 10);
-    bsKeys.statements = bsStringIntern("statements", 10);
-    bsKeys.string = bsStringIntern("string", 6);
-    bsKeys.system = bsStringIntern("system", 6);
-    bsKeys.unary = bsStringIntern("unary", 5);
-    bsKeys.url = bsStringIntern("url", 3);
-    bsKeys.variable = bsStringIntern("variable", 8);
+#define BS_KEY(field, text) bsKeys.field = bsStringIntern(text, sizeof(text) - 1)
+    BS_KEY(args, "args");
+    BS_KEY(binary, "binary");
+    BS_KEY(expr, "expr");
+    BS_KEY(function, "function");
+    BS_KEY(group, "group");
+    BS_KEY(include, "include");
+    BS_KEY(includes, "includes");
+    BS_KEY(jump, "jump");
+    BS_KEY(label, "label");
+    BS_KEY(lastArgArray, "lastArgArray");
+    BS_KEY(left, "left");
+    BS_KEY(lineNumber, "lineNumber");
+    BS_KEY(name, "name");
+    BS_KEY(number, "number");
+    BS_KEY(op, "op");
+    BS_KEY(return_, "return");
+    BS_KEY(right, "right");
+    BS_KEY(scriptLines, "scriptLines");
+    BS_KEY(scriptName, "scriptName");
+    BS_KEY(statements, "statements");
+    BS_KEY(string, "string");
+    BS_KEY(system, "system");
+    BS_KEY(unary, "unary");
+    BS_KEY(url, "url");
+    BS_KEY(variable, "variable");
+#undef BS_KEY
+    /* Parser-model keys the emitter does not read; intern so JSON decode reuses them */
+    bsRelease(bsStringIntern("async", sizeof("async") - 1));
+    bsRelease(bsStringIntern("lineCount", sizeof("lineCount") - 1));
     bsKeysReady = true;
+}
+
+
+/* Retain an interned name; intern an ordinary one. Model strings are interned on decode. */
+static BSValue bsInternName(BSValue name)
+{
+    if ((name.u.string->flags & BS_STR_INTERNED) != 0) {
+        return bsRetain(name);
+    }
+    return bsStringIntern(bsStringData(name), bsStringSize(name));
 }
 
 
@@ -345,7 +360,7 @@ static void bsSlotAdd(BSEmit *e, BSValue name)
         e->slotCap = e->slotCap != 0 ? e->slotCap * 2 : 8;
         e->slotNames = bsRealloc(e->slotNames, e->slotCap * sizeof(BSValue));
     }
-    BSValue interned = bsStringIntern(bsStringData(name), bsStringSize(name));
+    BSValue interned = bsInternName(name);
     bsObjectSetString(e->slotMap, interned, bsNumber((double) e->slotCount));
     e->slotNames[e->slotCount++] = interned;
 }
@@ -383,7 +398,7 @@ static void bsEmitJump(BSEmit *e, uint8_t op, BSValue label)
         e->count--;
         op = BS_OP_JUMP_FALSE;
     }
-    BSValue interned = bsStringIntern(bsStringData(label), bsStringSize(label));
+    BSValue interned = bsInternName(label);
     BSValue pc = e->labels.type == BS_OBJECT ? bsObjectGetString(e->labels, interned) : bsNull();
     if (pc.type == BS_NUMBER) {
         bsEmitInst(e, op, (uint32_t) pc.u.number);
@@ -406,7 +421,7 @@ static void bsEmitLabel(BSEmit *e, BSValue name)
     if (e->labels.type != BS_OBJECT) {
         e->labels = bsObjectNew();
     }
-    BSValue interned = bsStringIntern(bsStringData(name), bsStringSize(name));
+    BSValue interned = bsInternName(name);
     bsObjectSetString(e->labels, interned, bsNumber((double) e->count));
     bsRelease(interned);
     e->targetAt = e->count;
@@ -486,7 +501,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
 
     BSValue string = bsObjectGetString(model, bsKeys.string);
     if (string.type == BS_STRING) {
-        BSValue interned = bsStringIntern(bsStringData(string), bsStringSize(string));
+        BSValue interned = bsInternName(string);
         bsEmitInst(e, BS_OP_LOAD_CONST, bsEmitConst(e, interned));
         bsRelease(interned);
         return true;
@@ -502,7 +517,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
         } else if (strcmp(name, "false") == 0) {
             bsEmitInst(e, BS_OP_LOAD_FALSE, 0);
         } else {
-            BSValue interned = bsStringIntern(name, bsStringSize(variable));
+            BSValue interned = bsInternName(variable);
             bsEmitNamed(e, interned, BS_OP_LOAD_SLOT, BS_OP_LOAD_NAME);
             bsRelease(interned);
         }
@@ -525,7 +540,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
                 return false;
             }
         }
-        BSValue interned = bsStringIntern(bsStringData(name), bsStringSize(name));
+        BSValue interned = bsInternName(name);
         bsEmitNamed(e, interned, BS_OP_CALL_SLOT, BS_OP_CALL_NAME);
         /* The following word is the argument count (never dispatched) */
         bsEmitInst(e, BS_OP_ARGC, (uint32_t) argCount);
@@ -540,31 +555,19 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
             return false;
         }
         const char *opText = bsStringData(op);
-        if (strcmp(opText, "&&") == 0) {
+        bool isAnd = strcmp(opText, "&&") == 0;
+        if (isAnd || strcmp(opText, "||") == 0) {
+            uint8_t jumpOp = isAnd ? BS_OP_JUMP_FALSE : BS_OP_JUMP_TRUE;
             if (!bsEmitExpr(e, bsObjectGetString(binary, bsKeys.left))) {
                 return false;
             }
             bsEmitInst(e, BS_OP_DUP, 0);
-            uint32_t jump = bsEmitInst(e, BS_OP_JUMP_FALSE, 0xffffffu);
+            uint32_t jump = bsEmitInst(e, jumpOp, 0xffffffu);
             bsEmitInst(e, BS_OP_POP, 0);
             if (!bsEmitExpr(e, bsObjectGetString(binary, bsKeys.right))) {
                 return false;
             }
-            e->inst[jump] = BS_INST(BS_OP_JUMP_FALSE, (uint32_t) e->count);
-            e->targetAt = e->count;
-            return true;
-        }
-        if (strcmp(opText, "||") == 0) {
-            if (!bsEmitExpr(e, bsObjectGetString(binary, bsKeys.left))) {
-                return false;
-            }
-            bsEmitInst(e, BS_OP_DUP, 0);
-            uint32_t jump = bsEmitInst(e, BS_OP_JUMP_TRUE, 0xffffffu);
-            bsEmitInst(e, BS_OP_POP, 0);
-            if (!bsEmitExpr(e, bsObjectGetString(binary, bsKeys.right))) {
-                return false;
-            }
-            e->inst[jump] = BS_INST(BS_OP_JUMP_TRUE, (uint32_t) e->count);
+            e->inst[jump] = BS_INST(jumpOp, (uint32_t) e->count);
             e->targetAt = e->count;
             return true;
         }
@@ -662,7 +665,7 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
             }
             BSValue name = bsObjectGetString(value, bsKeys.name);
             if (name.type == BS_STRING) {
-                BSValue interned = bsStringIntern(bsStringData(name), bsStringSize(name));
+                BSValue interned = bsInternName(name);
                 int slot = bsSlotFind(e, interned);
                 if (slot >= 0) {
                     bsEmitInst(e, BS_OP_STORE_SLOT, (uint32_t) slot);
@@ -746,8 +749,7 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
                     e->includeCap = e->includeCap != 0 ? e->includeCap * 2 : 4;
                     e->includes = bsRealloc(e->includes, e->includeCap * sizeof(BSInclude));
                 }
-                e->includes[e->includeCount].url =
-                    bsStringIntern(bsStringData(url), bsStringSize(url));
+                e->includes[e->includeCount].url = bsInternName(url);
                 e->includes[e->includeCount].system = bsValueBoolean(bsObjectGetString(include, bsKeys.system));
                 bsEmitInst(e, BS_OP_INCLUDE, (uint32_t) e->includeCount);
                 e->includeCount++;
@@ -878,7 +880,7 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
 
     BSFunctionDef *def = bsAlloc(sizeof(BSFunctionDef));
     memset(def, 0, sizeof(*def));
-    def->name = bsStringIntern(bsStringData(name), bsStringSize(name));
+    def->name = bsInternName(name);
     def->lastArgArray = bsValueBoolean(bsObjectGetString(model, bsKeys.lastArgArray));
 
     BSValue args = bsObjectGetString(model, bsKeys.args);
@@ -891,7 +893,7 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
                 bsFunctionDefFree(def);
                 return false;
             }
-            def->argNames[def->argCount++] = bsStringIntern(bsStringData(argName), bsStringSize(argName));
+            def->argNames[def->argCount++] = bsInternName(argName);
         }
     }
 
@@ -933,7 +935,7 @@ BSExpr *bsExprFromModel(BSValue model)
     if (model.type != BS_OBJECT) {
         return NULL;
     }
-    bsKeysInit();
+    bsModelKeysInit();
     BSEmit e;
     memset(&e, 0, sizeof(e));
     if (!bsEmitExpr(&e, model)) {
@@ -954,7 +956,7 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
     if (model.type != BS_OBJECT) {
         return NULL;
     }
-    bsKeysInit();
+    bsModelKeysInit();
     BSValue statements = bsObjectGetString(model, bsKeys.statements);
     if (statements.type != BS_ARRAY) {
         return NULL;

@@ -66,14 +66,20 @@ void bsOptionsFree(BSOptions *options)
 }
 
 
-void bsErrorSet(BSOptions *options, const char *format, ...)
+static void bsErrorFormat(BSValue *slot, const char *format, va_list args)
 {
-    if (options->error.type == BS_STRING) {
+    if (slot->type == BS_STRING) {
         return;
     }
+    *slot = bsStringNewVFormat(format, args);
+}
+
+
+void bsErrorSet(BSOptions *options, const char *format, ...)
+{
     va_list args;
     va_start(args, format);
-    options->error = bsStringNewVFormat(format, args);
+    bsErrorFormat(&options->error, format, args);
     va_end(args);
 }
 
@@ -105,12 +111,12 @@ void bsErrorSetStatement(BSOptions *options, const BSScript *script, int lineNum
 
 void bsFunctionError(BSOptions *options, const char *format, ...)
 {
-    if (options == NULL || options->argsError.type == BS_STRING) {
+    if (options == NULL) {
         return;
     }
     va_list args;
     va_start(args, format);
-    options->argsError = bsStringNewVFormat(format, args);
+    bsErrorFormat(&options->argsError, format, args);
     va_end(args);
 }
 
@@ -412,11 +418,8 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     size_t ixArgLast = def->argCount != 0 ? def->argCount - 1 : 0;
     for (size_t ix = 0; ix < def->argCount; ix++) {
         if (def->lastArgArray && ix == ixArgLast) {
-            BSValue rest = bsArrayNewCapacity(argCount > ix ? argCount - ix : 0);
-            for (size_t ixRest = ix; ixRest < argCount; ixRest++) {
-                bsArrayPush(rest, bsRetain(args[ixRest]));
-            }
-            slots[ix] = rest;
+            size_t restCount = argCount > ix ? argCount - ix : 0;
+            slots[ix] = restCount != 0 ? bsArrayFromArgs(args + ix, restCount) : bsArrayNew();
         } else {
             slots[ix] = ix < argCount ? bsRetain(args[ix]) : bsNull();
         }
@@ -509,14 +512,9 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
         }
         return false;
     }
-    case BS_INTRIN_ARRAY_NEW: {
-        BSValue array = bsArrayNewCapacity(argCount);
-        for (size_t ix = 0; ix < argCount; ix++) {
-            bsArrayPush(array, bsRetain(args[ix]));
-        }
-        *result = array;
+    case BS_INTRIN_ARRAY_NEW:
+        *result = bsArrayFromArgs(args, argCount);
         return true;
-    }
     case BS_INTRIN_MATH_ABS:
         if (argCount == 1 && args[0].type == BS_NUMBER) {
             *result = bsNumber(fabs(args[0].u.number));
@@ -606,11 +604,7 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
     }
     case BS_INTRIN_STRING_ENDS_WITH:
         if (argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING) {
-            size_t searchSize = args[1].u.string->size;
-            size_t size = args[0].u.string->size;
-            *result = bsBoolean(searchSize <= size &&
-                                memcmp(args[0].u.string->data + (size - searchSize),
-                                       args[1].u.string->data, searchSize) == 0);
+            *result = bsBoolean(bsStringEndsWith(args[0], args[1]));
             return true;
         }
         return false;
@@ -622,9 +616,7 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
         return false;
     case BS_INTRIN_STRING_STARTS_WITH:
         if (argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING) {
-            size_t searchSize = args[1].u.string->size;
-            *result = bsBoolean(searchSize <= args[0].u.string->size &&
-                                memcmp(args[0].u.string->data, args[1].u.string->data, searchSize) == 0);
+            *result = bsBoolean(bsStringStartsWith(args[0], args[1]));
             return true;
         }
         return false;
@@ -948,6 +940,18 @@ includeFailed:
     } \
     BS_NEXT()
 
+#define BS_JUMP_IF(name, cond) \
+    BS_CASE(name) { \
+        BSValue value = stack[--sp]; \
+        bool take = (cond); \
+        bsRelease(value); \
+        if (take) { \
+            bsJumpCover(code, arg, script, hasCoverage, coverage); \
+            pc = arg; \
+        } \
+    } \
+    BS_NEXT()
+
 
 static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
                   bool builtins)
@@ -1078,27 +1082,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             pc = arg;
             BS_NEXT();
 
-        BS_CASE(JUMP_FALSE) {
-            BSValue value = stack[--sp];
-            bool take = !bsValueBoolean(value);
-            bsRelease(value);
-            if (take) {
-                bsJumpCover(code, arg, script, hasCoverage, coverage);
-                pc = arg;
-            }
-        }
-        BS_NEXT();
-
-        BS_CASE(JUMP_TRUE) {
-            BSValue value = stack[--sp];
-            bool take = bsValueBoolean(value);
-            bsRelease(value);
-            if (take) {
-                bsJumpCover(code, arg, script, hasCoverage, coverage);
-                pc = arg;
-            }
-        }
-        BS_NEXT();
+        BS_JUMP_IF(JUMP_FALSE, !bsValueBoolean(value));
+        BS_JUMP_IF(JUMP_TRUE, bsValueBoolean(value));
 
         BS_CASE(JUMP_UNDEF) {
             /* A trap past the chunk's return carries the jump statement's line in a data word */

@@ -201,6 +201,62 @@ static inline size_t bsStringOffsetFast(BSValue value, size_t index)
 #endif
 
 
+/* A 0-9 / a-z / A-Z digit's value, or -1 */
+static inline int bsDigitValue(char ch)
+{
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'z') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'Z') {
+        return ch - 'A' + 10;
+    }
+    return -1;
+}
+
+static inline int bsHexValue(char ch)
+{
+    int value = bsDigitValue(ch);
+    return value > 15 ? -1 : value;
+}
+
+
+/* True if "string" begins or ends with "search". Both must be strings. */
+static inline bool bsStringStartsWith(BSValue string, BSValue search)
+{
+    size_t n = search.u.string->size;
+    return n <= string.u.string->size &&
+           memcmp(string.u.string->data, search.u.string->data, n) == 0;
+}
+
+static inline bool bsStringEndsWith(BSValue string, BSValue search)
+{
+    size_t n = search.u.string->size;
+    size_t size = string.u.string->size;
+    return n <= size && memcmp(string.u.string->data + (size - n), search.u.string->data, n) == 0;
+}
+
+
+/* An owned array of retained copies of "args" */
+static inline BSValue bsArrayFromArgs(const BSValue *args, size_t argCount)
+{
+    BSValue array = bsArrayNewCapacity(argCount);
+    for (size_t ix = 0; ix < argCount; ix++) {
+        bsArrayPush(array, bsRetain(args[ix]));
+    }
+    return array;
+}
+
+
+/* Intern the parser-model object keys so JSON decode and emit share interned names */
+void bsModelKeysInit(void);
+
+/* Copy src's pairs onto dest, overwriting matching keys */
+void bsObjectAssign(BSValue dest, BSValue src);
+
+
 /*
  * Library function fast-path identifiers, stored on BSFunction.intrinsic
  *

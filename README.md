@@ -625,7 +625,7 @@ the release build:
 | urlDecode, ms per 2000 runs                   |     28 |     20 |
 | urlEncode, ms per 2000 runs                   |     21 |     15 |
 
-The shared library is 469 KB, of which 202 KB is the compressed include library and 188 KB is
+The shared library is 469 KB, of which 202 KB is the compressed include library and 186 KB is
 code.
 
 ## Compatibility

@@ -151,6 +151,24 @@ static BSValue bsParserCall(BSBootstrap *bootstrap, const char *functionName, co
 }
 
 
+/* Unwrap the parser's {result} or {error} object. Returns an owned model, or a null value. */
+static BSValue bsParserUnwrap(BSValue result, BSParserError *error)
+{
+    if (result.type != BS_OBJECT) {
+        bsRelease(result);
+        return bsNull();
+    }
+    if (bsObjectHas(result, "error")) {
+        bsParserErrorFromModel(error, bsObjectGet(result, "error"));
+        bsRelease(result);
+        return bsNull();
+    }
+    BSValue model = bsRetain(bsObjectGet(result, "result"));
+    bsRelease(result);
+    return model;
+}
+
+
 BSScript *bsParseScript(const char *text, size_t size, int startLineNumber, const char *scriptName,
                         BSParserError *error)
 {
@@ -163,19 +181,13 @@ BSScript *bsParseScript(const char *text, size_t size, int startLineNumber, cons
                                   error);
     bsRelease(args[0]);
     bsRelease(args[2]);
-    if (result.type != BS_OBJECT) {
-        bsRelease(result);
+    BSValue model = bsParserUnwrap(result, error);
+    if (model.type != BS_OBJECT) {
         return NULL;
     }
 
-    if (bsObjectHas(result, "error")) {
-        bsParserErrorFromModel(error, bsObjectGet(result, "error"));
-        bsRelease(result);
-        return NULL;
-    }
-
-    BSScript *script = bsScriptFromModel(bsObjectGet(result, "result"), scriptName);
-    bsRelease(result);
+    BSScript *script = bsScriptFromModel(model, scriptName);
+    bsRelease(model);
     /* GCOV_EXCL_START - the bundled parser cannot produce a model the converter rejects */
     if (script == NULL) {
         bsParserErrorInternal(error, scriptName, bsParserBootstrap.includeName, "Invalid BareScript model");
@@ -198,19 +210,13 @@ BSExpr *bsParseExpression(const char *text, size_t size, int lineNumber, const c
                                   scriptName, error);
     bsRelease(args[0]);
     bsRelease(args[2]);
-    if (result.type != BS_OBJECT) {
-        bsRelease(result);
+    BSValue model = bsParserUnwrap(result, error);
+    if (model.type != BS_OBJECT) {
         return NULL;
     }
 
-    if (bsObjectHas(result, "error")) {
-        bsParserErrorFromModel(error, bsObjectGet(result, "error"));
-        bsRelease(result);
-        return NULL;
-    }
-
-    BSExpr *expr = bsExprFromModel(bsObjectGet(result, "result"));
-    bsRelease(result);
+    BSExpr *expr = bsExprFromModel(model);
+    bsRelease(model);
     /* GCOV_EXCL_START - the bundled parser cannot produce a model the converter rejects */
     if (expr == NULL) {
         bsParserErrorInternal(error, scriptName, bsParserBootstrap.includeName, "Invalid expression model");

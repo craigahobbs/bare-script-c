@@ -247,6 +247,16 @@ static uint32_t bsReadU32LE(const unsigned char *data)
 }
 
 
+/* Advance past a NUL-terminated gzip extra field (filename or comment) */
+static size_t bsGzipSkipString(const unsigned char *src, size_t srcSize, size_t offset)
+{
+    while (offset < srcSize && src[offset] != 0) {
+        offset++;
+    }
+    return offset + 1;
+}
+
+
 char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
 {
     if (srcSize < 10) {
@@ -269,16 +279,10 @@ char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
         offset += 2 + xlen;
     }
     if ((flags & 8u) != 0) {
-        while (offset < srcSize && src[offset] != 0) {
-            offset++;
-        }
-        offset++;
+        offset = bsGzipSkipString(src, srcSize, offset);
     }
     if ((flags & 16u) != 0) {
-        while (offset < srcSize && src[offset] != 0) {
-            offset++;
-        }
-        offset++;
+        offset = bsGzipSkipString(src, srcSize, offset);
     }
     if ((flags & 2u) != 0) {
         offset += 2;

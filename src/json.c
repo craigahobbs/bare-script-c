@@ -250,18 +250,11 @@ static bool bsJSONHex4(BSJSONParser *parser, uint32_t *result)
     }
     uint32_t value = 0;
     for (size_t ix = 0; ix < 4; ix++) {
-        char ch = parser->text[parser->offset + ix];
-        uint32_t digit;
-        if (ch >= '0' && ch <= '9') {
-            digit = (uint32_t) (ch - '0');
-        } else if (ch >= 'a' && ch <= 'f') {
-            digit = (uint32_t) (ch - 'a' + 10);
-        } else if (ch >= 'A' && ch <= 'F') {
-            digit = (uint32_t) (ch - 'A' + 10);
-        } else {
+        int digit = bsHexValue(parser->text[parser->offset + ix]);
+        if (digit < 0) {
             return false;
         }
-        value = (value << 4) | digit;
+        value = (value << 4) | (uint32_t) digit;
     }
     parser->offset += 4;
     *result = value;
@@ -592,32 +585,13 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
 
 
 /*
- * Intern the closed set of script-model object keys before decoding JSON. JSON insert reuses
- * interned names so later interned lookup stays pointer-only. Unique payload keys stay ordinary
+ * Intern the closed set of script-model object keys before decoding JSON, so JSON insert reuses
+ * interned names and later interned lookup stays pointer-only. Unique payload keys stay ordinary
  * strings and do not grow the intern table.
  */
-static void bsJSONInternModelKeys(void)
-{
-    static int done;
-    if (done) {
-        return;
-    }
-    done = 1;
-    static const char *const keys[] = {
-        "args", "async", "binary", "expr", "function", "group", "include", "includes",
-        "jump", "label", "lastArgArray", "left", "lineCount", "lineNumber", "name",
-        "number", "op", "return", "right", "scriptLines", "scriptName", "statements",
-        "string", "system", "unary", "url", "variable", NULL
-    };
-    for (const char *const *key = keys; *key != NULL; key++) {
-        bsRelease(bsStringIntern(*key, strlen(*key)));
-    }
-}
-
-
 BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t *errorOffset)
 {
-    bsJSONInternModelKeys();
+    bsModelKeysInit();
     BSJSONParser parser = {text, size, 0, NULL, 0};
     BSValue result;
     bool decoded = bsJSONDecodeValue(&parser, 0, &result);

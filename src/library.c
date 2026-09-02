@@ -97,11 +97,7 @@ bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSVa
         /* The last-argument array collects every remaining argument */
         if ((model->flags & BS_ARG_LAST_ARRAY) != 0) {
             size_t restCount = argCount > ix ? argCount - ix : 0;
-            BSValue rest = bsArrayNewCapacity(restCount);
-            for (size_t ixRest = ix; ixRest < argCount; ixRest++) {
-                bsArrayPush(rest, bsRetain(args[ixRest]));
-            }
-            values[ix] = rest;
+            values[ix] = restCount != 0 ? bsArrayFromArgs(args + ix, restCount) : bsArrayNew();
             argCount = ix + 1;
             continue;
         }
@@ -223,6 +219,48 @@ static BSValue bsArgFail(BSOptions *options, const char *argName, BSValue argVal
 }
 
 
+/* A non-negative integer index that must be in [0, count). Sets the argument error on failure. */
+static bool bsArgIndex(BSValue indexValue, size_t count, size_t *index, BSOptions *options)
+{
+    *index = (size_t) indexValue.u.number;
+    if (*index >= count) {
+        bsArgsError(options, "index", indexValue);
+        return false;
+    }
+    return true;
+}
+
+
+/* Slice bounds: start is required, end defaults to count. Both must be in [0, count]. */
+static bool bsArgSlice(BSValue startValue, BSValue endValue, size_t count, size_t *start, size_t *end,
+                       BSOptions *options)
+{
+    *start = (size_t) startValue.u.number;
+    *end = endValue.type == BS_NUMBER ? (size_t) endValue.u.number : count;
+    if (*start > count) {
+        bsArgsError(options, "start", startValue);
+        return false;
+    }
+    if (*end > count) {
+        bsArgsError(options, "end", endValue);
+        return false;
+    }
+    return true;
+}
+
+
+/* Pop or shift: take the value at "index" and delete it. Fails if the array is empty. */
+static BSValue bsArrayTake(BSValue array, size_t index, BSOptions *options)
+{
+    if (bsArrayCount(array) == 0) {
+        return bsArgFail(options, "array", array, bsNull());
+    }
+    BSValue result = bsRetain(bsArrayGet(array, index));
+    bsArrayDelete(array, index);
+    return result;
+}
+
+
 /*
  * Array functions
  */
@@ -243,9 +281,9 @@ static const BSArgModel arrayIndexArgs[] = {
 static BSValue bsFnArrayDelete(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(arrayIndexArgs, bsNull());
-    size_t index = (size_t) values[1].u.number;
-    if (index >= bsArrayCount(values[0])) {
-        return bsArgFail(options, "index", values[1], bsNull());
+    size_t index;
+    if (!bsArgIndex(values[1], bsArrayCount(values[0]), &index, options)) {
+        return bsNull();
     }
     bsArrayDelete(values[0], index);
     return bsNull();
@@ -305,9 +343,9 @@ static BSValue bsFnArrayFlat(const BSValue *args, size_t argCount, BSOptions *op
 static BSValue bsFnArrayGet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(arrayIndexArgs, bsNull());
-    size_t index = (size_t) values[1].u.number;
-    if (index >= bsArrayCount(values[0])) {
-        return bsArgFail(options, "index", values[1], bsNull());
+    size_t index;
+    if (!bsArgIndex(values[1], bsArrayCount(values[0]), &index, options)) {
+        return bsNull();
     }
     return bsRetain(bsArrayGet(values[0], index));
 }
@@ -404,11 +442,7 @@ static BSValue bsFnArrayLength(const BSValue *args, size_t argCount, BSOptions *
 
 static BSValue bsFnArrayNew(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue result = bsArrayNewCapacity(argCount);
-    for (size_t ix = 0; ix < argCount; ix++) {
-        bsArrayPush(result, bsRetain(args[ix]));
-    }
-    return result;
+    return bsArrayFromArgs(args, argCount);
 }
 
 
@@ -433,12 +467,7 @@ static BSValue bsFnArrayPop(const BSValue *args, size_t argCount, BSOptions *opt
 {
     BS_ARGS(arrayArgs, bsNull());
     size_t count = bsArrayCount(values[0]);
-    if (count == 0) {
-        return bsArgFail(options, "array", values[0], bsNull());
-    }
-    BSValue result = bsRetain(bsArrayGet(values[0], count - 1));
-    bsArrayDelete(values[0], count - 1);
-    return result;
+    return bsArrayTake(values[0], count != 0 ? count - 1 : 0, options);
 }
 
 
@@ -481,9 +510,9 @@ static const BSArgModel arraySetArgs[] = {
 static BSValue bsFnArraySet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(arraySetArgs, bsNull());
-    size_t index = (size_t) values[1].u.number;
-    if (index >= bsArrayCount(values[0])) {
-        return bsArgFail(options, "index", values[1], bsNull());
+    size_t index;
+    if (!bsArgIndex(values[1], bsArrayCount(values[0]), &index, options)) {
+        return bsNull();
     }
     bsArraySet(values[0], index, bsRetain(values[2]));
     return bsRetain(values[2]);
@@ -493,12 +522,7 @@ static BSValue bsFnArraySet(const BSValue *args, size_t argCount, BSOptions *opt
 static BSValue bsFnArrayShift(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(arrayArgs, bsNull());
-    if (bsArrayCount(values[0]) == 0) {
-        return bsArgFail(options, "array", values[0], bsNull());
-    }
-    BSValue result = bsRetain(bsArrayGet(values[0], 0));
-    bsArrayDelete(values[0], 0);
-    return result;
+    return bsArrayTake(values[0], 0, options);
 }
 
 
@@ -511,14 +535,10 @@ static const BSArgModel arraySliceArgs[] = {
 static BSValue bsFnArraySlice(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(arraySliceArgs, bsNull());
-    size_t count = bsArrayCount(values[0]);
-    size_t start = (size_t) values[1].u.number;
-    size_t end = values[2].type == BS_NUMBER ? (size_t) values[2].u.number : count;
-    if (start > count) {
-        return bsArgFail(options, "start", values[1], bsNull());
-    }
-    if (end > count) {
-        return bsArgFail(options, "end", values[2], bsNull());
+    size_t start;
+    size_t end;
+    if (!bsArgSlice(values[1], values[2], bsArrayCount(values[0]), &start, &end, options)) {
+        return bsNull();
     }
     BSValue result = bsArrayNewCapacity(end > start ? end - start : 0);
     for (size_t ix = start; ix < end; ix++) {
@@ -956,13 +976,6 @@ static BSValue bsFnNumberToString(const BSValue *args, size_t argCount, BSOption
  */
 
 
-static bool bsObjectAssignIter(BSValue key, BSValue item, void *data)
-{
-    bsObjectSetString(*((BSValue *) data), key, bsRetain(item));
-    return true;
-}
-
-
 static const BSArgModel objectAssignArgs[] = {
     {"object", BS_ARG_OBJECT, 0, 0, 0, 0, 0},
     {"object2", BS_ARG_OBJECT, 0, 0, 0, 0, 0}
@@ -971,7 +984,7 @@ static const BSArgModel objectAssignArgs[] = {
 static BSValue bsFnObjectAssign(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(objectAssignArgs, bsNull());
-    bsObjectIter(values[1], bsObjectAssignIter, &values[0]);
+    bsObjectAssign(values[0], values[1]);
     return bsRetain(values[0]);
 }
 
@@ -1007,7 +1020,7 @@ static BSValue bsFnObjectGet(const BSValue *args, size_t argCount, BSOptions *op
     BSValue defaultValue = argCount >= 3 ? args[2] : bsNull();
     BS_ARGS(objectGetArgs, bsRetain(defaultValue));
     BSValue found;
-    if (!bsObjectLookup(values[0], bsStringData(values[1]), bsStringSize(values[1]), &found)) {
+    if (!bsObjectLookupString(values[0], values[1], &found)) {
         return bsRetain(values[2]);
     }
     return bsRetain(found);
@@ -1359,9 +1372,9 @@ static const BSArgModel stringIndexArgs[] = {
 static BSValue bsFnStringCharAt(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringIndexArgs, bsNull());
-    size_t index = (size_t) values[1].u.number;
-    if (index >= bsStringLength(values[0])) {
-        return bsArgFail(options, "index", values[1], bsNull());
+    size_t index;
+    if (!bsArgIndex(values[1], bsStringLength(values[0]), &index, options)) {
+        return bsNull();
     }
     return bsStringSlice(values[0], index, index + 1);
 }
@@ -1370,9 +1383,9 @@ static BSValue bsFnStringCharAt(const BSValue *args, size_t argCount, BSOptions 
 static BSValue bsFnStringCharCodeAt(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringIndexArgs, bsNull());
-    size_t index = (size_t) values[1].u.number;
-    if (index >= bsStringLength(values[0])) {
-        return bsArgFail(options, "index", values[1], bsNull());
+    size_t index;
+    if (!bsArgIndex(values[1], bsStringLength(values[0]), &index, options)) {
+        return bsNull();
     }
     return bsNumber(bsStringCodePoint(values[0], index));
 }
@@ -1425,11 +1438,7 @@ static const BSArgModel stringSearchArgs[] = {
 static BSValue bsFnStringEndsWith(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringSearchArgs, bsNull());
-    size_t size = bsStringSize(values[0]);
-    size_t searchSize = bsStringSize(values[1]);
-    return bsBoolean(searchSize <= size &&
-                     memcmp(bsStringData(values[0]) + size - searchSize, bsStringData(values[1]),
-                            searchSize) == 0);
+    return bsBoolean(bsStringEndsWith(values[0], values[1]));
 }
 
 
@@ -1642,14 +1651,10 @@ static const BSArgModel stringSliceArgs[] = {
 static BSValue bsFnStringSlice(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringSliceArgs, bsNull());
-    size_t length = bsStringLength(values[0]);
-    size_t start = (size_t) values[1].u.number;
-    size_t end = values[2].type == BS_NUMBER ? (size_t) values[2].u.number : length;
-    if (start > length) {
-        return bsArgFail(options, "start", values[1], bsNull());
-    }
-    if (end > length) {
-        return bsArgFail(options, "end", values[2], bsNull());
+    size_t start;
+    size_t end;
+    if (!bsArgSlice(values[1], values[2], bsStringLength(values[0]), &start, &end, options)) {
+        return bsNull();
     }
     if (end < start) {
         return bsStringNewSize("", 0);
@@ -1721,9 +1726,7 @@ static BSValue bsFnStringSplitLines(const BSValue *args, size_t argCount, BSOpti
 static BSValue bsFnStringStartsWith(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringSearchArgs, bsNull());
-    size_t searchSize = bsStringSize(values[1]);
-    return bsBoolean(searchSize <= bsStringSize(values[0]) &&
-                     memcmp(bsStringData(values[0]), bsStringData(values[1]), searchSize) == 0);
+    return bsBoolean(bsStringStartsWith(values[0], values[1]));
 }
 
 

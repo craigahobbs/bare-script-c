@@ -1948,10 +1948,16 @@ static bool bsObjectCopyIter(BSValue key, BSValue item, void *data)
 }
 
 
+void bsObjectAssign(BSValue dest, BSValue src)
+{
+    bsObjectIter(src, bsObjectCopyIter, &dest);
+}
+
+
 BSValue bsObjectCopy(BSValue value)
 {
     BSValue copy = bsObjectNew();
-    bsObjectIter(value, bsObjectCopyIter, &copy);
+    bsObjectAssign(copy, value);
     return copy;
 }
 
@@ -2287,18 +2293,8 @@ bool bsIntegerParse(const char *text, size_t size, int radix, double *result)
     size_t digits = 0;
     double value = 0;
     while (ix < size) {
-        char ch = text[ix];
-        int digit;
-        if (ch >= '0' && ch <= '9') {
-            digit = ch - '0';
-        } else if (ch >= 'a' && ch <= 'z') {
-            digit = ch - 'a' + 10;
-        } else if (ch >= 'A' && ch <= 'Z') {
-            digit = ch - 'A' + 10;
-        } else {
-            break;
-        }
-        if (digit >= radix) {
+        int digit = bsDigitValue(text[ix]);
+        if (digit < 0 || digit >= radix) {
             break;
         }
         value = value * radix + digit;

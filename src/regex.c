@@ -285,18 +285,11 @@ static void rxClassRange(RxNode *node, uint32_t lo, uint32_t hi)
 }
 
 
-static bool rxHexValue(char ch, uint32_t *digit)
+static RxNode *rxCharNode(RxCompiler *compiler, uint32_t ch)
 {
-    if (ch >= '0' && ch <= '9') {
-        *digit = (uint32_t) (ch - '0');
-    } else if (ch >= 'a' && ch <= 'f') {
-        *digit = (uint32_t) (ch - 'a' + 10);
-    } else if (ch >= 'A' && ch <= 'F') {
-        *digit = (uint32_t) (ch - 'A' + 10);
-    } else {
-        return false;
-    }
-    return true;
+    RxNode *node = rxNodeNew(compiler, RX_CHAR);
+    node->u.ch = (compiler->flags & BS_REGEX_IGNORECASE) != 0 ? rxFold(ch) : ch;
+    return node;
 }
 
 
@@ -311,11 +304,11 @@ static bool rxHex(RxCompiler *compiler, size_t count, char kind, size_t escapeOf
     uint32_t value = 0;
     size_t digits = 0;
     while (digits < count && compiler->offset + digits < compiler->size) {
-        uint32_t digit;
-        if (!rxHexValue(compiler->pattern[compiler->offset + digits], &digit)) {
+        int digit = bsHexValue(compiler->pattern[compiler->offset + digits]);
+        if (digit < 0) {
             break;
         }
-        value = (value << 4) | digit;
+        value = (value << 4) | (uint32_t) digit;
         digits++;
     }
     if (digits != count) {
@@ -708,18 +701,14 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
             rxClassFinish(node, compiler->flags);
             return node;
         }
-        RxNode *node = rxNodeNew(compiler, RX_CHAR);
-        node->u.ch = (compiler->flags & BS_REGEX_IGNORECASE) != 0 ? rxFold(literal) : literal;
-        return node;
+        return rxCharNode(compiler, literal);
     }
 
     /* A literal code point */
     size_t codeSize;
     uint32_t literal = bsUTF8Decode(compiler->pattern, compiler->size, compiler->offset, &codeSize);
     compiler->offset += codeSize;
-    RxNode *node = rxNodeNew(compiler, RX_CHAR);
-    node->u.ch = (compiler->flags & BS_REGEX_IGNORECASE) != 0 ? rxFold(literal) : literal;
-    return node;
+    return rxCharNode(compiler, literal);
 }
 
 
