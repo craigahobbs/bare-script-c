@@ -206,6 +206,23 @@ TEST(runtime_functions)
 
     /* An override of a library function must not keep using the intrinsic */
     ASSERT_VALUE(bsTestExecute("function mathSqrt(x):\n    return x\nendfunction\nreturn mathSqrt(9)"), "9");
+    ASSERT_VALUE(bsTestExecute("function objectHas(o, k):\n    return 'ov'\nendfunction\n"
+                               "return objectHas({}, 'a')"), "\"ov\"");
+    ASSERT_VALUE(bsTestExecute("function objectSet(o, k, v):\n    return 'ov'\nendfunction\n"
+                               "return objectSet({}, 'a', 1)"), "\"ov\"");
+    ASSERT_VALUE(bsTestExecute("function arrayNew():\n    return 'ov'\nendfunction\nreturn arrayNew()"),
+                 "\"ov\"");
+    ASSERT_VALUE(bsTestExecute("function objectNew():\n    return 'ov'\nendfunction\nreturn objectNew()"),
+                 "\"ov\"");
+    ASSERT_VALUE(bsTestExecute("function arrayLength(a):\n    return 'ov'\nendfunction\n"
+                               "return arrayLength([])"), "\"ov\"");
+
+    /* CALL3 retains borrowed args when a later argument is effectful */
+    ASSERT_VALUE(bsTestExecute("o = {'k': 1}\nfunction mut(obj):\n    objectSet(obj, 'k', 9)\n"
+                               "    return 'k'\nendfunction\nreturn objectGet(o, mut(o), 0)"), "9");
+    ASSERT_VALUE(bsTestExecute("o = {}\nfunction val():\n    objectSet(o, 'a', 1)\n    return 2\n"
+                               "endfunction\nreturn [objectSet(o, 'b', val()), o]"),
+                 "[2,{\"a\":1,\"b\":2}]");
 
     /* Function-local variables shadow globals but assignments stay local */
     ASSERT_VALUE(bsTestExecute("x = 1\nfunction f():\n    x = 2\n    return x\nendfunction\n"

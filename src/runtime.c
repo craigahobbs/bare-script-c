@@ -439,16 +439,72 @@ static BSValue bsInvokeResolved(BSExpr *expr, const BSEvalCtx *ctx, int depth,
 }
 
 
+static void bsEvalRetainIfLater(BSEval *eval, unsigned char laterEffectful, unsigned char bit)
+{
+    if (!eval->owned && eval->value.type >= BS_STRING && (laterEffectful & bit) != 0) {
+        eval->value = bsRetain(eval->value);
+        eval->owned = true;
+    }
+}
+
+
 static BSEval bsEvalCall0(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
-    return bsEvalOwned(bsInvokeResolved(expr, ctx, depth, NULL, 0));
+    BSValue function = bsLookupCallable(expr, ctx);
+    if (function.type == BS_FUNCTION) {
+        unsigned char id = function.u.function->intrinsic;
+        if (id == BS_INTRIN_ARRAY_NEW) {
+            return bsEvalOwned(bsArrayNew());
+        }
+        if (id == BS_INTRIN_OBJECT_NEW) {
+            return bsEvalOwned(bsObjectNew());
+        }
+    }
+    return bsEvalOwned(bsDispatchFunction(expr, ctx, depth, function, NULL, 0));
 }
 
 
 static BSEval bsEvalCall1(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
     BSEval arg = bsEvalArg(expr->u.function.args[0], ctx, depth);
-    BSValue result = bsInvokeResolved(expr, ctx, depth, &arg.value, 1);
+    BSValue function = bsLookupCallable(expr, ctx);
+    BSValue result;
+    if (function.type == BS_FUNCTION) {
+        unsigned char id = function.u.function->intrinsic;
+        if (id == BS_INTRIN_ARRAY_LENGTH && arg.value.type == BS_ARRAY) {
+            result = bsNumber((double) arg.value.u.array->count);
+            bsEvalDrop(arg);
+            return bsEvalBorrowed(result);
+        }
+        if (id == BS_INTRIN_STRING_LENGTH && arg.value.type == BS_STRING) {
+            result = bsNumber((double) arg.value.u.string->length);
+            bsEvalDrop(arg);
+            return bsEvalBorrowed(result);
+        }
+        if (id == BS_INTRIN_SYSTEM_TYPE) {
+            result = bsFunctionInvoke(function, &arg.value, 1, ctx->options);
+            bsEvalDrop(arg);
+            return bsEvalOwned(result);
+        }
+        if (id == BS_INTRIN_MATH_FLOOR && arg.value.type == BS_NUMBER) {
+            result = bsNumber(floor(arg.value.u.number));
+            bsEvalDrop(arg);
+            return bsEvalBorrowed(result);
+        }
+        if (id == BS_INTRIN_ARRAY_NEW) {
+            result = bsArrayNewCapacity(1);
+            bsArrayPush(result, bsRetain(arg.value));
+            bsEvalDrop(arg);
+            return bsEvalOwned(result);
+        }
+        if (id == BS_INTRIN_OBJECT_NEW && arg.value.type == BS_STRING) {
+            result = bsObjectNew();
+            bsObjectSetString(result, arg.value, bsNull());
+            bsEvalDrop(arg);
+            return bsEvalOwned(result);
+        }
+    }
+    result = bsDispatchFunction(expr, ctx, depth, function, &arg.value, 1);
     bsEvalDrop(arg);
     return bsEvalOwned(result);
 }
@@ -458,10 +514,7 @@ static BSEval bsEvalCall2(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
     BSExpr **callArgs = expr->u.function.args;
     BSEval a0 = bsEvalArg(callArgs[0], ctx, depth);
-    if (!a0.owned && a0.value.type >= BS_STRING && (expr->laterEffectful & 1u) != 0) {
-        a0.value = bsRetain(a0.value);
-        a0.owned = true;
-    }
+    bsEvalRetainIfLater(&a0, expr->laterEffectful, 1u);
     BSEval a1 = bsEvalArg(callArgs[1], ctx, depth);
     BSValue function = bsLookupCallable(expr, ctx);
     BSValue result;
@@ -473,6 +526,12 @@ static BSEval bsEvalCall2(BSExpr *expr, const BSEvalCtx *ctx, int depth)
             bsEvalDrop(a0);
             bsEvalDrop(a1);
             return bsEvalOwned(result);
+        }
+        if (id == BS_INTRIN_OBJECT_HAS && a0.value.type == BS_OBJECT && a1.value.type == BS_STRING) {
+            result = bsBoolean(bsObjectHasString(a0.value, a1.value));
+            bsEvalDrop(a0);
+            bsEvalDrop(a1);
+            return bsEvalBorrowed(result);
         }
         if (id == BS_INTRIN_ARRAY_GET && a0.value.type == BS_ARRAY && a1.value.type == BS_NUMBER) {
             double number = a1.value.u.number;
@@ -486,11 +545,83 @@ static BSEval bsEvalCall2(BSExpr *expr, const BSEvalCtx *ctx, int depth)
                 }
             }
         }
+        if (id == BS_INTRIN_ARRAY_NEW) {
+            result = bsArrayNewCapacity(2);
+            bsArrayPush(result, bsRetain(a0.value));
+            bsArrayPush(result, bsRetain(a1.value));
+            bsEvalDrop(a0);
+            bsEvalDrop(a1);
+            return bsEvalOwned(result);
+        }
+        if (id == BS_INTRIN_OBJECT_NEW && a0.value.type == BS_STRING) {
+            result = bsObjectNew();
+            bsObjectSetString(result, a0.value, bsRetain(a1.value));
+            bsEvalDrop(a0);
+            bsEvalDrop(a1);
+            return bsEvalOwned(result);
+        }
     }
     BSValue argv[2] = {a0.value, a1.value};
     result = bsDispatchFunction(expr, ctx, depth, function, argv, 2);
     bsEvalDrop(a0);
     bsEvalDrop(a1);
+    return bsEvalOwned(result);
+}
+
+
+static BSEval bsEvalCall3(BSExpr *expr, const BSEvalCtx *ctx, int depth)
+{
+    BSExpr **callArgs = expr->u.function.args;
+    BSEval a0 = bsEvalArg(callArgs[0], ctx, depth);
+    bsEvalRetainIfLater(&a0, expr->laterEffectful, 1u);
+    BSEval a1 = bsEvalArg(callArgs[1], ctx, depth);
+    bsEvalRetainIfLater(&a1, expr->laterEffectful, 2u);
+    BSEval a2 = bsEvalArg(callArgs[2], ctx, depth);
+    BSValue function = bsLookupCallable(expr, ctx);
+    BSValue result;
+    if (function.type == BS_FUNCTION) {
+        unsigned char id = function.u.function->intrinsic;
+        if (id == BS_INTRIN_OBJECT_SET && a0.value.type == BS_OBJECT && a1.value.type == BS_STRING) {
+            bsObjectSetString(a0.value, a1.value, bsRetain(a2.value));
+            result = bsRetain(a2.value);
+            bsEvalDrop(a0);
+            bsEvalDrop(a1);
+            bsEvalDrop(a2);
+            return bsEvalOwned(result);
+        }
+        if (id == BS_INTRIN_OBJECT_GET && a0.value.type == BS_OBJECT && a1.value.type == BS_STRING) {
+            BSValue found;
+            result = bsObjectLookupString(a0.value, a1.value, &found) ? bsRetain(found) : bsRetain(a2.value);
+            bsEvalDrop(a0);
+            bsEvalDrop(a1);
+            bsEvalDrop(a2);
+            return bsEvalOwned(result);
+        }
+        if (id == BS_INTRIN_ARRAY_NEW) {
+            result = bsArrayNewCapacity(3);
+            bsArrayPush(result, bsRetain(a0.value));
+            bsArrayPush(result, bsRetain(a1.value));
+            bsArrayPush(result, bsRetain(a2.value));
+            bsEvalDrop(a0);
+            bsEvalDrop(a1);
+            bsEvalDrop(a2);
+            return bsEvalOwned(result);
+        }
+        if (id == BS_INTRIN_OBJECT_NEW && a0.value.type == BS_STRING && a2.value.type == BS_STRING) {
+            result = bsObjectNew();
+            bsObjectSetString(result, a0.value, bsRetain(a1.value));
+            bsObjectSetString(result, a2.value, bsNull());
+            bsEvalDrop(a0);
+            bsEvalDrop(a1);
+            bsEvalDrop(a2);
+            return bsEvalOwned(result);
+        }
+    }
+    BSValue argv[3] = {a0.value, a1.value, a2.value};
+    result = bsDispatchFunction(expr, ctx, depth, function, argv, 3);
+    bsEvalDrop(a0);
+    bsEvalDrop(a1);
+    bsEvalDrop(a2);
     return bsEvalOwned(result);
 }
 
@@ -736,6 +867,9 @@ static BSEval bsEvalExpr(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 
         case BS_EXPR_CALL2:
             return bsEvalCall2(expr, ctx, depth);
+
+        case BS_EXPR_CALL3:
+            return bsEvalCall3(expr, ctx, depth);
 
         case BS_EXPR_BINARY:
             return bsEvalBinary(expr, ctx, depth);
