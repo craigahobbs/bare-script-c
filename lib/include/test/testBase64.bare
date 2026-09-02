@@ -70,7 +70,11 @@ function testBase64EncodeInvalid():
     unittestEqual(base64Encode([-1]), null)
     unittestEqual(base64Encode([1.5]), null)
     unittestEqual(base64Encode(['x']), null)
+    unittestEqual(base64Encode([1, 256]), null)
+    unittestEqual(base64Encode([1, 2, 256]), null)
     unittestDeepEqual(unittestMockEnd(), [ \
+        ['systemLogDebug', ['base64.bare: base64Encode - Invalid "bytes" argument']], \
+        ['systemLogDebug', ['base64.bare: base64Encode - Invalid "bytes" argument']], \
         ['systemLogDebug', ['base64.bare: base64Encode - Invalid "bytes" argument']], \
         ['systemLogDebug', ['base64.bare: base64Encode - Invalid "bytes" argument']], \
         ['systemLogDebug', ['base64.bare: base64Encode - Invalid "bytes" argument']], \
@@ -104,8 +108,14 @@ function testBase64DecodeInvalidData():
     unittestEqual(base64Decode('A==='), null)
     unittestEqual(base64Decode('AA==AAAA'), null)
     unittestEqual(base64Decode('AAA*'), null)
+    unittestEqual(base64Decode(stringFromCharCode(256) + 'AAA'), null)
+    unittestEqual(base64Decode('A' + stringFromCharCode(256) + 'AA'), null)
+    unittestEqual(base64Decode('AA' + stringFromCharCode(256) + 'A'), null)
     unittestEqual(base64Decode('AA=' + stringFromCharCode(256)), null)
     unittestDeepEqual(unittestMockEnd(), [ \
+        ['systemLogDebug', ['base64.bare: base64Decode - Invalid encoded data']], \
+        ['systemLogDebug', ['base64.bare: base64Decode - Invalid encoded data']], \
+        ['systemLogDebug', ['base64.bare: base64Decode - Invalid encoded data']], \
         ['systemLogDebug', ['base64.bare: base64Decode - Invalid encoded data']], \
         ['systemLogDebug', ['base64.bare: base64Decode - Invalid encoded data']], \
         ['systemLogDebug', ['base64.bare: base64Decode - Invalid encoded data']], \

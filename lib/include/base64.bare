@@ -8,40 +8,56 @@
 # $arg bytes: The array of byte integer values (0-255)
 # $return: The base64-encoded string, or null if encoding fails
 function base64Encode(bytes):
-    if !base64IsByteArray(bytes):
+    if systemType(bytes) != 'array':
         systemLogDebug('base64.bare: base64Encode - Invalid "bytes" argument')
         return null
     endif
 
-    chars = base64Chars
-    parts = []
+    codes = base64Codes
+    out = []
     length = arrayLength(bytes)
     ix = 0
     while ix + 3 <= length:
         b0 = arrayGet(bytes, ix)
         b1 = arrayGet(bytes, ix + 1)
         b2 = arrayGet(bytes, ix + 2)
-        arrayPush(parts, stringCharAt(chars, mathFloor(b0 / 4)))
-        arrayPush(parts, stringCharAt(chars, (b0 & 3) * 16 + mathFloor(b1 / 16)))
-        arrayPush(parts, stringCharAt(chars, (b1 & 15) * 4 + mathFloor(b2 / 64)))
-        arrayPush(parts, stringCharAt(chars, b2 & 63))
+        if systemType(b0) != 'number' || b0 < 0 || b0 > 255 || b0 != (b0 | 0) || \
+                systemType(b1) != 'number' || b1 < 0 || b1 > 255 || b1 != (b1 | 0) || \
+                systemType(b2) != 'number' || b2 < 0 || b2 > 255 || b2 != (b2 | 0):
+            systemLogDebug('base64.bare: base64Encode - Invalid "bytes" argument')
+            return null
+        endif
+        arrayPush(out, arrayGet(codes, b0 >> 2))
+        arrayPush(out, arrayGet(codes, ((b0 & 3) << 4) | (b1 >> 4)))
+        arrayPush(out, arrayGet(codes, ((b1 & 15) << 2) | (b2 >> 6)))
+        arrayPush(out, arrayGet(codes, b2 & 63))
         ix = ix + 3
     endwhile
     remain = length - ix
     if remain == 1:
         b0 = arrayGet(bytes, ix)
-        arrayPush(parts, stringCharAt(chars, mathFloor(b0 / 4)))
-        arrayPush(parts, stringCharAt(chars, (b0 & 3) * 16))
-        arrayPush(parts, '==')
+        if systemType(b0) != 'number' || b0 < 0 || b0 > 255 || b0 != (b0 | 0):
+            systemLogDebug('base64.bare: base64Encode - Invalid "bytes" argument')
+            return null
+        endif
+        arrayPush(out, arrayGet(codes, b0 >> 2))
+        arrayPush(out, arrayGet(codes, (b0 & 3) << 4))
+        arrayPush(out, 61)
+        arrayPush(out, 61)
     elif remain == 2:
         b0 = arrayGet(bytes, ix)
         b1 = arrayGet(bytes, ix + 1)
-        arrayPush(parts, stringCharAt(chars, mathFloor(b0 / 4)))
-        arrayPush(parts, stringCharAt(chars, (b0 & 3) * 16 + mathFloor(b1 / 16)))
-        arrayPush(parts, stringCharAt(chars, (b1 & 15) * 4))
-        arrayPush(parts, '=')
+        if systemType(b0) != 'number' || b0 < 0 || b0 > 255 || b0 != (b0 | 0) || \
+                systemType(b1) != 'number' || b1 < 0 || b1 > 255 || b1 != (b1 | 0):
+            systemLogDebug('base64.bare: base64Encode - Invalid "bytes" argument')
+            return null
+        endif
+        arrayPush(out, arrayGet(codes, b0 >> 2))
+        arrayPush(out, arrayGet(codes, ((b0 & 3) << 4) | (b1 >> 4)))
+        arrayPush(out, arrayGet(codes, (b1 & 15) << 2))
+        arrayPush(out, 61)
     endif
-    return arrayJoin(parts, '')
+    return stringDecode(out)
 endfunction
 
 
@@ -64,20 +80,6 @@ function base64Decode(text):
 endfunction
 
 
-# True if value is an array of integer byte values (0-255)
-function base64IsByteArray(value):
-    if systemType(value) != 'array':
-        return false
-    endif
-    for byte in value:
-        if systemType(byte) != 'number' || byte != mathFloor(byte) || byte < 0 || byte > 255:
-            return false
-        endif
-    endfor
-    return true
-endfunction
-
-
 base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
 
@@ -91,18 +93,34 @@ function base64DecodeText(text):
     bytes = []
     ix = 0
     while ix < length:
-        c0 = base64Value(map, text, ix)
-        c1 = base64Value(map, text, ix + 1)
-        c2 = base64Value(map, text, ix + 2)
-        c3 = base64Value(map, text, ix + 3)
+        ch = stringCharCodeAt(text, ix)
+        if ch > 255:
+            return null
+        endif
+        c0 = arrayGet(map, ch)
+        ch = stringCharCodeAt(text, ix + 1)
+        if ch > 255:
+            return null
+        endif
+        c1 = arrayGet(map, ch)
+        ch = stringCharCodeAt(text, ix + 2)
+        if ch > 255:
+            return null
+        endif
+        c2 = arrayGet(map, ch)
+        ch = stringCharCodeAt(text, ix + 3)
+        if ch > 255:
+            return null
+        endif
+        c3 = arrayGet(map, ch)
         if c0 < 0 || c1 < 0:
             return null
         endif
-        arrayPush(bytes, c0 * 4 + mathFloor(c1 / 16))
+        arrayPush(bytes, (c0 << 2) | (c1 >> 4))
         if c2 >= 0:
-            arrayPush(bytes, (c1 & 15) * 16 + mathFloor(c2 / 4))
+            arrayPush(bytes, ((c1 & 15) << 4) | (c2 >> 2))
             if c3 >= 0:
-                arrayPush(bytes, (c2 & 3) * 64 + c3)
+                arrayPush(bytes, ((c2 & 3) << 6) | c3)
             elif c3 != -2 || ix + 4 != length:
                 return null
             endif
@@ -115,15 +133,6 @@ function base64DecodeText(text):
 endfunction
 
 
-function base64Value(map, text, ix):
-    ch = stringCharCodeAt(text, ix)
-    if ch > 255:
-        return -1
-    endif
-    return arrayGet(map, ch)
-endfunction
-
-
 function base64MapNew():
     map = arrayNewSize(256, -1)
     chars = base64Chars
@@ -132,9 +141,22 @@ function base64MapNew():
         arraySet(map, stringCharCodeAt(chars, ix), ix)
         ix = ix + 1
     endwhile
-    arraySet(map, stringCharCodeAt('=', 0), -2)
+    arraySet(map, 61, -2)
     return map
 endfunction
 
 
+function base64CodesNew():
+    codes = []
+    chars = base64Chars
+    ix = 0
+    while ix < 64:
+        arrayPush(codes, stringCharCodeAt(chars, ix))
+        ix = ix + 1
+    endwhile
+    return codes
+endfunction
+
+
 base64Map = base64MapNew()
+base64Codes = base64CodesNew()
