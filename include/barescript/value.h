@@ -123,26 +123,33 @@ typedef struct BSObjectNode {
  *
  * Up to four pairs live in the object itself. Past that, keys live on an insertion-order list of
  * treap nodes; past 32 keys the list is indexed by the treap (and an interned-pointer hash table).
- * Iteration is insertion order - matching the reference implementations, whose objects are
- * JavaScript objects and Python dictionaries. JSON encoding and value comparison walk sorted keys.
+ * The two storage forms are exclusive, so they share the object's storage. Iteration is insertion
+ * order - matching the reference implementations, whose objects are JavaScript objects and Python
+ * dictionaries. JSON encoding and value comparison walk sorted keys.
  */
 struct BSObject {
     int32_t refcount;
-    uint8_t packed;      /* 1 = smallKeys/smallValues, 0 = insertion list + treap */
+    uint8_t packed;      /* 1 = u.small, 0 = u.tree - an insertion list, and a treap past 32 keys */
     uint8_t uninterned;  /* 1 if any key is not interned; interned hash miss then walks the treap */
-    size_t count;
+    uint32_t count;
     uint32_t generation; /* incremented when a key is added or removed - value slots then move */
-    BSString *smallKeys[4];
-    BSValue smallValues[4];
-    BSObjectNode *root;
-    BSObjectNode *insertHead;
-    BSObjectNode *insertTail;
-    /*
-     * Open-addressing table of interned keys to nodes, built once the object outgrows the
-     * insertion-order scan. NULL until then. Tombstones are a sentinel pointer.
-     */
-    BSObjectNode **lookup;
-    uint32_t lookupMask;
+    union {
+        struct {
+            BSString *keys[4];
+            BSValue values[4];
+        } small;
+        struct {
+            BSObjectNode *root;
+            BSObjectNode *insertHead;
+            BSObjectNode *insertTail;
+            /*
+             * Open-addressing table of interned keys to nodes, built once the object outgrows the
+             * insertion-order scan. NULL until then. Tombstones are a sentinel pointer.
+             */
+            BSObjectNode **lookup;
+            uint32_t lookupMask;
+        } tree;
+    } u;
 };
 
 

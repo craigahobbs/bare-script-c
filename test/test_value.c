@@ -380,11 +380,11 @@ TEST(value_object)
             snprintf(key, sizeof(key), "k%02d", 19 - ix);
             bsObjectSet(many, key, bsNumber(ix));
         }
-        ASSERT_TRUE(many.u.object->root == NULL);
+        ASSERT_TRUE(many.u.object->u.tree.root == NULL);
         ASSERT_VALUE(bsObjectKeysSorted(many),
                      "[\"k00\",\"k01\",\"k02\",\"k03\",\"k04\",\"k05\",\"k06\",\"k07\",\"k08\",\"k09\","
                      "\"k10\",\"k11\",\"k12\",\"k13\",\"k14\",\"k15\",\"k16\",\"k17\",\"k18\",\"k19\"]");
-        ASSERT_TRUE(many.u.object->root == NULL);
+        ASSERT_TRUE(many.u.object->u.tree.root == NULL);
         bsRelease(many);
     }
 
@@ -471,7 +471,7 @@ TEST(value_object_intern)
     ASSERT_FALSE(bsObjectHas(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "a"));
-    ASSERT_TRUE(object.u.object->lookup != NULL);
+    ASSERT_TRUE(object.u.object->u.tree.lookup != NULL);
     ASSERT_TRUE(bsObjectDelete(object, "k0"));
     ASSERT_FALSE(bsObjectHas(object, "k0"));
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
