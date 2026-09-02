@@ -286,8 +286,10 @@ order, so objects iterate in insertion order (matching the reference implementat
 objects are JavaScript objects and Python dictionaries) while the tree still provides the sorted
 traversal that JSON encoding and value comparison are defined over. Keys of at most 64 bytes are
 interned, so a missing short key is an intern-table miss and a hit can compare interned
-`BSString` pointers instead of `memcmp`. The intern table holds one reference; interned strings
-live until process exit.
+`BSString` pointers instead of `memcmp`. The intern table stores each key's hash so a collision
+skips `memcmp`; interned names on the compiled script skip hashing entirely. Objects of more than
+32 keys keep an interned-pointer hash table for lookup. The intern table holds one reference;
+interned strings live until process exit.
 
 Allocation failure is fatal: there is no useful way for a script runtime to continue without
 memory, and threading an out-of-memory result through every value operation would obscure the code

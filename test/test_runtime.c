@@ -793,6 +793,30 @@ TEST(runtime_eval_borrow)
     ASSERT_VALUE(bsTestExecute("s = 'a'\nt = 'b'\nreturn s + (t)"), "\"ab\"");
     ASSERT_VALUE(bsTestExecute("s = 'a'\nt = 'b'\nu = 'c'\nreturn s + (t + u)"), "\"abc\"");
     ASSERT_VALUE(bsTestExecute("s = 'a'\nreturn s + (!false)"), "\"atrue\"");
+
+    /* Function arguments keep a borrowed heap value unless a later arg is effectful */
+    ASSERT_VALUE(bsTestExecute(
+        "function g(x, y):\n    return x + y\nendfunction\n"
+        "function mutate():\n    s = 'b'\n    return 'x'\nendfunction\n"
+        "s = 'a'\nreturn g(s, mutate())"), "\"ax\"");
+    ASSERT_VALUE(bsTestExecute(
+        "function g(x, y):\n    return x + y\nendfunction\n"
+        "s = 'a'\nreturn g(s, 'z')"), "\"az\"");
+
+    /* A function stored in a local is called through the slot, not the globals cache */
+    ASSERT_VALUE(bsTestExecute(
+        "function add(x):\n    return x + 1\nendfunction\n"
+        "function run():\n    f = add\n    return f(2)\nendfunction\n"
+        "return run()"), "3");
+
+    /* More than eight arguments allocate the argument buffer */
+    ASSERT_VALUE(bsTestExecute(
+        "function g(a, b, c, d, e, f, g, h, i, j):\n    return a + j\nendfunction\n"
+        "return g(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)"), "11");
+    ASSERT_VALUE(bsTestExecute(
+        "function g(a, b, c, d, e, f, g, h, i, j):\n    return a + j\nendfunction\n"
+        "function mutate():\n    s = 'b'\n    return 'z'\nendfunction\n"
+        "s = 'a'\nreturn g(s, 1, 2, 3, 4, 5, 6, 7, 8, mutate())"), "\"az\"");
 }
 
 

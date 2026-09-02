@@ -112,8 +112,17 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
  */
 bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out);
 
+/* Lookup by a string value. An interned key skips intern-table hashing. */
+bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out);
+
 /* Pointer to the stored value for key, or NULL if absent. Valid until the object is mutated. */
 BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size);
+
+/* Intern a short string. Strings longer than 64 bytes are not interned. Returns an owned value. */
+BSValue bsStringIntern(const char *data, size_t size);
+
+/* Allocate a string whose bytes are already known to be ASCII (length == size). */
+BSValue bsStringNewAscii(const char *text, size_t size);
 
 /* Non-ASCII code-point index to byte offset; ASCII is handled by bsStringOffsetFast */
 size_t bsStringOffsetSlow(BSValue value, size_t index);

@@ -164,6 +164,11 @@ static BSExpr *bsExprNew(BSExprType type)
     return expr;
 }
 
+static BSValue bsInternName(BSValue name)
+{
+    return bsStringIntern(bsStringData(name), bsStringSize(name));
+}
+
 
 BSExpr *bsExprFromModel(BSValue model)
 {
@@ -188,7 +193,7 @@ BSExpr *bsExprFromModel(BSValue model)
     BSValue variable = bsObjectGet(model, "variable");
     if (variable.type == BS_STRING) {
         BSExpr *expr = bsExprNew(BS_EXPR_VARIABLE);
-        expr->u.variable.name = bsRetain(variable);
+        expr->u.variable.name = bsInternName(variable);
         expr->u.variable.slot = -1;
         const char *name = bsStringData(variable);
         if (strcmp(name, "null") == 0) {
@@ -209,7 +214,7 @@ BSExpr *bsExprFromModel(BSValue model)
         }
         BSValue args = bsObjectGet(function, "args");
         BSExpr *expr = bsExprNew(BS_EXPR_FUNCTION);
-        expr->u.function.name = bsRetain(name);
+        expr->u.function.name = bsInternName(name);
         expr->u.function.slot = -1;
         expr->u.function.isIf = (strcmp(bsStringData(name), "if") == 0);
         size_t argCount = bsArrayCount(args);
@@ -350,7 +355,7 @@ static bool bsFunctionFromModel(BSValue model, BSStatement *statement, BSScript 
 
     BSFunctionDef *def = bsAlloc(sizeof(BSFunctionDef));
     memset(def, 0, sizeof(BSFunctionDef));
-    def->name = bsRetain(name);
+    def->name = bsInternName(name);
     def->lastArgArray = bsValueBoolean(bsObjectGet(model, "lastArgArray"));
     def->async = bsValueBoolean(bsObjectGet(model, "async"));
     def->lineNumber = statement->lineNumber;
@@ -374,7 +379,7 @@ static bool bsFunctionFromModel(BSValue model, BSStatement *statement, BSScript 
             if (argName.type != BS_STRING) {
                 return false;
             }
-            def->argNames[def->argCount++] = bsRetain(argName);
+            def->argNames[def->argCount++] = bsInternName(argName);
         }
     }
 
@@ -407,7 +412,7 @@ static bool bsStatementsFromModel(BSValue statementModels, BSStatementList *list
             statement->u.expr.expr = expr;
             BSValue name = bsObjectGet(value, "name");
             if (name.type == BS_STRING) {
-                statement->u.expr.name = bsRetain(name);
+                statement->u.expr.name = bsInternName(name);
             }
             continue;
         }

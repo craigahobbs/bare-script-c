@@ -1448,9 +1448,20 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
     switch (node->kind) {
     case RX_CHAR:
     case RX_ANY:
-    case RX_CLASS:
-        result = rxMatchOne(state, node, pos) && rxMatchNode(state, node->next, cont, pos + 1);
+    case RX_CLASS: {
+        bool matched = true;
+        while (node != NULL &&
+               (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS)) {
+            if (!rxMatchOne(state, node, pos)) {
+                matched = false;
+                break;
+            }
+            pos++;
+            node = node->next;
+        }
+        result = matched && rxMatchNode(state, node, cont, pos);
         break;
+    }
 
     case RX_BOL:
         if (pos == 0 || ((state->flags & BS_REGEX_MULTILINE) != 0 && rxCode(state, pos - 1) == '\n')) {

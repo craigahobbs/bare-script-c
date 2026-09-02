@@ -416,6 +416,25 @@ TEST(value_object_intern)
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
     ASSERT_FALSE(bsObjectHas(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "k40"));
+    ASSERT_TRUE(bsObjectDelete(object, "k0"));
+    ASSERT_FALSE(bsObjectHas(object, "k0"));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
+
+    /* Further inserts grow the interned-pointer hash table */
+    for (int ix = 40; ix < 80; ix++) {
+        snprintf(key, sizeof(key), "k%d", ix);
+        bsObjectSet(object, key, bsNumber(ix));
+    }
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k79").u.number, 79);
+
+    /* Interned keys from the object compare by pointer; a 4-byte key hits the word hash */
+    BSValue keys = bsObjectKeys(object);
+    ASSERT_TRUE(bsObjectHasString(object, bsArrayGet(keys, 0)));
+    bsRelease(keys);
+    bsObjectSet(object, "abcd", bsNumber(4));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "abcd").u.number, 4);
+    bsObjectSet(object, "\xc3\xa9", bsNumber(5));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "\xc3\xa9").u.number, 5);
 
     /* A key longer than the intern limit still round-trips, on both small and large objects */
     char longKey[80];

@@ -275,8 +275,15 @@ static inline BSValue bsEvalTake(BSEval eval)
 }
 
 
-static BSEval bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
-                         BSScript *script, BSStatement *statement, int depth);
+typedef struct {
+    BSOptions *options;
+    BSScope *scope;
+    BSScript *script;
+    BSStatement *statement;
+    bool builtins;
+} BSEvalCtx;
+
+static BSEval bsEvalExpr(BSExpr *expr, const BSEvalCtx *ctx, int depth);
 
 
 static bool bsExprPure(const BSExpr *expr)
@@ -306,22 +313,13 @@ static bool bsExprPure(const BSExpr *expr)
 }
 
 
-/* Look up a variable's value - returns a borrowed reference */
-static BSValue bsLookup(BSValue name, int slot, BSOptions *options, BSScope *scope)
+/* Look up a variable in a locals object or the globals. Slot hits are handled by bsEvalExpr. */
+static BSValue bsLookup(BSValue name, BSOptions *options, BSScope *scope)
 {
-    if (scope != NULL) {
-        if (scope->slots != NULL) {
-            if (slot >= 0) {
-                BSValue value = scope->slots[slot];
-                if (!BS_IS_UNSET(value)) {
-                    return value;
-                }
-            }
-        } else if (scope->object.type == BS_OBJECT) {
-            BSValue found;
-            if (bsObjectLookup(scope->object, bsStringData(name), bsStringSize(name), &found)) {
-                return found;
-            }
+    if (scope != NULL && scope->slots == NULL && scope->object.type == BS_OBJECT) {
+        BSValue found;
+        if (bsObjectLookupString(scope->object, name, &found)) {
+            return found;
         }
     }
     return bsObjectGetString(options->globals, name);
@@ -329,8 +327,9 @@ static BSValue bsLookup(BSValue name, int slot, BSOptions *options, BSScope *sco
 
 
 /* Look up a function, using the call site's globals cache when the name is not a local */
-static BSValue bsLookupFunction(BSExpr *expr, BSOptions *options, BSScope *scope)
+static BSValue bsLookupFunction(BSExpr *expr, const BSEvalCtx *ctx)
 {
+    BSScope *scope = ctx->scope;
     if (scope != NULL) {
         if (scope->slots != NULL) {
             if (expr->u.function.slot >= 0) {
@@ -341,13 +340,13 @@ static BSValue bsLookupFunction(BSExpr *expr, BSOptions *options, BSScope *scope
             }
         } else if (scope->object.type == BS_OBJECT) {
             BSValue found;
-            if (bsObjectLookup(scope->object, bsStringData(expr->u.function.name),
-                               bsStringSize(expr->u.function.name), &found)) {
+            if (bsObjectLookupString(scope->object, expr->u.function.name, &found)) {
                 return found;
             }
         }
     }
 
+    BSOptions *options = ctx->options;
     if (options->globals.type == BS_OBJECT) {
         BSObject *globals = options->globals.u.object;
         if (expr->u.function.cachedObject == globals &&
@@ -365,16 +364,14 @@ static BSValue bsLookupFunction(BSExpr *expr, BSOptions *options, BSScope *scope
 }
 
 
-static BSEval bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
-                             BSScript *script, BSStatement *statement, int depth)
+static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
     /* The built-in "if" function evaluates only the selected branch */
     if (expr->u.function.isIf) {
         size_t argCount = expr->u.function.argCount;
         bool test = false;
         if (argCount >= 1) {
-            BSEval value = bsEvalExpr(expr->u.function.args[0], options, scope, builtins, script,
-                                      statement, depth);
+            BSEval value = bsEvalExpr(expr->u.function.args[0], ctx, depth);
             test = bsValueBoolean(value.value);
             bsEvalDrop(value);
         }
@@ -384,26 +381,49 @@ static BSEval bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, b
         } else {
             branch = argCount >= 3 ? expr->u.function.args[2] : NULL;
         }
-        return branch != NULL ?
-            bsEvalExpr(branch, options, scope, builtins, script, statement, depth) : bsEvalBorrowed(bsNull());
+        return branch != NULL ? bsEvalExpr(branch, ctx, depth) : bsEvalBorrowed(bsNull());
     }
 
-    /* Evaluate the function arguments */
+    /* Evaluate the function arguments. A later effectful arg can reassign a borrowed heap value. */
     size_t argCount = expr->u.function.argCount;
     BSValue argsInline[8];
-    BSValue *args = argCount <= 8 ? argsInline : bsAlloc(argCount * sizeof(BSValue));
+    bool ownedInline[8];
+    bool laterInline[8];
+    BSValue *args = argsInline;
+    bool *owned = ownedInline;
+    bool *later = laterInline;
+    if (argCount > 8) {
+        args = bsAlloc(argCount * sizeof(BSValue));
+        owned = bsAlloc(argCount * sizeof(bool));
+        later = bsAlloc(argCount * sizeof(bool));
+    }
+    bool effectful = false;
+    for (size_t ix = argCount; ix-- > 0; ) {
+        later[ix] = effectful;
+        if (!effectful && !bsExprPure(expr->u.function.args[ix])) {
+            effectful = true;
+        }
+    }
     for (size_t ix = 0; ix < argCount; ix++) {
-        args[ix] = bsEvalTake(bsEvalExpr(expr->u.function.args[ix], options, scope, builtins, script,
-                                         statement, depth));
+        BSEval eval = bsEvalExpr(expr->u.function.args[ix], ctx, depth);
+        if (!eval.owned && eval.value.type >= BS_STRING && later[ix]) {
+            eval.value = bsRetain(eval.value);
+            eval.owned = true;
+        }
+        args[ix] = eval.value;
+        owned[ix] = eval.owned;
     }
 
     /* Resolve the function value */
-    BSValue function = bsLookupFunction(expr, options, scope);
-    if (function.type == BS_NULL && builtins) {
+    BSValue function = bsLookupFunction(expr, ctx);
+    if (function.type == BS_NULL && ctx->builtins) {
         function = bsLibraryExpressionFunction(expr->u.function.name);
     }
 
     BSValue result = bsNull();
+    BSOptions *options = ctx->options;
+    BSScript *script = ctx->script;
+    BSStatement *statement = ctx->statement;
     if (function.type == BS_FUNCTION) {
         int savedDepth = options->depth;
         options->depth = depth;
@@ -433,20 +453,23 @@ static BSEval bsEvalFunction(BSExpr *expr, BSOptions *options, BSScope *scope, b
     }
 
     for (size_t ix = 0; ix < argCount; ix++) {
-        bsRelease(args[ix]);
+        if (owned[ix]) {
+            bsRelease(args[ix]);
+        }
     }
     if (args != argsInline) {
         free(args);
+        free(owned);
+        free(later);
     }
     return bsEvalOwned(result);
 }
 
 
-static BSEval bsEvalBinary(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
-                           BSScript *script, BSStatement *statement, int depth)
+static BSEval bsEvalBinary(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
     BSBinaryOp op = expr->u.binary.op;
-    BSEval left = bsEvalExpr(expr->u.binary.left, options, scope, builtins, script, statement, depth);
+    BSEval left = bsEvalExpr(expr->u.binary.left, ctx, depth);
 
     /* The short-circuiting logical operators */
     if (op == BS_BINARY_LAND) {
@@ -454,14 +477,14 @@ static BSEval bsEvalBinary(BSExpr *expr, BSOptions *options, BSScope *scope, boo
             return left;
         }
         bsEvalDrop(left);
-        return bsEvalExpr(expr->u.binary.right, options, scope, builtins, script, statement, depth);
+        return bsEvalExpr(expr->u.binary.right, ctx, depth);
     }
     if (op == BS_BINARY_LOR) {
         if (bsValueBoolean(left.value)) {
             return left;
         }
         bsEvalDrop(left);
-        return bsEvalExpr(expr->u.binary.right, options, scope, builtins, script, statement, depth);
+        return bsEvalExpr(expr->u.binary.right, ctx, depth);
     }
 
     /* A later operand can reassign the slot a borrowed heap value came from */
@@ -470,7 +493,7 @@ static BSEval bsEvalBinary(BSExpr *expr, BSOptions *options, BSScope *scope, boo
         left.owned = true;
     }
 
-    BSEval right = bsEvalExpr(expr->u.binary.right, options, scope, builtins, script, statement, depth);
+    BSEval right = bsEvalExpr(expr->u.binary.right, ctx, depth);
     bool bothNumber = (left.value.type == BS_NUMBER && right.value.type == BS_NUMBER);
     BSValue result = bsNull();
     bool owned = false;
@@ -586,8 +609,7 @@ static BSEval bsEvalBinary(BSExpr *expr, BSOptions *options, BSScope *scope, boo
 }
 
 
-static BSEval bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins,
-                         BSScript *script, BSStatement *statement, int depth)
+static BSEval bsEvalExpr(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
     for (;;) {
         switch (expr->type) {
@@ -605,9 +627,17 @@ static BSEval bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool 
                 return bsEvalBorrowed(bsBoolean(true));
             case BS_SPECIAL_FALSE:
                 return bsEvalBorrowed(bsBoolean(false));
-            default:
-                return bsEvalBorrowed(bsLookup(expr->u.variable.name, expr->u.variable.slot, options,
-                                               scope));
+            default: {
+                int slot = expr->u.variable.slot;
+                BSScope *scope = ctx->scope;
+                if (scope != NULL && scope->slots != NULL && slot >= 0) {
+                    BSValue value = scope->slots[slot];
+                    if (!BS_IS_UNSET(value)) {
+                        return bsEvalBorrowed(value);
+                    }
+                }
+                return bsEvalBorrowed(bsLookup(expr->u.variable.name, ctx->options, scope));
+            }
             }
 
         default:
@@ -615,8 +645,9 @@ static BSEval bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool 
         }
 
         /* The recursive expression kinds are depth-guarded */
-        if (depth >= options->depthMax) {
-            bsErrorSetStatement(options, script, statement, "Maximum expression depth exceeded");
+        if (depth >= ctx->options->depthMax) {
+            bsErrorSetStatement(ctx->options, ctx->script, ctx->statement,
+                                "Maximum expression depth exceeded");
             return bsEvalBorrowed(bsNull());
         }
         depth++;
@@ -627,14 +658,13 @@ static BSEval bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool 
             continue;
 
         case BS_EXPR_FUNCTION:
-            return bsEvalFunction(expr, options, scope, builtins, script, statement, depth);
+            return bsEvalFunction(expr, ctx, depth);
 
         case BS_EXPR_BINARY:
-            return bsEvalBinary(expr, options, scope, builtins, script, statement, depth);
+            return bsEvalBinary(expr, ctx, depth);
 
         default: {
-            BSEval value = bsEvalExpr(expr->u.unary.expr, options, scope, builtins, script, statement,
-                                      depth);
+            BSEval value = bsEvalExpr(expr->u.unary.expr, ctx, depth);
             BSValue result;
             switch (expr->u.unary.op) {
             case BS_UNARY_NOT:
@@ -658,7 +688,13 @@ static BSEval bsEvalExpr(BSExpr *expr, BSOptions *options, BSScope *scope, bool 
 
 BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins)
 {
-    return bsEvalTake(bsEvalExpr(expr, options, scope, builtins, NULL, NULL, options->depth));
+    BSEvalCtx ctx;
+    ctx.options = options;
+    ctx.scope = scope;
+    ctx.script = NULL;
+    ctx.statement = NULL;
+    ctx.builtins = builtins;
+    return bsEvalTake(bsEvalExpr(expr, &ctx, options->depth));
 }
 
 
@@ -671,7 +707,13 @@ BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue
     BSScope scope;
     bsScopeInit(&scope);
     scope.object = locals;
-    BSValue result = bsEvalTake(bsEvalExpr(expr, options, &scope, builtins, NULL, NULL, options->depth));
+    BSEvalCtx ctx;
+    ctx.options = options;
+    ctx.scope = &scope;
+    ctx.script = NULL;
+    ctx.statement = NULL;
+    ctx.builtins = builtins;
+    BSValue result = bsEvalTake(bsEvalExpr(expr, &ctx, options->depth));
     bsExprFree(expr);
     return result;
 }
@@ -858,9 +900,17 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
         hasCoverage = coverage.type == BS_OBJECT && bsValueBoolean(bsObjectGet(coverage, "enabled"));
     }
 
+    BSEvalCtx ctx;
+    ctx.options = options;
+    ctx.scope = scope;
+    ctx.script = script;
+    ctx.builtins = false;
+    ctx.statement = NULL;
+
     size_t ixStatement = 0;
     while (ixStatement < statementCount) {
         BSStatement *statement = statements[ixStatement];
+        ctx.statement = statement;
 
         options->statementCount++;
         if (options->maxStatements > 0 && options->statementCount > options->maxStatements) {
@@ -874,8 +924,7 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
 
         switch (statement->type) {
         case BS_STMT_EXPR: {
-            BSEval eval = bsEvalExpr(statement->u.expr.expr, options, scope, false, script, statement,
-                                     options->depth);
+            BSEval eval = bsEvalExpr(statement->u.expr.expr, &ctx, options->depth);
             if (statement->u.expr.name.type == BS_STRING) {
                 /*
                  * A function body always has a slot for every name it assigns, so an assignment
@@ -900,8 +949,7 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
         case BS_STMT_JUMP: {
             bool jump = true;
             if (statement->u.jump.expr != NULL) {
-                BSEval eval = bsEvalExpr(statement->u.jump.expr, options, scope, false, script, statement,
-                                         options->depth);
+                BSEval eval = bsEvalExpr(statement->u.jump.expr, &ctx, options->depth);
                 jump = bsValueBoolean(eval.value);
                 bsEvalDrop(eval);
             }
@@ -921,8 +969,7 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
 
         case BS_STMT_RETURN: {
             return statement->u.ret.expr != NULL ?
-                bsEvalTake(bsEvalExpr(statement->u.ret.expr, options, scope, false, script, statement,
-                                      options->depth)) : bsNull();
+                bsEvalTake(bsEvalExpr(statement->u.ret.expr, &ctx, options->depth)) : bsNull();
         }
 
         case BS_STMT_FUNCTION: {

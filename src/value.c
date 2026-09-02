@@ -283,21 +283,25 @@ static bool bsUtf8IsAscii(const char *data, size_t size)
 }
 
 
-BSValue bsStringNewSize(const char *text, size_t size)
+BSValue bsStringNewAscii(const char *text, size_t size)
 {
     BSString *string = bsStringAlloc(size);
     memcpy(string->data, text, size);
-    if (bsUtf8IsAscii(text, size)) {
-        string->length = size;
-    } else {
-        size_t length = bsUTF8Length(string->data, size);
-        string->length = (length != SIZE_MAX ? length : size);
-    }
+    string->length = size;
+    return bsStringTake(string);
+}
 
-    BSValue value;
-    value.type = BS_STRING;
-    value.u.string = string;
-    return value;
+
+BSValue bsStringNewSize(const char *text, size_t size)
+{
+    if (bsUtf8IsAscii(text, size)) {
+        return bsStringNewAscii(text, size);
+    }
+    BSString *string = bsStringAlloc(size);
+    memcpy(string->data, text, size);
+    size_t length = bsUTF8Length(string->data, size);
+    string->length = (length != SIZE_MAX ? length : size);
+    return bsStringTake(string);
 }
 
 
@@ -332,10 +336,10 @@ BSValue bsStringNewVFormat(const char *format, va_list args)
     vsnprintf(string->data, (size_t) size + 1, format, args);
     if (bsUtf8IsAscii(string->data, (size_t) size)) {
         string->length = (size_t) size;
-    } else {
-        size_t length = bsUTF8Length(string->data, (size_t) size);
-        string->length = (length != SIZE_MAX ? length : (size_t) size);
+        return bsStringTake(string);
     }
+    size_t length = bsUTF8Length(string->data, (size_t) size);
+    string->length = (length != SIZE_MAX ? length : (size_t) size);
     return bsStringTake(string);
 }
 
@@ -811,6 +815,9 @@ static BSObject *bsObjectAlloc(void)
 
 static void bsObjectRecycle(BSObject *object)
 {
+    free(object->lookup);
+    object->lookup = NULL;
+    object->lookupMask = 0;
     if (bsObjectPoolCount >= BS_OBJECT_POOL_MAX) {
         free(object);
         return;
@@ -830,6 +837,8 @@ BSValue bsObjectNew(void)
     object->root = NULL;
     object->insertHead = NULL;
     object->insertTail = NULL;
+    object->lookup = NULL;
+    object->lookupMask = 0;
 
     BSValue value;
     value.type = BS_OBJECT;
@@ -899,16 +908,37 @@ static uint32_t bsObjectPriority(void)
 #define BS_INTERN_MAX 64
 #define BS_INTERN_INITIAL 32
 
-static BSString **bsInternSlots;
+typedef struct {
+    BSString *string;
+    uint32_t hash;
+} BSInternSlot;
+
+static BSInternSlot *bsInternSlots;
 static size_t bsInternMask;
 static size_t bsInternCount;
 
-static uint32_t bsInternHash(const char *data, size_t size)
+static uint32_t bsInternHash(const char *data, size_t size, bool *ascii)
 {
+    const unsigned char *bytes = (const unsigned char *) data;
     uint32_t hash = 2166136261u;
-    for (size_t ix = 0; ix < size; ix++) {
-        hash ^= (unsigned char) data[ix];
+    uint32_t high = 0;
+    size_t ix = 0;
+    while (ix + 4 <= size) {
+        uint32_t word;
+        memcpy(&word, bytes + ix, 4);
+        high |= word;
+        hash ^= word;
         hash *= 16777619u;
+        ix += 4;
+    }
+    while (ix < size) {
+        unsigned char byte = bytes[ix++];
+        high |= byte;
+        hash ^= byte;
+        hash *= 16777619u;
+    }
+    if (ascii != NULL) {
+        *ascii = (high & 0x80808080u) == 0;
     }
     return hash;
 }
@@ -920,28 +950,29 @@ static void bsInternEnsure(void)
     }
     size_t capacity = BS_INTERN_INITIAL;
     bsInternMask = capacity - 1;
-    bsInternSlots = bsAlloc(capacity * sizeof(BSString *));
-    memset(bsInternSlots, 0, capacity * sizeof(BSString *));
+    bsInternSlots = bsAlloc(capacity * sizeof(BSInternSlot));
+    memset(bsInternSlots, 0, capacity * sizeof(BSInternSlot));
 }
 
 static void bsInternGrow(void)
 {
     size_t oldCapacity = bsInternMask + 1;
-    BSString **old = bsInternSlots;
+    BSInternSlot *old = bsInternSlots;
     size_t capacity = oldCapacity * 2;
     bsInternMask = capacity - 1;
-    bsInternSlots = bsAlloc(capacity * sizeof(BSString *));
-    memset(bsInternSlots, 0, capacity * sizeof(BSString *));
+    bsInternSlots = bsAlloc(capacity * sizeof(BSInternSlot));
+    memset(bsInternSlots, 0, capacity * sizeof(BSInternSlot));
     for (size_t ix = 0; ix < oldCapacity; ix++) {
-        BSString *string = old[ix];
+        BSString *string = old[ix].string;
         if (string == NULL) {
             continue;
         }
-        uint32_t hash = bsInternHash(string->data, string->size);
+        uint32_t hash = old[ix].hash;
         for (size_t probe = 0;; probe++) {
             size_t slot = (hash + probe) & bsInternMask;
-            if (bsInternSlots[slot] == NULL) {
-                bsInternSlots[slot] = string;
+            if (bsInternSlots[slot].string == NULL) {
+                bsInternSlots[slot].string = string;
+                bsInternSlots[slot].hash = hash;
                 break;
             }
         }
@@ -949,28 +980,35 @@ static void bsInternGrow(void)
     free(old);
 }
 
-static BSString *bsInternLookup(const char *data, size_t size)
+static BSString *bsInternLookupHash(const char *data, size_t size, uint32_t hash)
 {
     bsInternEnsure();
-    uint32_t hash = bsInternHash(data, size);
     for (size_t probe = 0;; probe++) {
         size_t slot = (hash + probe) & bsInternMask;
-        BSString *string = bsInternSlots[slot];
+        BSString *string = bsInternSlots[slot].string;
         if (string == NULL) {
             return NULL;
         }
-        if (string->size == size && (size == 0 || memcmp(string->data, data, size) == 0)) {
+        if (bsInternSlots[slot].hash == hash && string->size == size &&
+            (size == 0 || memcmp(string->data, data, size) == 0)) {
             return string;
         }
     }
 }
 
-static BSValue bsStringIntern(const char *data, size_t size)
+static BSString *bsInternLookup(const char *data, size_t size)
+{
+    return bsInternLookupHash(data, size, bsInternHash(data, size, NULL));
+}
+
+BSValue bsStringIntern(const char *data, size_t size)
 {
     if (size > BS_INTERN_MAX) {
         return bsStringNewSize(data, size);
     }
-    BSString *found = bsInternLookup(data, size);
+    bool ascii = false;
+    uint32_t hash = bsInternHash(data, size, &ascii);
+    BSString *found = bsInternLookupHash(data, size, hash);
     if (found != NULL) {
         found->refcount++;
         return bsStringTake(found);
@@ -978,14 +1016,14 @@ static BSValue bsStringIntern(const char *data, size_t size)
     if ((bsInternCount + 1) * 4 >= (bsInternMask + 1) * 3) {
         bsInternGrow();
     }
-    BSValue value = bsStringNewSize(data, size);
+    BSValue value = ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
     value.u.string->interned = 1;
     value.u.string->refcount++;
-    uint32_t hash = bsInternHash(data, size);
     for (size_t probe = 0;; probe++) {
         size_t slot = (hash + probe) & bsInternMask;
-        if (bsInternSlots[slot] == NULL) {
-            bsInternSlots[slot] = value.u.string;
+        if (bsInternSlots[slot].string == NULL) {
+            bsInternSlots[slot].string = value.u.string;
+            bsInternSlots[slot].hash = hash;
             bsInternCount++;
             return value;
         }
@@ -1025,15 +1063,104 @@ static BSObjectNode *bsObjectRotateLeft(BSObjectNode *node)
 }
 
 
-/* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created. */
+#define BS_OBJECT_LOOKUP_EMPTY ((BSObjectNode *) 0)
+#define BS_OBJECT_LOOKUP_TOMB  ((BSObjectNode *) (uintptr_t) 1)
+
+static uint32_t bsPtrHash(const BSString *key)
+{
+    uintptr_t x = (uintptr_t) key;
+    x ^= x >> 16;
+    x *= 0x7feb352d;
+    return (uint32_t) x;
+}
+
+static void bsObjectLookupPut(BSObject *object, BSObjectNode *node);
+static void bsObjectLookupGrow(BSObject *object);
+
+static void bsObjectLookupPut(BSObject *object, BSObjectNode *node)
+{
+    if (object->lookup == NULL || node->key == NULL || !node->key->interned) {
+        return;
+    }
+    if ((object->count + 1) * 2 > object->lookupMask + 1) {
+        bsObjectLookupGrow(object);
+    }
+    uint32_t hash = bsPtrHash(node->key);
+    for (uint32_t probe = 0;; probe++) {
+        uint32_t slot = (hash + probe) & object->lookupMask;
+        BSObjectNode *entry = object->lookup[slot];
+        if (entry == BS_OBJECT_LOOKUP_EMPTY || entry == BS_OBJECT_LOOKUP_TOMB || entry->key == node->key) {
+            object->lookup[slot] = node;
+            return;
+        }
+    }
+}
+
+static void bsObjectLookupGrow(BSObject *object)
+{
+    BSObjectNode **old = object->lookup;
+    uint32_t oldMask = object->lookupMask;
+    uint32_t capacity = old != NULL ? (oldMask + 1) * 2 : 16;
+    while (capacity < (uint32_t) object->count * 2 + 2) {
+        capacity *= 2;
+    }
+    object->lookup = bsAlloc(capacity * sizeof(BSObjectNode *));
+    memset(object->lookup, 0, capacity * sizeof(BSObjectNode *));
+    object->lookupMask = capacity - 1;
+    if (old != NULL) {
+        for (uint32_t ix = 0; ix <= oldMask; ix++) {
+            BSObjectNode *node = old[ix];
+            if (node != BS_OBJECT_LOOKUP_EMPTY && node != BS_OBJECT_LOOKUP_TOMB) {
+                bsObjectLookupPut(object, node);
+            }
+        }
+        free(old);
+    } else {
+        for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
+            bsObjectLookupPut(object, node);
+        }
+    }
+}
+
+static void bsObjectLookupDel(BSObject *object, BSString *interned)
+{
+    if (object->lookup == NULL || interned == NULL) {
+        return;
+    }
+    uint32_t hash = bsPtrHash(interned);
+    for (uint32_t probe = 0;; probe++) {
+        uint32_t slot = (hash + probe) & object->lookupMask;
+        BSObjectNode *entry = object->lookup[slot];
+        if (entry == BS_OBJECT_LOOKUP_EMPTY) {
+            return;
+        }
+        if (entry != BS_OBJECT_LOOKUP_TOMB && entry->key == interned) {
+            object->lookup[slot] = BS_OBJECT_LOOKUP_TOMB;
+            return;
+        }
+    }
+}
+
+static BSObjectNode *bsObjectLookupGet(const BSObject *object, BSString *interned)
+{
+    uint32_t hash = bsPtrHash(interned);
+    for (uint32_t probe = 0;; probe++) {
+        uint32_t slot = (hash + probe) & object->lookupMask;
+        BSObjectNode *entry = object->lookup[slot];
+        if (entry == BS_OBJECT_LOOKUP_EMPTY) {
+            return NULL;
+        }
+        if (entry != BS_OBJECT_LOOKUP_TOMB && entry->key == interned) {
+            return entry;
+        }
+    }
+}
+
+
+/* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created.
+ * Short keys must already be interned. */
 static BSObjectNode *bsObjectInsert(BSObjectNode *node, BSValue key, BSValue item, BSObject *object)
 {
-    if (key.type == BS_STRING && !key.u.string->interned && key.u.string->size <= BS_INTERN_MAX) {
-        BSValue interned = bsStringIntern(key.u.string->data, key.u.string->size);
-        BSObjectNode *result = bsObjectInsert(node, interned, item, object);
-        bsRelease(interned);
-        return result;
-    }
     if (node == NULL) {
         BSObjectNode *created = bsObjectNodeAlloc();
         created->left = NULL;
@@ -1054,6 +1181,7 @@ static BSObjectNode *bsObjectInsert(BSObjectNode *node, BSValue key, BSValue ite
 
         object->count++;
         object->generation++;
+        bsObjectLookupPut(object, created);
         return created;
     }
 
@@ -1093,17 +1221,27 @@ static BSObjectNode *bsObjectFind(BSObjectNode *node, const char *key, size_t si
 
 
 /* Small objects are faster to scan in insertion order than to chase treap pointers */
-#define BS_OBJECT_SMALL 12
+#define BS_OBJECT_SMALL 32
 
-static BSObjectNode *bsObjectFindKey(const BSObject *object, const char *key, size_t size)
+static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t size,
+                                     BSString *interned)
 {
-    BSString *interned = NULL;
-    if (size <= BS_INTERN_MAX) {
+    if (interned == NULL && size <= BS_INTERN_MAX) {
         interned = bsInternLookup(key, size);
         if (interned == NULL) {
             return NULL;
         }
         key = interned->data;
+        size = interned->size;
+    } else if (interned != NULL) {
+        key = interned->data;
+        size = interned->size;
+    }
+    if (interned != NULL && object->count > BS_OBJECT_SMALL) {
+        if (object->lookup == NULL) {
+            bsObjectLookupGrow(object);
+        }
+        return bsObjectLookupGet(object, interned);
     }
     if (object->count <= BS_OBJECT_SMALL) {
         for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
@@ -1149,6 +1287,7 @@ static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t 
         } else {
             object->insertTail = node->insertPrev;
         }
+        bsObjectLookupDel(object, node->key);
         bsRelease(bsStringTake(node->key));
         bsRelease(node->value);
         bsObjectNodeRecycle(node);
@@ -1184,6 +1323,12 @@ static void bsObjectNodeFree(BSObjectNode *node)
 void bsObjectSetString(BSValue value, BSValue key, BSValue item)
 {
     BSObject *object = value.u.object;
+    if (key.type == BS_STRING && !key.u.string->interned && key.u.string->size <= BS_INTERN_MAX) {
+        BSValue interned = bsStringIntern(key.u.string->data, key.u.string->size);
+        object->root = bsObjectInsert(object->root, interned, item, object);
+        bsRelease(interned);
+        return;
+    }
     object->root = bsObjectInsert(object->root, key, item, object);
 }
 
@@ -1201,7 +1346,22 @@ bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out)
     if (object.type != BS_OBJECT) {
         return false;
     }
-    BSObjectNode *node = bsObjectFindKey(object.u.object, key, size);
+    BSObjectNode *node = bsObjectFindKey(object.u.object, key, size, NULL);
+    if (node == NULL) {
+        return false;
+    }
+    *out = node->value;
+    return true;
+}
+
+
+bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out)
+{
+    if (object.type != BS_OBJECT) {
+        return false;
+    }
+    BSString *interned = (key.type == BS_STRING && key.u.string->interned) ? key.u.string : NULL;
+    BSObjectNode *node = bsObjectFindKey(object.u.object, bsStringData(key), bsStringSize(key), interned);
     if (node == NULL) {
         return false;
     }
@@ -1212,14 +1372,14 @@ bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out)
 
 BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size)
 {
-    return &bsObjectFindKey(object.u.object, key, size)->value;
+    return &bsObjectFindKey(object.u.object, key, size, NULL)->value;
 }
 
 
 BSValue bsObjectGetString(BSValue value, BSValue key)
 {
     BSValue found;
-    return bsObjectLookup(value, bsStringData(key), bsStringSize(key), &found) ? found : bsNull();
+    return bsObjectLookupString(value, key, &found) ? found : bsNull();
 }
 
 
@@ -1232,14 +1392,17 @@ BSValue bsObjectGet(BSValue value, const char *key)
 
 bool bsObjectHasString(BSValue value, BSValue key)
 {
-    return value.type == BS_OBJECT &&
-        bsObjectFindKey(value.u.object, bsStringData(key), bsStringSize(key)) != NULL;
+    if (value.type != BS_OBJECT) {
+        return false;
+    }
+    BSString *interned = (key.type == BS_STRING && key.u.string->interned) ? key.u.string : NULL;
+    return bsObjectFindKey(value.u.object, bsStringData(key), bsStringSize(key), interned) != NULL;
 }
 
 
 bool bsObjectHas(BSValue value, const char *key)
 {
-    return value.type == BS_OBJECT && bsObjectFindKey(value.u.object, key, strlen(key)) != NULL;
+    return value.type == BS_OBJECT && bsObjectFindKey(value.u.object, key, strlen(key), NULL) != NULL;
 }
 
 

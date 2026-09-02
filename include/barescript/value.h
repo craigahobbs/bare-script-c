@@ -125,6 +125,12 @@ struct BSObject {
     BSObjectNode *root;
     BSObjectNode *insertHead;
     BSObjectNode *insertTail;
+    /*
+     * Open-addressing table of interned keys to nodes, built once the object outgrows the
+     * insertion-order scan. NULL until then. Tombstones are a sentinel pointer.
+     */
+    BSObjectNode **lookup;
+    uint32_t lookupMask;
 };
 
 
