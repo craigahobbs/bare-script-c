@@ -394,6 +394,15 @@ TEST(library_system)
     bsTestExpr("systemType([])", "\"array\"");
     bsTestExpr("systemType({})", "\"object\"");
     bsTestExpr("systemType(systemType)", "\"function\"");
+    /* Type names are interned so schemaValidate can compare them by pointer */
+    {
+        BSValue a = bsTestExecute("return systemType(1)");
+        BSValue b = bsTestExecute("return systemType(2)");
+        ASSERT_TRUE(a.type == BS_STRING && (a.u.string->flags & BS_STR_INTERNED) != 0);
+        ASSERT_TRUE(a.u.string == b.u.string);
+        bsRelease(a);
+        bsRelease(b);
+    }
     bsTestExpr("systemBoolean(0)", "false");
     bsTestExpr("systemBoolean('a')", "true");
     bsTestExpr("systemCompare(1, 2)", "-1");

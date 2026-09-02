@@ -2277,13 +2277,31 @@ static BSValue bsFnSystemPartial(const BSValue *args, size_t argCount, BSOptions
 
 static const BSArgModel systemTypeArgs[] = {{"value", BS_ARG_ANY, 0, 0, 0, 0, 0}};
 
+/* Interned once; schemaValidate compares these on every value. */
+static BSValue bsSystemTypeNames[BS_REGEX + 1];
+
+static BSValue bsSystemTypeName(BSValue value)
+{
+    static int ready;
+    if (!ready) {
+        static const char *const names[] = {
+            "null", "boolean", "number", "datetime", "string", "array", "object", "function", "regex"
+        };
+        for (int ix = 0; ix <= (int) BS_REGEX; ix++) {
+            bsSystemTypeNames[ix] = bsStringIntern(names[ix], strlen(names[ix]));
+        }
+        ready = 1;
+    }
+    return bsRetain(bsSystemTypeNames[value.type]);
+}
+
 static BSValue bsFnSystemType(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BSValue values[1];
     if (!bsArgsValidate(systemTypeArgs, 1, args, argCount, values, options, "systemType")) {
         return bsNull();
     }
-    return bsStringNew(bsValueTypeString(values[0]));
+    return bsSystemTypeName(values[0]);
 }
 
 
@@ -2713,7 +2731,7 @@ BSValue bsFunctionInvoke(BSValue function, const BSValue *args, size_t argCount,
         break;
     case BS_INTRIN_SYSTEM_TYPE:
         if (argCount == 1) {
-            return bsStringNew(bsValueTypeString(args[0]));
+            return bsSystemTypeName(args[0]);
         }
         break;
     default:
