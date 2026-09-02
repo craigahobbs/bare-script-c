@@ -3,9 +3,9 @@
 
 # A self-contained BareScript unit test harness
 #
-# The bundled include library is not part of the C runtime, so the language-level tests carry a
-# minimal harness of their own. It reports through systemLog and returns a non-zero status code
-# when any test fails.
+# The language tests carry a minimal harness of their own so they depend on nothing but the
+# runtime; the include library's unittest.bare reports through MarkdownUp. This one reports
+# through systemLog and returns a non-zero status code when any test fails.
 
 
 unittestTests = []

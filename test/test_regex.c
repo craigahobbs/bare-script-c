@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "test.h"
+#include "../src/internal.h"
 
 
 /* Match a pattern against a subject, returning the matched text or NULL */
@@ -88,7 +89,7 @@ TEST(regex_literals)
 
     /* An unnamed pattern stores no group-name array */
     BSValue regex = bsRegexNew("abc", 3, 0, NULL, 0);
-    ASSERT_NULL(bsRegexGroupName(regex, 0));
+    ASSERT_INT_EQ(bsRegexGroupNameValue(regex, 0).type, BS_NULL);
     bsRelease(regex);
 }
 
@@ -236,12 +237,9 @@ TEST(regex_alternation_and_groups)
 
     /* Group names */
     BSValue regex = bsRegexNew("(?<year>[0-9]{4})-([0-9]{2})", 28, 0, NULL, 0);
-    ASSERT_INT_EQ(bsRegexGroupCount(regex), 3);
-    ASSERT_STR_EQ(bsRegexGroupName(regex, 1), "year");
-    ASSERT_NULL(bsRegexGroupName(regex, 2));
-    ASSERT_NULL(bsRegexGroupName(regex, 9));
-    ASSERT_STR_EQ(bsRegexPattern(regex), "(?<year>[0-9]{4})-([0-9]{2})");
-    ASSERT_INT_EQ(bsRegexFlags(regex), 0);
+    ASSERT_STR_EQ(bsStringData(bsRegexGroupNameValue(regex, 1)), "year");
+    ASSERT_INT_EQ(bsRegexGroupNameValue(regex, 2).type, BS_NULL);
+    ASSERT_INT_EQ(bsRegexGroupNameValue(regex, 9).type, BS_NULL);
     bsRelease(regex);
 }
 
@@ -451,6 +449,12 @@ TEST(regex_escape)
 {
     ASSERT_VALUE_STRING(bsRegexEscape(bsStringNew("a.b*c[d]")), "a\\.b\\*c\\[d\\]");
     ASSERT_VALUE_STRING(bsRegexEscape(bsStringNew("abc")), "abc");
+
+    /* NUL is not a metacharacter, though strchr finds it in the metacharacter string */
+    BSValue nul = bsRegexEscape(bsStringNewSize("a\0b", 3));
+    ASSERT_INT_EQ(bsStringSize(nul), 3);
+    ASSERT_INT_EQ(bsStringData(nul)[1], 0);
+    bsRelease(nul);
     ASSERT_VALUE_STRING(bsRegexEscape(bsStringNew("^$\\.+?()|{}[]*")), "\\^\\$\\\\\\.\\+\\?\\(\\)\\|\\{\\}\\[\\]\\*");
     ASSERT_VALUE_STRING(bsRegexEscape(bsStringNew("\xc3\xa9")), "\xc3\xa9");
 }

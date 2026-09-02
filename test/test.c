@@ -81,52 +81,29 @@ bool bsTestStringEqual(const char *actual, const char *expected)
 }
 
 
+/* Assert a value's rendering "text" (owned) against "expected"; the value and the text are released */
+static void bsTestAssertText(const char *file, int line, const char *expr, BSValue value, BSValue text,
+                             const char *expected)
+{
+    bsRelease(value);
+    if (!bsTestStringEqual(bsStringData(text), expected)) {
+        bsTestFail(file, line, "%s\n    actual:   %s\n    expected: %s", expr, bsStringData(text), expected);
+    } else {
+        bsTestPass();
+    }
+    bsRelease(text);
+}
+
+
 void bsTestAssertValue(const char *file, int line, const char *expr, BSValue value, const char *expectedJSON)
 {
-    BSValue json = bsJSONEncode(value, 0);
-    if (!bsTestStringEqual(bsStringData(json), expectedJSON)) {
-        BSValue jsonCopy = bsRetain(json);
-        bsRelease(json);
-        bsRelease(value);
-        bsTestFail(file, line, "%s\n    actual:   %s\n    expected: %s", expr, bsStringData(jsonCopy),
-                   expectedJSON);
-        bsRelease(jsonCopy);
-        return;
-    }
-    bsTestPass();
-    bsRelease(json);
-    bsRelease(value);
+    bsTestAssertText(file, line, expr, value, bsJSONEncode(value, 0), expectedJSON);
 }
 
 
 void bsTestAssertValueString(const char *file, int line, const char *expr, BSValue value, const char *expected)
 {
-    BSValue text = bsValueString(value);
-    if (!bsTestStringEqual(bsStringData(text), expected)) {
-        BSValue textCopy = bsRetain(text);
-        bsRelease(text);
-        bsRelease(value);
-        bsTestFail(file, line, "%s\n    actual:   %s\n    expected: %s", expr, bsStringData(textCopy),
-                   expected);
-        bsRelease(textCopy);
-        return;
-    }
-    bsTestPass();
-    bsRelease(text);
-    bsRelease(value);
-}
-
-
-void bsTestAssertValueType(const char *file, int line, const char *expr, BSValue value, const char *expected)
-{
-    const char *type = bsValueTypeString(value);
-    if (!bsTestStringEqual(type, expected)) {
-        bsRelease(value);
-        bsTestFail(file, line, "%s type\n    actual:   %s\n    expected: %s", expr, type, expected);
-        return;
-    }
-    bsTestPass();
-    bsRelease(value);
+    bsTestAssertText(file, line, expr, value, bsValueString(value), expected);
 }
 
 

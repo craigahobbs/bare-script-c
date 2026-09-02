@@ -90,17 +90,11 @@ int bsMain(int argc, char **argv)
         const char *arg = argv[ix];
         if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
             fputs(bsUsage, stdout);
-            free(sources);
-            free(varNames);
-            free(varExprs);
-            return 0;
+            goto done;
         }
         if (strcmp(arg, "--version") == 0) {
             printf("%s\n", bsVersion());
-            free(sources);
-            free(varNames);
-            free(varExprs);
-            return 0;
+            goto done;
         }
         if (strcmp(arg, "-d") == 0 || strcmp(arg, "--debug") == 0) {
             debug = true;
@@ -374,6 +368,7 @@ int bsMain(int argc, char **argv)
         bsOptionsFree(options);
     }
 
+done:
     free(sources);
     free(varNames);
     free(varExprs);

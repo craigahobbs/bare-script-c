@@ -99,7 +99,6 @@ LIB_A := $(BUILD_DIR)/lib$(LIB_NAME).a
 CLI_BIN := $(BUILD_DIR)/$(CLI_NAME)
 TEST_BIN := $(BUILD_DIR)/$(CLI_NAME)-test
 COVER_BIN := $(BUILD_DIR)/$(CLI_NAME)-cover
-COVER_CLI := $(BUILD_DIR)/$(CLI_NAME)-cover-cli
 
 
 #
@@ -116,7 +115,7 @@ commit: test cover test-include test-language
 
 .PHONY: help
 help:
-	@echo "usage: make [compile|test|cover|test-include|perf|release|install|clean]"
+	@echo "usage: make [commit|compile|test|cover|test-include|test-language|perf|release|includes|install|clean]"
 	@echo
 	@echo "  commit        everything that must pass before a commit"
 	@echo "  compile       build the shared library and the command-line interface"
@@ -149,6 +148,10 @@ clean:
 # the JavaScript implementation uses to regenerate lib/includeSource.js.
 #
 
+COMMA := ,
+EMPTY :=
+SPACE := $(EMPTY) $(EMPTY)
+
 .PHONY: includes
 includes:
 	$(MAKE) $(CLI_BIN)
@@ -156,13 +159,6 @@ includes:
 	    -v vFiles "'[$(subst $(SPACE),$(COMMA),$(patsubst %,\"$(CURDIR)/%\",$(INCLUDE_LIB_SRCS)))]'" \
 	    -v vOutputC "'$(CURDIR)/$(INCLUDE_SOURCE_C)'" \
 	    -v vOutputH "'$(CURDIR)/$(INCLUDE_SOURCE_H)'"
-
-COMMA := ,
-EMPTY :=
-SPACE := $(EMPTY) $(EMPTY)
-
-.PHONY: superclean
-superclean: clean
 
 
 #
@@ -294,7 +290,7 @@ test: $(TEST_BIN)
 # Coverage
 #
 
-COVER_CFLAGS := --coverage -O0 -g -DBARESCRIPT_COVERAGE
+COVER_CFLAGS := --coverage -O0 -g
 
 $(COVER_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)

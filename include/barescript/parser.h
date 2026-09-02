@@ -10,7 +10,7 @@
  * bytecode; the original model is kept for lint and coverage.
  *
  * Structured statements - if/elif/else, while, for, break, continue - never reach the runtime; the
- * parser lowers them to labels and jumps, which compile to JUMP / JUMPIF.
+ * parser lowers them to labels and jumps, which compile to JUMP, JUMP_TRUE, and JUMP_FALSE.
  */
 
 #ifndef BARESCRIPT_PARSER_H
@@ -68,7 +68,6 @@ typedef struct BSCode {
     BSValue *constants;
     size_t constantCount;
     BSCallCache *caches;
-    size_t cacheCount;
     BSInclude *includes;
     size_t includeCount;
     BSValue *cover;
@@ -93,11 +92,7 @@ struct BSFunctionDef {
     BSValue *argNames;
     size_t argCount;
     bool lastArgArray;
-    bool async;
     BSCode code;
-    BSScript *script;
-    int lineNumber;
-    int lineCount;
 };
 
 

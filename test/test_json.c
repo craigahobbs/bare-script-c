@@ -143,16 +143,6 @@ TEST(json_encode_depth)
 }
 
 
-TEST(json_encode_string_builder)
-{
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "value: ");
-    bsJSONEncodeSB(&sb, bsNumber(5), 0);
-    ASSERT_VALUE_STRING(bsSBToValue(&sb), "value: 5");
-}
-
-
 TEST(json_decode_scalars)
 {
     ASSERT_VALUE(bsTestJSON("null"), "null");

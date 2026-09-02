@@ -131,7 +131,6 @@ typedef struct RxFirstSet {
 
 struct BSRegex {
     int32_t refcount;
-    BSValue pattern;
     unsigned flags;
     bool anchored; /* every alternative begins with "^", so only the start position can match */
     bool firstUsable;
@@ -329,7 +328,7 @@ static bool rxHex(RxCompiler *compiler, size_t count, char kind, size_t escapeOf
 
 /*
  * Parse an escape sequence. Returns the predefined class flag, or zero for a literal code point,
- * which is stored in "*literal". Returns SIZE_MAX-style failure through compiler->error.
+ * which is stored in "*literal". On failure, sets compiler->failed, which the caller checks.
  */
 static unsigned rxEscape(RxCompiler *compiler, uint32_t *literal)
 {
@@ -391,21 +390,14 @@ static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
         compiler->offset++;
     }
 
-    bool first = true;
     while (compiler->offset < compiler->size) {
         char ch = compiler->pattern[compiler->offset];
-        if (ch == ']' && !first) {
-            compiler->offset++;
-            rxClassFinish(node, compiler->flags);
-            return node;
-        }
-        if (ch == ']' && first) {
+        if (ch == ']') {
             /* An empty class - "[]" - matches nothing */
             compiler->offset++;
             rxClassFinish(node, compiler->flags);
             return node;
         }
-        first = false;
 
         /* The range's low bound */
         size_t lowOffset = compiler->offset;
@@ -481,7 +473,7 @@ static bool rxParseName(RxCompiler *compiler, BSValue *name)
     size_t begin = compiler->offset;
     while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] != '>') {
         char ch = compiler->pattern[compiler->offset];
-        if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) {
+        if (!rxIsNameChar(ch)) {
             return false;
         }
         compiler->offset++;
@@ -1062,7 +1054,6 @@ static void bsRegexFree(BSRegex *regex)
         }
         free(regex->groupNames);
     }
-    bsRelease(regex->pattern);
     free(regex);
 }
 
@@ -1075,7 +1066,6 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
     }
     BSRegex *regex = bsAlloc(sizeof(BSRegex));
     regex->refcount = 1;
-    regex->pattern = bsStringNewSize(pattern, patternSize);
     regex->flags = flags;
     regex->anchored = false;
     regex->firstUsable = false;
@@ -1099,12 +1089,17 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         rxError(&compiler, compiler.offset, "unbalanced parenthesis");
     }
     if (!compiler.failed) {
-        /* A group's close node continues where the group itself continues */
+        /*
+         * A group's close node continues where the group itself continues, and a lookbehind's scan
+         * is bounded by its sub-pattern's match length
+         */
         for (RxNodeChunk *chunk = regex->chunks; chunk != NULL; chunk = chunk->next) {
             for (size_t ix = 0; ix < chunk->used; ix++) {
                 RxNode *node = &chunk->nodes[ix];
                 if (node->kind == RX_GROUP) {
                     node->u.group.close->next = node->next;
+                } else if (node->kind == RX_LOOKBEHIND) {
+                    rxNodeLength(node->u.look.sub, &node->u.look.minLength, &node->u.look.maxLength);
                 }
             }
         }
@@ -1129,16 +1124,6 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         /* Compute the set of code points a match can begin with, for the search scan */
         if (!regex->anchored) {
             regex->firstUsable = !rxFirstSet(regex->root, flags, &regex->first) && !regex->first.any;
-        }
-
-        /* Bound each lookbehind's scan by its sub-pattern's match length */
-        for (RxNodeChunk *chunk = regex->chunks; chunk != NULL; chunk = chunk->next) {
-            for (size_t ix = 0; ix < chunk->used; ix++) {
-                RxNode *node = &chunk->nodes[ix];
-                if (node->kind == RX_LOOKBEHIND) {
-                    rxNodeLength(node->u.look.sub, &node->u.look.minLength, &node->u.look.maxLength);
-                }
-            }
         }
 
         /* Keep named-group strings only; unnamed patterns store no name array */
@@ -1180,34 +1165,6 @@ void bsRegexRelease(BSValue value)
     if (--value.u.regex->refcount == 0) {
         bsRegexFree(value.u.regex);
     }
-}
-
-
-const char *bsRegexPattern(BSValue regex)
-{
-    return bsStringData(regex.u.regex->pattern);
-}
-
-
-unsigned bsRegexFlags(BSValue regex)
-{
-    return regex.u.regex->flags;
-}
-
-
-size_t bsRegexGroupCount(BSValue regex)
-{
-    return regex.u.regex->groupCount;
-}
-
-
-const char *bsRegexGroupName(BSValue regex, size_t group)
-{
-    BSValue *names = regex.u.regex->groupNames;
-    if (names == NULL || group >= regex.u.regex->groupCount || names[group].type != BS_STRING) {
-        return NULL;
-    }
-    return bsStringData(names[group]);
 }
 
 
@@ -1263,7 +1220,6 @@ typedef struct RxState {
     const unsigned char *bytes;
     size_t length;
     unsigned flags;
-    BSRegex *regex;
     BSRegexMatch *match;
     size_t end;
     int depth;
@@ -1437,6 +1393,28 @@ static bool rxMatchOneByte(const RxState *state, const RxNode *node, size_t pos)
 
 
 static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos);
+
+
+/*
+ * Continue past a lookaround whose sub-pattern matched or not. A negative lookaround drops the
+ * captures its sub-pattern made; a positive one keeps them unless the continuation fails.
+ */
+static bool rxLookContinue(RxState *state, const RxNode *node, RxCont *cont, size_t pos, bool matched,
+                           size_t mark)
+{
+    if (node->u.look.negate) {
+        rxTrailUnwind(state, mark);
+        return !matched && rxMatchNode(state, node->next, cont, pos);
+    }
+    if (!matched) {
+        return false;
+    }
+    bool result = rxMatchNode(state, node->next, cont, pos);
+    if (!result) {
+        rxTrailUnwind(state, mark);
+    }
+    return result;
+}
 
 
 static bool rxMatchCont(RxState *state, RxCont *cont, size_t pos)
@@ -1704,7 +1682,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
 
     case RX_BACKREF: {
         size_t group = node->u.groupIndex;
-        if (group >= state->regex->groupCount || !state->match->matched[group]) {
+        if (group >= state->match->groupCount || !state->match->matched[group]) {
             /* An unmatched backreference matches the empty string */
             result = rxMatchNode(state, node->next, cont, pos);
             break;
@@ -1731,25 +1709,13 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         const RxNode *atom = rxSimpleAtom(node->u.look.sub);
         if (atom != NULL) {
             bool matched = rxMatchOne(state, atom, pos);
-            if (node->u.look.negate) {
-                result = !matched && rxMatchNode(state, node->next, cont, pos);
-            } else {
-                result = matched && rxMatchNode(state, node->next, cont, pos);
-            }
+            result = (matched != node->u.look.negate) && rxMatchNode(state, node->next, cont, pos);
             break;
         }
         RxCont stop = {RX_CONT_STOP, NULL, 0, 0, NULL};
         size_t mark = state->trailCount;
         bool matched = rxMatchNode(state, node->u.look.sub, &stop, pos);
-        if (node->u.look.negate) {
-            rxTrailUnwind(state, mark);
-            result = !matched && rxMatchNode(state, node->next, cont, pos);
-        } else if (matched) {
-            result = rxMatchNode(state, node->next, cont, pos);
-            if (!result) {
-                rxTrailUnwind(state, mark);
-            }
-        }
+        result = rxLookContinue(state, node, cont, pos, matched, mark);
         break;
     }
 
@@ -1765,11 +1731,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
             rxSimpleAtom(node->u.look.sub) : NULL;
         if (atom != NULL) {
             bool matched = pos >= 1 && rxMatchOne(state, atom, pos - 1);
-            if (node->u.look.negate) {
-                result = !matched && rxMatchNode(state, node->next, cont, pos);
-            } else {
-                result = matched && rxMatchNode(state, node->next, cont, pos);
-            }
+            result = (matched != node->u.look.negate) && rxMatchNode(state, node->next, cont, pos);
             break;
         }
 
@@ -1784,15 +1746,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
                 rxTrailUnwind(state, mark);
             }
         }
-        if (node->u.look.negate) {
-            rxTrailUnwind(state, mark);
-            result = !matched && rxMatchNode(state, node->next, cont, pos);
-        } else if (matched) {
-            result = rxMatchNode(state, node->next, cont, pos);
-            if (!result) {
-                rxTrailUnwind(state, mark);
-            }
-        }
+        result = rxLookContinue(state, node, cont, pos, matched, mark);
         break;
     }
     }
@@ -1818,13 +1772,12 @@ void bsRegexSubjectInit(BSRegexSubject *subject, BSValue string)
     }
 
     subject->bytes = NULL;
-    if (length <= sizeof(subject->inline_) / sizeof(subject->inline_[0])) {
-        subject->codes = subject->inline_;
-    } else {
+    uint32_t *codes = subject->inline_;
+    if (length > sizeof(subject->inline_) / sizeof(subject->inline_[0])) {
         subject->owned = bsAlloc(length * sizeof(uint32_t));
-        subject->codes = subject->owned;
+        codes = subject->owned;
     }
-    uint32_t *codes = subject->owned != NULL ? subject->owned : subject->inline_;
+    subject->codes = codes;
     size_t offset = 0;
     size_t index = 0;
     while (offset < size && index < length) {
@@ -1852,13 +1805,9 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     state.bytes = subject->bytes;
     state.length = subject->length;
     state.flags = compiled->flags;
-    state.regex = compiled;
     state.match = match;
     state.end = 0;
-    state.depth = 0;
-    state.steps = 0;
     state.trail = state.trailInline;
-    state.trailCount = 0;
     state.trailCapacity = sizeof(state.trailInline) / sizeof(state.trailInline[0]);
 
     /*
@@ -1918,7 +1867,7 @@ BSValue bsRegexEscape(BSValue string)
     bsSBInit(&sb);
     for (size_t ix = 0; ix < size; ix++) {
         char ch = data[ix];
-        if ((unsigned char) ch < 0x80 && strchr(special, ch) != NULL) {
+        if (ch != '\0' && (unsigned char) ch < 0x80 && strchr(special, ch) != NULL) {
             bsSBAppendChar(&sb, '\\');
         }
         bsSBAppendChar(&sb, ch);

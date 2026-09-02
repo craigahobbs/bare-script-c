@@ -343,7 +343,7 @@ static const BSArgModel arrayGetArgs[] = {
 static BSValue bsFnArrayGet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BSValue values[2];
-    if (!bsArgsValidate(arrayGetArgs, 2, args, argCount, values, options, "arrayGet")) {
+    if (!bsArgsValidate(arrayGetArgs, 2, args, argCount, values, options)) {
         return bsNull();
     }
     ...
@@ -434,7 +434,7 @@ works.
 ### The Bundled Include Library
 
 The thirty-two scripts of the BareScript include library - `args.bare`, `markdown.bare`,
-`schema.bare`, `unittest.bare`, `gzip.bare`, `base64.bare`, and the rest - are compiled to JSON
+`schema.bare`, `unittest.bare`, `gzip.bare`, and the rest - are compiled to JSON
 script models and embedded in the library. Including one costs a JSON decode rather than a run of
 the parser.
 
@@ -447,8 +447,8 @@ structure itself, in `objectKeys` (insertion) order, and delegates only leaf val
 `src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
 fresh clone builds with no bootstrap. `make includes` regenerates them by running
 `bin/includeSource.bare` - itself a BareScript program - under a CLI built from the *existing*
-generated source, with `BARESCRIPT_INCLUDE_PATH` pointing at `lib/include` so `gzip.bare` and
-`base64.bare` are available before they are bundled.
+generated source, with `BARESCRIPT_INCLUDE_PATH` pointing at `lib/include` so `gzip.bare` is
+available before it is bundled.
 
 The generated header exports a stub accessor per include, returning its decoded JSON model:
 

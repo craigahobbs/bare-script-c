@@ -269,7 +269,7 @@ TEST(runtime_builtin_if)
 
 TEST(runtime_call_intrinsics)
 {
-    /* Happy paths that the VM takes without bsFunctionInvoke */
+    /* The intrinsic happy paths */
     ASSERT_VALUE(bsTestExecute("return arrayGet([1, 2], 1)"), "2");
     ASSERT_VALUE(bsTestExecute("return objectGet({'a': 1}, 'a')"), "1");
     ASSERT_VALUE(bsTestExecute("return objectGet({'a': 1}, 'b')"), "null");

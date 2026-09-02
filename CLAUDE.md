@@ -49,7 +49,7 @@ perf` merges their results when present.
   once.
 - `lib/include/*.bare` and `lib/include/test/*` are **vendored from the reference** - do not edit
   them to make a test pass; fix the C instead.
-- Bundled include models are gzip-compressed by `gzip.bare` and base64-encoded by `base64.bare`;
+- Bundled include models are gzip-compressed by `gzip.bare` and embedded as byte arrays;
   regenerate with `make includes` after changing `lib/include/` or `bin/includeSource.bare`.
 - `jsonParse` and `regexNew` messages match CPython's `json` and `re` exactly, including
   positions. Where they cannot, it is because BareScript specifies *JavaScript* regular
@@ -95,7 +95,7 @@ every statement in a cached include's code.
 ### The bundled include library
 
 The include library scripts are compiled to JSON models, gzip-compressed at level 9 with
-`gzip.bare`, base64-encoded with `base64.bare`, and embedded in `src/includeSource.c`, which is
+`gzip.bare`, and embedded as byte arrays in `src/includeSource.c`, which is
 **generated and checked in** so a fresh clone builds with no bootstrap. `make includes`
 regenerates it by running `bin/includeSource.bare` - itself a BareScript program - under a CLI
 built from the *existing* generated source.

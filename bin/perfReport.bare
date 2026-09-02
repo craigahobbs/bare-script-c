@@ -10,12 +10,6 @@
 #   bare bin/perfReport.bare -v vCSV "'build/perf.csv'"
 
 
-# Format a number with trailing zeros trimmed
-function perfReportNumberTrim(value, digits):
-    return numberToFixed(value, digits, true)
-endfunction
-
-
 async function main():
     csvPath = systemGlobalGet('vCSV')
     if csvPath == null:
@@ -86,7 +80,7 @@ async function main():
             multiple = if(bestTiming > 0, timeMs / bestTiming, 1)
             systemLog('    ' + language + ' - ' + numberToFixed(timeMs * runMultiplier, 1) + \
                 ' milliseconds per ' + perRuns + ' (' + \
-                perfReportNumberTrim(multiple, 1) + 'x)')
+                numberToFixed(multiple, 1, true) + 'x)')
         endfor
     endfor
     return 0

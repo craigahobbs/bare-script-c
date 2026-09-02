@@ -319,60 +319,6 @@ static uint32_t bsReadU32LE(const unsigned char *data)
 }
 
 
-static int8_t bsBase64Map[256];
-static bool bsBase64Ready;
-
-
-static void bsBase64Init(void)
-{
-    memset(bsBase64Map, -1, sizeof(bsBase64Map));
-    const char *chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    for (int ix = 0; ix < 64; ix++) {
-        bsBase64Map[(unsigned char) chars[ix]] = (int8_t) ix;
-    }
-    bsBase64Map[(unsigned char) '='] = -2;
-    bsBase64Ready = true;
-}
-
-
-unsigned char *bsBase64Decode(const char *text, size_t size, size_t *outSize)
-{
-    if (!bsBase64Ready) {
-        bsBase64Init();
-    }
-    if (size % 4 != 0) {
-        return NULL;
-    }
-    unsigned char *out = bsAlloc(size / 4 * 3 + 1);
-    size_t length = 0;
-    for (size_t ix = 0; ix < size; ix += 4) {
-        int c0 = bsBase64Map[(unsigned char) text[ix]];
-        int c1 = bsBase64Map[(unsigned char) text[ix + 1]];
-        int c2 = bsBase64Map[(unsigned char) text[ix + 2]];
-        int c3 = bsBase64Map[(unsigned char) text[ix + 3]];
-        if (c0 < 0 || c1 < 0) {
-            free(out);
-            return NULL;
-        }
-        out[length++] = (unsigned char) ((c0 << 2) | (c1 >> 4));
-        if (c2 >= 0) {
-            out[length++] = (unsigned char) (((c1 & 15) << 4) | (c2 >> 2));
-            if (c3 >= 0) {
-                out[length++] = (unsigned char) (((c2 & 3) << 6) | c3);
-            } else if (c3 != -2 || ix + 4 != size) {
-                free(out);
-                return NULL;
-            }
-        } else if (c2 != -2 || c3 != -2 || ix + 4 != size) {
-            free(out);
-            return NULL;
-        }
-    }
-    *outSize = length;
-    return out;
-}
-
-
 char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
 {
     if (srcSize < 10) {
@@ -431,25 +377,6 @@ char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
 }
 
 
-char *bsConcatChunks(const char *const *chunks, size_t *outSize)
-{
-    size_t total = 0;
-    for (const char *const *chunk = chunks; *chunk != NULL; chunk++) {
-        total += strlen(*chunk);
-    }
-    char *text = bsAlloc(total + 1);
-    size_t offset = 0;
-    for (const char *const *chunk = chunks; *chunk != NULL; chunk++) {
-        size_t size = strlen(*chunk);
-        memcpy(text + offset, *chunk, size);
-        offset += size;
-    }
-    text[total] = '\0';
-    *outSize = total;
-    return text;
-}
-
-
 const char *bsIncludeSourceDecode(BSIncludeSource *source)
 {
     if (source->decoded != NULL) {
@@ -475,44 +402,49 @@ const char *bsIncludeName(size_t index)
 }
 
 
+/* A bundled include's registry index, or BS_INCLUDE_COUNT if there is no such include */
+static size_t bsIncludeFind(const char *name)
+{
+    size_t ix = 0;
+    while (ix < BS_INCLUDE_COUNT && strcmp(bsIncludeSources[ix].name, name) != 0) {
+        ix++;
+    }
+    return ix;
+}
+
+
 const char *bsIncludeSource(const char *name)
 {
-    for (size_t ix = 0; ix < BS_INCLUDE_COUNT; ix++) {
-        if (strcmp(bsIncludeSources[ix].name, name) == 0) {
-            return bsIncludeSourceDecode(&bsIncludeSources[ix]);
-        }
-    }
-    return NULL;
+    size_t ix = bsIncludeFind(name);
+    return ix < BS_INCLUDE_COUNT ? bsIncludeSourceDecode(&bsIncludeSources[ix]) : NULL;
 }
 
 
 BSScript *bsIncludeScript(const char *name)
 {
-    for (size_t ix = 0; ix < BS_INCLUDE_COUNT; ix++) {
-        if (strcmp(bsIncludeSources[ix].name, name) != 0) {
-            continue;
-        }
-        if (bsIncludeScripts[ix] != NULL) {
-            return bsScriptRetain(bsIncludeScripts[ix]);
-        }
-        const char *text = bsIncludeSourceDecode(&bsIncludeSources[ix]);
-        if (text == NULL) {
-            return NULL; /* GCOV_EXCL_LINE - bundled models always inflate */
-        }
-        BSValue model = bsJSONDecode(text, strlen(text), NULL);
-        BSScript *script = bsScriptFromModel(model, name);
-        bsRelease(model);
-        free(bsIncludeSources[ix].decoded);
-        bsIncludeSources[ix].decoded = NULL;
-        if (script == NULL) {
-            return NULL; /* GCOV_EXCL_LINE - bundled models always convert */
-        }
-        script->system = true;
-        bsScriptDropModel(script);
-        bsIncludeScripts[ix] = bsScriptRetain(script);
-        return script;
+    size_t ix = bsIncludeFind(name);
+    if (ix == BS_INCLUDE_COUNT) {
+        return NULL;
     }
-    return NULL;
+    if (bsIncludeScripts[ix] != NULL) {
+        return bsScriptRetain(bsIncludeScripts[ix]);
+    }
+    const char *text = bsIncludeSourceDecode(&bsIncludeSources[ix]);
+    if (text == NULL) {
+        return NULL; /* GCOV_EXCL_LINE - bundled models always inflate */
+    }
+    BSValue model = bsJSONDecode(text, strlen(text), NULL);
+    BSScript *script = bsScriptFromModel(model, name);
+    bsRelease(model);
+    free(bsIncludeSources[ix].decoded);
+    bsIncludeSources[ix].decoded = NULL;
+    if (script == NULL) {
+        return NULL; /* GCOV_EXCL_LINE - bundled models always convert */
+    }
+    script->system = true;
+    bsScriptDropModel(script);
+    bsIncludeScripts[ix] = bsScriptRetain(script);
+    return script;
 }
 
 

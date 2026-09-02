@@ -82,18 +82,6 @@ void bsTestPass(void);
         } else { bsTestPass(); } \
     } while (0)
 
-#define ASSERT_DOUBLE_NEAR(actual, expected, epsilon) \
-    do { \
-        double bsActual_ = (double) (actual); \
-        double bsExpected_ = (double) (expected); \
-        double bsDelta_ = bsActual_ - bsExpected_; \
-        if (bsDelta_ < 0) { bsDelta_ = -bsDelta_; } \
-        if (!(bsDelta_ <= (epsilon))) { \
-            bsTestFail(__FILE__, __LINE__, "%s ~= %s - actual %.17g, expected %.17g", \
-                       #actual, #expected, bsActual_, bsExpected_); \
-        } else { bsTestPass(); } \
-    } while (0)
-
 #define ASSERT_STR_EQ(actual, expected) \
     do { \
         const char *bsActual_ = (actual); \
@@ -127,16 +115,11 @@ void bsTestPass(void);
 #define ASSERT_VALUE_STRING(value, expectedString) \
     bsTestAssertValueString(__FILE__, __LINE__, #value, (value), (expectedString))
 
-/* Assert a value's type string - the value is released */
-#define ASSERT_VALUE_TYPE(value, expectedType) \
-    bsTestAssertValueType(__FILE__, __LINE__, #value, (value), (expectedType))
-
 
 bool bsTestDoubleEqual(double actual, double expected);
 bool bsTestStringEqual(const char *actual, const char *expected);
 void bsTestAssertValue(const char *file, int line, const char *expr, BSValue value, const char *expectedJSON);
 void bsTestAssertValueString(const char *file, int line, const char *expr, BSValue value, const char *expected);
-void bsTestAssertValueType(const char *file, int line, const char *expr, BSValue value, const char *expected);
 
 
 /*

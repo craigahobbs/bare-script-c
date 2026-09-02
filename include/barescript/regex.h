@@ -70,16 +70,6 @@ typedef struct BSRegexMatch {
 BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char *error,
                    size_t errorSize);
 
-/* Get a compiled regular expression's pattern source and flags */
-const char *bsRegexPattern(BSValue regex);
-unsigned bsRegexFlags(BSValue regex);
-
-/* Get a compiled regular expression's capture group count, including group zero */
-size_t bsRegexGroupCount(BSValue regex);
-
-/* Get a capture group's name, or NULL if the group is not named */
-const char *bsRegexGroupName(BSValue regex, size_t group);
-
 /*
  * A pre-decoded subject string. Decoding a string once and matching against it repeatedly avoids
  * re-decoding UTF-8 for every match of a global search.

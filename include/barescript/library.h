@@ -68,7 +68,7 @@ typedef struct BSArgModel {
  * message, not a runtime error) and false is returned.
  */
 bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSValue *args, size_t argCount,
-                    BSValue *values, BSOptions *options, const char *functionName);
+                    BSValue *values, BSOptions *options);
 
 /* Release the validated argument values that bsArgsValidate created */
 void bsArgsFree(const BSArgModel *argModel, size_t argModelCount, BSValue *values);

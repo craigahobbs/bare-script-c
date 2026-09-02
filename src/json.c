@@ -43,7 +43,7 @@ static void bsJSONEncodeString(BSStringBuilder *sb, BSValue value)
         if (!bsJSONEscaped(ch)) {
             continue;
         }
-        const char *escape = NULL;
+        const char *escape;
         char buffer[8];
         switch (ch) {
         case '"':
@@ -68,17 +68,13 @@ static void bsJSONEncodeString(BSStringBuilder *sb, BSValue value)
             escape = "\\f";
             break;
         default:
-            if (ch < 0x20) {
-                snprintf(buffer, sizeof(buffer), "\\u%04x", ch);
-                escape = buffer;
-            }
+            snprintf(buffer, sizeof(buffer), "\\u%04x", ch);
+            escape = buffer;
             break;
         }
-        if (escape != NULL) {
-            bsSBAppend(sb, data + begin, ix - begin);
-            bsSBAppendString(sb, escape);
-            begin = ix + 1;
-        }
+        bsSBAppend(sb, data + begin, ix - begin);
+        bsSBAppendString(sb, escape);
+        begin = ix + 1;
     }
     bsSBAppend(sb, data + begin, size - begin);
     bsSBAppendChar(sb, '"');
@@ -210,12 +206,6 @@ static void bsJSONEncodeValue(BSStringBuilder *sb, BSValue value, int indent, in
 }
 
 
-void bsJSONEncodeSB(BSStringBuilder *sb, BSValue value, int indent)
-{
-    bsJSONEncodeValue(sb, value, indent, 0);
-}
-
-
 BSValue bsJSONEncode(BSValue value, int indent)
 {
     BSStringBuilder sb;
@@ -223,11 +213,6 @@ BSValue bsJSONEncode(BSValue value, int indent)
     bsJSONEncodeValue(&sb, value, indent, 0);
     return bsSBToValue(&sb);
 }
-
-
-/*
- * Decode
- */
 
 
 /*

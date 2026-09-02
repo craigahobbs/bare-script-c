@@ -222,12 +222,10 @@ BSExpr *bsParseExpression(const char *text, size_t size, int lineNumber, const c
 
 BSValue bsLintScript(const BSScript *script, BSValue globals)
 {
-    BSValue args[3];
+    BSValue args[2];
     args[0] = bsScriptToModel(script);
     args[1] = globals;
-    args[2] = bsNull();
-
-    BSValue warnings = bsParserCall(&bsLintBootstrap, "barescriptLintScript", args, 3, NULL, NULL);
+    BSValue warnings = bsParserCall(&bsLintBootstrap, "barescriptLintScript", args, 2, NULL, NULL);
     bsRelease(args[0]);
     /* GCOV_EXCL_START - the bundled linter always returns its warnings array */
     if (warnings.type != BS_ARRAY) {

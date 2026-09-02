@@ -579,11 +579,6 @@ uint32_t bsStringCodePoint(BSValue value, size_t index)
  */
 
 
-/* Resolve a value to its string bytes - see the definition below */
-static BSValue bsStringBytes(BSValue value, char *buffer, size_t bufferSize, const char **data,
-                             size_t *size, size_t *length);
-
-
 void bsSBInit(BSStringBuilder *sb)
 {
     sb->data = NULL;
@@ -1339,6 +1334,13 @@ static void bsObjectSpill(BSObject *object)
     }
 }
 
+/* The key's interned string, or NULL if the key is not an interned string */
+static inline BSString *bsKeyInterned(BSValue key)
+{
+    return (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
+}
+
+
 static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *object)
 {
     BSObjectNode *created = bsObjectNodeAlloc();
@@ -1347,7 +1349,7 @@ static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *obj
     created->priority = bsObjectPriority();
     created->key = bsRetainInline(key).u.string;
     created->value = item;
-    if (key.type != BS_STRING || (key.u.string->flags & BS_STR_INTERNED) == 0) {
+    if (bsKeyInterned(key) == NULL) {
         object->uninterned = 1;
     }
 
@@ -1368,6 +1370,30 @@ static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *obj
 
 
 /* Link an existing list node into the treap. Does not touch the insertion-order list. */
+
+/* Rotate a newly linked node up its insertion path until the heap property holds again */
+static void bsObjectTreapBubbleUp(BSObject *object, BSObjectNode *const *path, const signed char *dirs,
+                                  int depth)
+{
+    while (depth > 0) {
+        int d = depth - 1;
+        BSObjectNode *parent = path[d];
+        BSObjectNode *child = dirs[d] < 0 ? parent->left : parent->right;
+        if (child->priority <= parent->priority) {
+            break;
+        }
+        BSObjectNode *rotated = dirs[d] < 0 ? bsObjectRotateRight(parent) : bsObjectRotateLeft(parent);
+        if (d == 0) {
+            object->u.tree.root = rotated;
+        } else if (dirs[d - 1] < 0) {
+            path[d - 1]->left = rotated;
+        } else {
+            path[d - 1]->right = rotated;
+        }
+        depth--;
+    }
+}
+
 static void bsObjectTreapLink(BSObject *object, BSObjectNode *created)
 {
     created->left = NULL;
@@ -1411,23 +1437,7 @@ static void bsObjectTreapLink(BSObject *object, BSObjectNode *created)
         depth++;
     }
 
-    while (depth > 0) {
-        int d = depth - 1;
-        BSObjectNode *parent = path[d];
-        BSObjectNode *child = dirs[d] < 0 ? parent->left : parent->right;
-        if (child->priority <= parent->priority) {
-            break;
-        }
-        BSObjectNode *rotated = dirs[d] < 0 ? bsObjectRotateRight(parent) : bsObjectRotateLeft(parent);
-        if (d == 0) {
-            object->u.tree.root = rotated;
-        } else if (dirs[d - 1] < 0) {
-            path[d - 1]->left = rotated;
-        } else {
-            path[d - 1]->right = rotated;
-        }
-        depth--;
-    }
+    bsObjectTreapBubbleUp(object, path, dirs, depth);
 }
 
 
@@ -1490,23 +1500,7 @@ static void bsObjectTreapInsert(BSObject *object, BSValue key, BSValue item)
         depth++;
     }
 
-    while (depth > 0) {
-        int d = depth - 1;
-        BSObjectNode *parent = path[d];
-        BSObjectNode *child = dirs[d] < 0 ? parent->left : parent->right;
-        if (child->priority <= parent->priority) {
-            break;
-        }
-        BSObjectNode *rotated = dirs[d] < 0 ? bsObjectRotateRight(parent) : bsObjectRotateLeft(parent);
-        if (d == 0) {
-            object->u.tree.root = rotated;
-        } else if (dirs[d - 1] < 0) {
-            path[d - 1]->left = rotated;
-        } else {
-            path[d - 1]->right = rotated;
-        }
-        depth--;
-    }
+    bsObjectTreapBubbleUp(object, path, dirs, depth);
 }
 
 
@@ -1522,14 +1516,27 @@ static void bsObjectListGrew(BSObject *object)
 }
 
 
+/* Append a pair to a packed object that has room. Takes ownership of "item" and retains "key". */
+static void bsObjectPackedAppend(BSObject *object, BSValue key, BSValue item)
+{
+    if (bsKeyInterned(key) == NULL) {
+        object->uninterned = 1;
+    }
+    object->u.small.keys[object->count] = bsRetainInline(key).u.string;
+    object->u.small.values[object->count] = item;
+    object->count++;
+    object->generation++;
+}
+
+
 /* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created.
  * Objects at or under BS_OBJECT_SMALL stay a list. */
 static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
 {
+    BSString *interned = bsKeyInterned(key);
+    const char *keyData = bsStringData(key);
+    size_t keySize = bsStringSize(key);
     if (object->packed) {
-        BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
-        const char *keyData = bsStringData(key);
-        size_t keySize = bsStringSize(key);
         int found = bsObjectPackedFind(object, keyData, keySize, interned);
         if (found >= 0) {
             bsReleaseInline(object->u.small.values[found]);
@@ -1537,18 +1544,11 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
             return;
         }
         if (object->count < BS_OBJECT_PACKED) {
-            if (key.type != BS_STRING || (key.u.string->flags & BS_STR_INTERNED) == 0) {
-                object->uninterned = 1;
-            }
-            object->u.small.keys[object->count] = bsRetainInline(key).u.string;
-            object->u.small.values[object->count] = item;
-            object->count++;
-            object->generation++;
+            bsObjectPackedAppend(object, key, item);
             return;
         }
         bsObjectSpill(object);
     }
-    BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
     if (object->count > BS_OBJECT_SMALL && object->u.tree.root == NULL &&
         (interned == NULL || object->uninterned)) {
         /* The key can only be matched by content */
@@ -1569,8 +1569,6 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
         bsObjectNodeCreate(key, item, object);
         return;
     }
-    const char *keyData = bsStringData(key);
-    size_t keySize = bsStringSize(key);
     for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
         if (bsObjectKeyEqual(node->key, keyData, keySize, interned)) {
             bsReleaseInline(node->value);
@@ -1588,13 +1586,7 @@ void bsObjectAppend(BSValue value, BSValue key, BSValue item)
     BSObject *object = value.u.object;
     if (object->packed) {
         if (object->count < BS_OBJECT_PACKED) {
-            if (key.type != BS_STRING || (key.u.string->flags & BS_STR_INTERNED) == 0) {
-                object->uninterned = 1;
-            }
-            object->u.small.keys[object->count] = bsRetainInline(key).u.string;
-            object->u.small.values[object->count] = item;
-            object->count++;
-            object->generation++;
+            bsObjectPackedAppend(object, key, item);
             return;
         }
         bsObjectSpill(object);
@@ -1656,6 +1648,28 @@ static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t s
 }
 
 
+/* Unlink a node from the insertion list and the table, release its pair, and recycle it */
+static void bsObjectNodeUnlink(BSObject *object, BSObjectNode *node)
+{
+    if (node->insertPrev != NULL) {
+        node->insertPrev->insertNext = node->insertNext;
+    } else {
+        object->u.tree.insertHead = node->insertNext;
+    }
+    if (node->insertNext != NULL) {
+        node->insertNext->insertPrev = node->insertPrev;
+    } else {
+        object->u.tree.insertTail = node->insertPrev;
+    }
+    bsObjectLookupDel(object, node->key);
+    bsReleaseInline(bsStringTake(node->key));
+    bsReleaseInline(node->value);
+    bsObjectNodeRecycle(node);
+    object->count--;
+    object->generation++;
+}
+
+
 /* Remove a key known to be in the treap */
 static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t size, bool *removed,
                                     BSObject *object)
@@ -1672,22 +1686,7 @@ static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t 
 
     /* Rotate the node down until it is a leaf, then unlink it */
     if (node->left == NULL && node->right == NULL) {
-        if (node->insertPrev != NULL) {
-            node->insertPrev->insertNext = node->insertNext;
-        } else {
-            object->u.tree.insertHead = node->insertNext;
-        }
-        if (node->insertNext != NULL) {
-            node->insertNext->insertPrev = node->insertPrev;
-        } else {
-            object->u.tree.insertTail = node->insertPrev;
-        }
-        bsObjectLookupDel(object, node->key);
-        bsReleaseInline(bsStringTake(node->key));
-        bsReleaseInline(node->value);
-        bsObjectNodeRecycle(node);
-        object->count--;
-        object->generation++;
+        bsObjectNodeUnlink(object, node);
         *removed = true;
         return NULL;
     }
@@ -1747,12 +1746,21 @@ void bsObjectSet(BSValue value, const char *key, BSValue item)
 }
 
 
+BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size)
+{
+    return bsObjectFindValue(object.u.object, key, size, NULL);
+}
+
+
+BSValue *bsObjectValuePtrString(BSValue object, BSValue key)
+{
+    return bsObjectFindValue(object.u.object, bsStringData(key), bsStringSize(key), bsKeyInterned(key));
+}
+
+
 bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out)
 {
-    if (object.type != BS_OBJECT) {
-        return false;
-    }
-    BSValue *found = bsObjectFindValue(object.u.object, key, size, NULL);
+    BSValue *found = object.type == BS_OBJECT ? bsObjectValuePtr(object, key, size) : NULL;
     if (found == NULL) {
         return false;
     }
@@ -1763,29 +1771,12 @@ bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out)
 
 bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out)
 {
-    if (object.type != BS_OBJECT) {
-        return false;
-    }
-    BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
-    BSValue *found = bsObjectFindValue(object.u.object, bsStringData(key), bsStringSize(key), interned);
+    BSValue *found = object.type == BS_OBJECT ? bsObjectValuePtrString(object, key) : NULL;
     if (found == NULL) {
         return false;
     }
     *out = *found;
     return true;
-}
-
-
-BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size)
-{
-    return bsObjectFindValue(object.u.object, key, size, NULL);
-}
-
-
-BSValue *bsObjectValuePtrString(BSValue object, BSValue key)
-{
-    BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
-    return bsObjectFindValue(object.u.object, bsStringData(key), bsStringSize(key), interned);
 }
 
 
@@ -1805,17 +1796,13 @@ BSValue bsObjectGet(BSValue value, const char *key)
 
 bool bsObjectHasString(BSValue value, BSValue key)
 {
-    if (value.type != BS_OBJECT) {
-        return false;
-    }
-    BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
-    return bsObjectFindValue(value.u.object, bsStringData(key), bsStringSize(key), interned) != NULL;
+    return value.type == BS_OBJECT && bsObjectValuePtrString(value, key) != NULL;
 }
 
 
 bool bsObjectHas(BSValue value, const char *key)
 {
-    return value.type == BS_OBJECT && bsObjectFindValue(value.u.object, key, strlen(key), NULL) != NULL;
+    return value.type == BS_OBJECT && bsObjectValuePtr(value, key, strlen(key)) != NULL;
 }
 
 
@@ -1856,51 +1843,31 @@ bool bsObjectDelete(BSValue value, const char *key)
                                              &removed, object);
         return removed;
     }
-    if (node->insertPrev != NULL) {
-        node->insertPrev->insertNext = node->insertNext;
-    } else {
-        object->u.tree.insertHead = node->insertNext;
-    }
-    if (node->insertNext != NULL) {
-        node->insertNext->insertPrev = node->insertPrev;
-    } else {
-        object->u.tree.insertTail = node->insertPrev;
-    }
-    bsObjectLookupDel(object, node->key);
-    bsReleaseInline(bsStringTake(node->key));
-    bsReleaseInline(node->value);
-    bsObjectNodeRecycle(node);
-    object->count--;
-    object->generation++;
+    bsObjectNodeUnlink(object, node);
     return true;
 }
 
 
-typedef struct BSObjectIterContext {
-    BSObjectIterFn iter;
-    void *data;
-} BSObjectIterContext;
-
-
-static bool bsObjectIterNode(BSObjectNode *node, const BSObjectIterContext *context)
+static bool bsObjectIterNode(BSObjectNode *node, BSObjectIterFn iter, void *data)
 {
     if (node == NULL) {
         return true;
     }
-    if (!bsObjectIterNode(node->left, context)) {
+    if (!bsObjectIterNode(node->left, iter, data)) {
         return false;
     }
-    if (!context->iter(bsStringTake(node->key), node->value, context->data)) {
+    if (!iter(bsStringTake(node->key), node->value, data)) {
         return false;
     }
-    return bsObjectIterNode(node->right, context);
+    return bsObjectIterNode(node->right, iter, data);
 }
 
 
-static bool bsObjectIterPackedSorted(BSObject *object, BSObjectIterFn iter, void *data)
+/* Iterate at most BS_OBJECT_SMALL pairs in sorted key order - an insertion sort of their indexes */
+static bool bsObjectIterSortedPairs(BSString *const *keys, const BSValue *values, size_t n,
+                                    BSObjectIterFn iter, void *data)
 {
-    size_t n = object->count;
-    size_t order[BS_OBJECT_PACKED];
+    size_t order[BS_OBJECT_SMALL];
     for (size_t ix = 0; ix < n; ix++) {
         order[ix] = ix;
     }
@@ -1908,9 +1875,8 @@ static bool bsObjectIterPackedSorted(BSObject *object, BSObjectIterFn iter, void
         size_t item = order[i];
         size_t j = i;
         while (j > 0) {
-            BSString *left = object->u.small.keys[order[j - 1]];
-            BSString *right = object->u.small.keys[item];
-            if (bsKeyCompare(left, right->data, right->size) <= 0) {
+            BSString *right = keys[item];
+            if (bsKeyCompare(keys[order[j - 1]], right->data, right->size) <= 0) {
                 break;
             }
             order[j] = order[j - 1];
@@ -1920,36 +1886,7 @@ static bool bsObjectIterPackedSorted(BSObject *object, BSObjectIterFn iter, void
     }
     for (size_t ix = 0; ix < n; ix++) {
         size_t k = order[ix];
-        if (!iter(bsStringTake(object->u.small.keys[k]), object->u.small.values[k], data)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-
-static bool bsObjectIterListSorted(BSObject *object, BSObjectIterFn iter, void *data)
-{
-    size_t n = object->count;
-    BSObjectNode *order[32];
-    size_t ix = 0;
-    for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
-        order[ix++] = node;
-    }
-    for (size_t i = 1; i < n; i++) {
-        BSObjectNode *item = order[i];
-        size_t j = i;
-        while (j > 0) {
-            if (bsKeyCompare(order[j - 1]->key, item->key->data, item->key->size) <= 0) {
-                break;
-            }
-            order[j] = order[j - 1];
-            j--;
-        }
-        order[j] = item;
-    }
-    for (ix = 0; ix < n; ix++) {
-        if (!iter(bsStringTake(order[ix]->key), order[ix]->value, data)) {
+        if (!iter(bsStringTake(keys[k]), values[k], data)) {
             return false;
         }
     }
@@ -1962,17 +1899,25 @@ bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data)
     if (value.type != BS_OBJECT) {
         return true;
     }
-    if (value.u.object->packed) {
-        return bsObjectIterPackedSorted(value.u.object, iter, data);
+    BSObject *object = value.u.object;
+    if (object->packed) {
+        return bsObjectIterSortedPairs(object->u.small.keys, object->u.small.values, object->count, iter, data);
     }
-    if (value.u.object->u.tree.root == NULL && value.u.object->u.tree.insertHead != NULL) {
-        if (value.u.object->count <= BS_OBJECT_SMALL) {
-            return bsObjectIterListSorted(value.u.object, iter, data);
+    if (object->u.tree.root == NULL && object->u.tree.insertHead != NULL) {
+        if (object->count <= BS_OBJECT_SMALL) {
+            BSString *keys[BS_OBJECT_SMALL];
+            BSValue values[BS_OBJECT_SMALL];
+            size_t ix = 0;
+            for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
+                keys[ix] = node->key;
+                values[ix] = node->value;
+                ix++;
+            }
+            return bsObjectIterSortedPairs(keys, values, object->count, iter, data);
         }
-        bsObjectBuildTreap(value.u.object);
+        bsObjectBuildTreap(object);
     }
-    BSObjectIterContext context = {iter, data};
-    return bsObjectIterNode(value.u.object->u.tree.root, &context);
+    return bsObjectIterNode(object->u.tree.root, iter, data);
 }
 
 
@@ -2077,13 +2022,7 @@ BSValue bsFunctionCall(BSValue function, const BSValue *args, size_t argCount, B
 
 BSValue bsRetain(BSValue value)
 {
-    /* Immediate values need no work. Heap objects all start with an int32_t refcount. */
-    if (value.type >= BS_STRING && value.type <= BS_FUNCTION) {
-        (*(int32_t *) value.u.ref)++;
-    } else if (value.type == BS_REGEX) {
-        bsRegexRetain(value);
-    }
-    return value;
+    return bsRetainInline(value);
 }
 
 
@@ -2125,17 +2064,7 @@ void bsReleaseDestroyed(BSValue value)
 
 void bsRelease(BSValue value)
 {
-    if (value.type == BS_REGEX) {
-        bsRegexRelease(value);
-        return;
-    }
-    if (value.type < BS_STRING || value.type > BS_FUNCTION) {
-        return;
-    }
-    if (--(*(int32_t *) value.u.ref) != 0) {
-        return;
-    }
-    bsReleaseDestroyed(value);
+    bsReleaseInline(value);
 }
 
 
@@ -2324,7 +2253,6 @@ bool bsNumberParse(const char *text, size_t size, double *result)
         return false;
     }
     if (ix < size && (text[ix] == 'e' || text[ix] == 'E')) {
-        size_t save = ix;
         ix++;
         if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
             ix++;
@@ -2335,7 +2263,6 @@ bool bsNumberParse(const char *text, size_t size, double *result)
             exponentDigits++;
         }
         if (exponentDigits == 0) {
-            ix = save;
             return false;
         }
     }
@@ -2654,28 +2581,14 @@ bool bsDatetimeParse(const char *text, size_t size, int64_t *result)
  */
 
 
+const char *const bsTypeNames[BS_REGEX + 1] = {
+    "null", "boolean", "number", "datetime", "string", "array", "object", "function", "regex"
+};
+
+
 const char *bsValueTypeString(BSValue value)
 {
-    switch (value.type) {
-    case BS_NULL:
-        return "null";
-    case BS_BOOLEAN:
-        return "boolean";
-    case BS_NUMBER:
-        return "number";
-    case BS_DATETIME:
-        return "datetime";
-    case BS_STRING:
-        return "string";
-    case BS_ARRAY:
-        return "array";
-    case BS_OBJECT:
-        return "object";
-    case BS_FUNCTION:
-        return "function";
-    default:
-        return "regex";
-    }
+    return bsTypeNames[value.type];
 }
 
 
@@ -2714,12 +2627,6 @@ BSValue bsValueString(BSValue value)
     default:
         return bsStringNew("<regex>");
     }
-}
-
-
-BSValue bsValueJSON(BSValue value, int indent)
-{
-    return bsJSONEncode(value, indent);
 }
 
 

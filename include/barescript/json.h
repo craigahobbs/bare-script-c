@@ -4,8 +4,7 @@
 /*
  * A targeted JSON encoder/decoder for BareScript
  *
- * The encoder writes BareScript values as JSON with object keys in sorted order - which the value
- * system provides for free, since objects are key-ordered binary search trees. Datetime and
+ * The encoder writes BareScript values as JSON with object keys in sorted order. Datetime and
  * function values encode as their bsValueString representation; regex values encode as null.
  */
 
@@ -27,9 +26,6 @@ BS_VISIBILITY_BEGIN
  * many spaces of indentation per level. Returns an owned string value.
  */
 BSValue bsJSONEncode(BSValue value, int indent);
-
-/* Encode a value as JSON, appending to a string builder */
-void bsJSONEncodeSB(BSStringBuilder *sb, BSValue value, int indent);
 
 /*
  * Decode a JSON string. Returns an owned value, or a null value on error. If "error" is non-NULL,

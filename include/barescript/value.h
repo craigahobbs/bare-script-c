@@ -122,14 +122,16 @@ typedef struct BSObjectNode {
  * A reference-counted object of key/value pairs
  *
  * Up to four pairs live in the object itself. Past that, keys live on an insertion-order list of
- * treap nodes; past 32 keys the list is indexed by the treap (and an interned-pointer hash table).
- * The two storage forms are exclusive, so they share the object's storage. Iteration is insertion
- * order - matching the reference implementations, whose objects are JavaScript objects and Python
- * dictionaries. JSON encoding and value comparison walk sorted keys.
+ * nodes; past 32 keys an interned-pointer hash table indexes the list, and a treap over the same
+ * nodes - built only when something needs key order, or a key that must be matched by content -
+ * gives the sorted traversal. The two storage forms are exclusive, so they share the object's
+ * storage. Iteration is insertion order - matching the reference implementations, whose objects
+ * are JavaScript objects and Python dictionaries. JSON encoding and value comparison walk sorted
+ * keys.
  */
 struct BSObject {
     int32_t refcount;
-    uint8_t packed;      /* 1 = u.small, 0 = u.tree - an insertion list, and a treap past 32 keys */
+    uint8_t packed;      /* 1 = u.small, 0 = u.tree - an insertion list, indexed past 32 keys */
     uint8_t uninterned;  /* 1 if any key is not interned; interned hash miss then walks the treap */
     uint32_t count;
     uint32_t generation; /* incremented when a key is added or removed - value slots then move */
@@ -213,9 +215,6 @@ const char *bsValueTypeString(BSValue value);
 
 /* Get a value's string representation - returns an owned string value */
 BSValue bsValueString(BSValue value);
-
-/* Get a value's JSON string representation - returns an owned string value. Keys are sorted. */
-BSValue bsValueJSON(BSValue value, int indent);
 
 /* Interpret a value as a boolean */
 bool bsValueBoolean(BSValue value);

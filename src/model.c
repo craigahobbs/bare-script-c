@@ -154,7 +154,7 @@ void bsScriptRelease(BSScript *script)
  * parser script produce interned keys, so a model object's keys are never compared by content.
  */
 static struct {
-    BSValue args, async, binary, expr, function, group, include, includes, jump, label, lastArgArray, left, lineCount, lineNumber, name, number, op, return_, right, scriptLines, scriptName, statements, string, system, unary, url, variable;
+    BSValue args, binary, expr, function, group, include, includes, jump, label, lastArgArray, left, lineNumber, name, number, op, return_, right, scriptLines, scriptName, statements, string, system, unary, url, variable;
 } bsKeys;
 static bool bsKeysReady;
 
@@ -165,7 +165,6 @@ static void bsKeysInit(void)
         return;
     }
     bsKeys.args = bsStringIntern("args", 4);
-    bsKeys.async = bsStringIntern("async", 5);
     bsKeys.binary = bsStringIntern("binary", 6);
     bsKeys.expr = bsStringIntern("expr", 4);
     bsKeys.function = bsStringIntern("function", 8);
@@ -176,7 +175,6 @@ static void bsKeysInit(void)
     bsKeys.label = bsStringIntern("label", 5);
     bsKeys.lastArgArray = bsStringIntern("lastArgArray", 12);
     bsKeys.left = bsStringIntern("left", 4);
-    bsKeys.lineCount = bsStringIntern("lineCount", 9);
     bsKeys.lineNumber = bsStringIntern("lineNumber", 10);
     bsKeys.name = bsStringIntern("name", 4);
     bsKeys.number = bsStringIntern("number", 6);
@@ -376,13 +374,25 @@ static uint32_t bsEmitSite(BSEmit *e, BSValue name)
 }
 
 
+/* Emit the slot instruction for a function-local name, or the name instruction with a cache site */
+static void bsEmitNamed(BSEmit *e, BSValue interned, uint8_t slotOp, uint8_t nameOp)
+{
+    int slot = bsSlotFind(e, interned);
+    if (slot >= 0) {
+        bsEmitInst(e, slotOp, (uint32_t) slot);
+    } else {
+        bsEmitInst(e, nameOp, bsEmitSite(e, interned));
+    }
+}
+
+
 static void bsEmitJump(BSEmit *e, uint8_t op, BSValue label)
 {
     /* "jumpif (!expr)" - fold the NOT into the jump, unless another jump lands between them */
     if (op == BS_OP_JUMP_TRUE && e->count != 0 && BS_OP(e->inst[e->count - 1]) == BS_OP_NOT &&
         e->targetAt != e->count) {
         e->count--;
-        op = op == BS_OP_JUMP_TRUE ? BS_OP_JUMP_FALSE : BS_OP_JUMP_TRUE;
+        op = BS_OP_JUMP_FALSE;
     }
     BSValue interned = bsStringIntern(bsStringData(label), bsStringSize(label));
     BSValue pc = e->labels.type == BS_OBJECT ? bsObjectGetString(e->labels, interned) : bsNull();
@@ -505,12 +515,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
             bsEmitInst(e, BS_OP_LOAD_FALSE, 0);
         } else {
             BSValue interned = bsStringIntern(name, bsStringSize(variable));
-            int slot = bsSlotFind(e, interned);
-            if (slot >= 0) {
-                bsEmitInst(e, BS_OP_LOAD_SLOT, (uint32_t) slot);
-            } else {
-                bsEmitInst(e, BS_OP_LOAD_NAME, bsEmitSite(e, interned));
-            }
+            bsEmitNamed(e, interned, BS_OP_LOAD_SLOT, BS_OP_LOAD_NAME);
             bsRelease(interned);
         }
         return true;
@@ -533,12 +538,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
             }
         }
         BSValue interned = bsStringIntern(bsStringData(name), bsStringSize(name));
-        int slot = bsSlotFind(e, interned);
-        if (slot >= 0) {
-            bsEmitInst(e, BS_OP_CALL_SLOT, (uint32_t) slot);
-        } else {
-            bsEmitInst(e, BS_OP_CALL_NAME, bsEmitSite(e, interned));
-        }
+        bsEmitNamed(e, interned, BS_OP_CALL_SLOT, BS_OP_CALL_NAME);
         /* The following word is the argument count (never dispatched) */
         bsEmitInst(e, BS_OP_ARGC, (uint32_t) argCount);
         bsRelease(interned);
@@ -625,9 +625,11 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
 
 static int bsStatementModelLine(BSValue model)
 {
-    static const char *const keys[] = {"expr", "jump", "return", "label", "function", "include"};
+    const BSValue *const keys[] = {
+        &bsKeys.expr, &bsKeys.jump, &bsKeys.return_, &bsKeys.label, &bsKeys.function, &bsKeys.include
+    };
     for (size_t ix = 0; ix < sizeof(keys) / sizeof(keys[0]); ix++) {
-        BSValue inner = bsObjectGet(model, keys[ix]);
+        BSValue inner = bsModelGet(model, *keys[ix]);
         if (inner.type == BS_OBJECT) {
             BSValue line = bsModelGet(inner, bsKeys.lineNumber);
             return line.type == BS_NUMBER ? (int) line.u.number : 0;
@@ -654,7 +656,7 @@ static uint32_t bsEmitCover(BSEmit *e, BSValue statementModel)
 }
 
 
-static bool bsEmitFunction(BSEmit *e, BSValue model, int lineNumber, int lineCount);
+static bool bsEmitFunction(BSEmit *e, BSValue model);
 
 
 static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
@@ -734,10 +736,7 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
         value = bsModelGet(model, bsKeys.function);
         if (value.type == BS_OBJECT) {
             bsEmitCover(e, model);
-            BSValue lineNumber = bsModelGet(value, bsKeys.lineNumber);
-            BSValue lineCount = bsModelGet(value, bsKeys.lineCount);
-            if (!bsEmitFunction(e, value, lineNumber.type == BS_NUMBER ? (int) lineNumber.u.number : 0,
-                                lineCount.type == BS_NUMBER ? (int) lineCount.u.number : 0)) {
+            if (!bsEmitFunction(e, value)) {
                 return false;
             }
             continue;
@@ -747,7 +746,7 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
         if (value.type == BS_OBJECT) {
             BSValue includes = bsModelGet(value, bsKeys.includes);
             size_t includeCount = bsArrayCount(includes);
-            if (includes.type != BS_ARRAY || includeCount == 0) {
+            if (includeCount == 0) {
                 return false;
             }
             bsEmitCover(e, model);
@@ -840,7 +839,6 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
         for (size_t ix = 0; ix < e->callCount; ix++) {
             code->caches[ix].nameIndex = e->callNames[ix];
         }
-        code->cacheCount = e->callCount;
     }
     free(e->callNames);
 }
@@ -875,7 +873,7 @@ static void bsEmitDiscard(BSEmit *e)
 }
 
 
-static bool bsEmitFunction(BSEmit *e, BSValue model, int lineNumber, int lineCount)
+static bool bsEmitFunction(BSEmit *e, BSValue model)
 {
     BSValue name = bsModelGet(model, bsKeys.name);
     BSValue statements = bsModelGet(model, bsKeys.statements);
@@ -887,10 +885,6 @@ static bool bsEmitFunction(BSEmit *e, BSValue model, int lineNumber, int lineCou
     memset(def, 0, sizeof(*def));
     def->name = bsStringIntern(bsStringData(name), bsStringSize(name));
     def->lastArgArray = bsValueBoolean(bsModelGet(model, bsKeys.lastArgArray));
-    def->async = bsValueBoolean(bsModelGet(model, bsKeys.async));
-    def->lineNumber = lineNumber;
-    def->lineCount = lineCount;
-    def->script = e->script;
 
     BSValue args = bsModelGet(model, bsKeys.args);
     size_t argCount = bsArrayCount(args);

@@ -1118,8 +1118,8 @@ TEST(value_json_wrapper)
 {
     BSValue object = bsObjectNew();
     bsObjectSet(object, "a", bsNumber(1));
-    ASSERT_VALUE_STRING(bsValueJSON(object, 0), "{\"a\":1}");
-    ASSERT_VALUE_STRING(bsValueJSON(object, 2), "{\n  \"a\": 1\n}");
+    ASSERT_VALUE_STRING(bsJSONEncode(object, 0), "{\"a\":1}");
+    ASSERT_VALUE_STRING(bsJSONEncode(object, 2), "{\n  \"a\": 1\n}");
     bsRelease(object);
 }
 

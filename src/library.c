@@ -84,7 +84,7 @@ static bool bsArgLimit(double value, unsigned flags, double limit)
 
 
 bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSValue *args, size_t argCount,
-                    BSValue *values, BSOptions *options, const char *functionName)
+                    BSValue *values, BSOptions *options)
 {
     /* LAST_ARRAY slots are released on failure; every slot must be a valid value first */
     for (size_t ix = 0; ix < argModelCount; ix++) {
@@ -187,6 +187,24 @@ void bsArgsFree(const BSArgModel *argModel, size_t argModelCount, BSValue *value
 }
 
 
+/*
+ * A library function's argument prologue: validate "args" against "model", declaring "values" - one
+ * validated value per model entry - or return "failValue"
+ */
+#define BS_ARGS(model, failValue) \
+    BSValue values[sizeof(model) / sizeof((model)[0])]; \
+    if (!bsArgsValidate(model, sizeof(model) / sizeof((model)[0]), args, argCount, values, options)) { \
+        return failValue; \
+    }
+
+
+/* The argument models the one-argument functions share */
+static const BSArgModel arrayArgs[] = {{"array", BS_ARG_ARRAY, 0, 0, 0, 0, 0}};
+static const BSArgModel objectArgs[] = {{"object", BS_ARG_OBJECT, 0, 0, 0, 0, 0}};
+static const BSArgModel stringArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
+static const BSArgModel valueArgs[] = {{"value", BS_ARG_ANY, 0, 0, 0, 0, 0}};
+
+
 /* Report an argument error from a function that validates a value itself */
 static BSValue bsArgFail(BSOptions *options, const char *argName, BSValue argValue, BSValue errorValue)
 {
@@ -200,14 +218,9 @@ static BSValue bsArgFail(BSOptions *options, const char *argName, BSValue argVal
  */
 
 
-static const BSArgModel arrayCopyArgs[] = {{"array", BS_ARG_ARRAY, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnArrayCopy(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(arrayCopyArgs, 1, args, argCount, values, options, "arrayCopy")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayArgs, bsNull());
     return bsArrayCopy(values[0]);
 }
 
@@ -219,10 +232,7 @@ static const BSArgModel arrayDeleteArgs[] = {
 
 static BSValue bsFnArrayDelete(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(arrayDeleteArgs, 2, args, argCount, values, options, "arrayDelete")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayDeleteArgs, bsNull());
     size_t index = (size_t) values[1].u.number;
     if (index >= bsArrayCount(values[0])) {
         return bsArgFail(options, "index", values[1], bsNull());
@@ -239,10 +249,7 @@ static const BSArgModel arrayExtendArgs[] = {
 
 static BSValue bsFnArrayExtend(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(arrayExtendArgs, 2, args, argCount, values, options, "arrayExtend")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayExtendArgs, bsNull());
     size_t count = bsArrayCount(values[1]);
     for (size_t ix = 0; ix < count; ix++) {
         bsArrayPush(values[0], bsRetain(bsArrayGet(values[1], ix)));
@@ -276,10 +283,7 @@ static const BSArgModel arrayFlatArgs[] = {
 
 static BSValue bsFnArrayFlat(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(arrayFlatArgs, 2, args, argCount, values, options, "arrayFlat")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayFlatArgs, bsNull());
     BSValue result = bsArrayNew();
     double depth = values[1].u.number;
     int maxDepth = depth < 0 ? 0 : (depth > 1000000 ? 1000000 : (int) depth);
@@ -295,15 +299,41 @@ static const BSArgModel arrayGetArgs[] = {
 
 static BSValue bsFnArrayGet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(arrayGetArgs, 2, args, argCount, values, options, "arrayGet")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayGetArgs, bsNull());
     size_t index = (size_t) values[1].u.number;
     if (index >= bsArrayCount(values[0])) {
         return bsArgFail(options, "index", values[1], bsNull());
     }
     return bsRetain(bsArrayGet(values[0], index));
+}
+
+
+/*
+ * Search an array from "index" for an item equal to "value", or for which the predicate "value"
+ * returns true, forward or backward. Returns the index found, or -1.
+ */
+static BSValue bsArrayFind(BSValue array, BSValue value, size_t index, bool backward, BSOptions *options)
+{
+    size_t count = bsArrayCount(array);
+    bool isFunction = (value.type == BS_FUNCTION);
+    for (size_t ix = index; ix < count; backward ? ix-- : ix++) {
+        BSValue item = bsArrayGet(array, ix);
+        bool matched;
+        if (isFunction) {
+            BSValue result = bsFunctionCall(value, &item, 1, options);
+            matched = bsValueBoolean(result);
+            bsRelease(result);
+            if (options->error.type == BS_STRING) {
+                return bsNumber(-1);
+            }
+        } else {
+            matched = (bsValueCompare(item, value) == 0);
+        }
+        if (matched) {
+            return bsNumber((double) ix);
+        }
+    }
+    return bsNumber(-1);
 }
 
 
@@ -315,31 +345,8 @@ static const BSArgModel arrayIndexOfArgs[] = {
 
 static BSValue bsFnArrayIndexOf(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(arrayIndexOfArgs, 3, args, argCount, values, options, "arrayIndexOf")) {
-        return bsNumber(-1);
-    }
-    size_t count = bsArrayCount(values[0]);
-    size_t index = (size_t) values[2].u.number;
-    bool isFunction = (values[1].type == BS_FUNCTION);
-    for (size_t ix = index; ix < count; ix++) {
-        BSValue item = bsArrayGet(values[0], ix);
-        bool matched;
-        if (isFunction) {
-            BSValue result = bsFunctionCall(values[1], &item, 1, options);
-            matched = bsValueBoolean(result);
-            bsRelease(result);
-            if (options->error.type == BS_STRING) {
-                return bsNumber(-1);
-            }
-        } else {
-            matched = (bsValueCompare(item, values[1]) == 0);
-        }
-        if (matched) {
-            return bsNumber((double) ix);
-        }
-    }
-    return bsNumber(-1);
+    BS_ARGS(arrayIndexOfArgs, bsNumber(-1));
+    return bsArrayFind(values[0], values[1], (size_t) values[2].u.number, false, options);
 }
 
 
@@ -350,10 +357,7 @@ static const BSArgModel arrayJoinArgs[] = {
 
 static BSValue bsFnArrayJoin(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(arrayJoinArgs, 2, args, argCount, values, options, "arrayJoin")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayJoinArgs, bsNull());
     BSStringBuilder sb;
     bsSBInit(&sb);
     size_t count = bsArrayCount(values[0]);
@@ -375,46 +379,20 @@ static const BSArgModel arrayLastIndexOfArgs[] = {
 
 static BSValue bsFnArrayLastIndexOf(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(arrayLastIndexOfArgs, 3, args, argCount, values, options, "arrayLastIndexOf")) {
-        return bsNumber(-1);
-    }
+    BS_ARGS(arrayLastIndexOfArgs, bsNumber(-1));
     size_t count = bsArrayCount(values[0]);
     if (count == 0) {
         return bsNumber(-1);
     }
     size_t index = (values[2].type == BS_NUMBER && (size_t) values[2].u.number < count) ?
         (size_t) values[2].u.number : count - 1;
-    bool isFunction = (values[1].type == BS_FUNCTION);
-    for (size_t ix = index + 1; ix-- > 0;) {
-        BSValue item = bsArrayGet(values[0], ix);
-        bool matched;
-        if (isFunction) {
-            BSValue result = bsFunctionCall(values[1], &item, 1, options);
-            matched = bsValueBoolean(result);
-            bsRelease(result);
-            if (options->error.type == BS_STRING) {
-                return bsNumber(-1);
-            }
-        } else {
-            matched = (bsValueCompare(item, values[1]) == 0);
-        }
-        if (matched) {
-            return bsNumber((double) ix);
-        }
-    }
-    return bsNumber(-1);
+    return bsArrayFind(values[0], values[1], index, true, options);
 }
 
 
-static const BSArgModel arrayLengthArgs[] = {{"array", BS_ARG_ARRAY, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnArrayLength(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(arrayLengthArgs, 1, args, argCount, values, options, "arrayLength")) {
-        return bsNumber(0);
-    }
+    BS_ARGS(arrayArgs, bsNumber(0));
     return bsNumber((double) bsArrayCount(values[0]));
 }
 
@@ -436,10 +414,7 @@ static const BSArgModel arrayNewSizeArgs[] = {
 
 static BSValue bsFnArrayNewSize(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(arrayNewSizeArgs, 2, args, argCount, values, options, "arrayNewSize")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayNewSizeArgs, bsNull());
     size_t size = (size_t) values[0].u.number;
     BSValue result = bsArrayNewCapacity(size);
     for (size_t ix = 0; ix < size; ix++) {
@@ -449,14 +424,9 @@ static BSValue bsFnArrayNewSize(const BSValue *args, size_t argCount, BSOptions 
 }
 
 
-static const BSArgModel arrayPopArgs[] = {{"array", BS_ARG_ARRAY, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnArrayPop(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(arrayPopArgs, 1, args, argCount, values, options, "arrayPop")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayArgs, bsNull());
     size_t count = bsArrayCount(values[0]);
     if (count == 0) {
         return bsArgFail(options, "array", values[0], bsNull());
@@ -474,10 +444,7 @@ static const BSArgModel arrayPushArgs[] = {
 
 static BSValue bsFnArrayPush(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(arrayPushArgs, 2, args, argCount, values, options, "arrayPush")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayPushArgs, bsNull());
     size_t count = bsArrayCount(values[1]);
     for (size_t ix = 0; ix < count; ix++) {
         bsArrayPush(values[0], bsRetain(bsArrayGet(values[1], ix)));
@@ -487,14 +454,9 @@ static BSValue bsFnArrayPush(const BSValue *args, size_t argCount, BSOptions *op
 }
 
 
-static const BSArgModel arrayReverseArgs[] = {{"array", BS_ARG_ARRAY, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnArrayReverse(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(arrayReverseArgs, 1, args, argCount, values, options, "arrayReverse")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayArgs, bsNull());
     BSArray *array = values[0].u.array;
     for (size_t ix = 0; ix < array->count / 2; ix++) {
         BSValue swap = array->values[ix];
@@ -513,10 +475,7 @@ static const BSArgModel arraySetArgs[] = {
 
 static BSValue bsFnArraySet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(arraySetArgs, 3, args, argCount, values, options, "arraySet")) {
-        return bsNull();
-    }
+    BS_ARGS(arraySetArgs, bsNull());
     size_t index = (size_t) values[1].u.number;
     if (index >= bsArrayCount(values[0])) {
         return bsArgFail(options, "index", values[1], bsNull());
@@ -526,14 +485,9 @@ static BSValue bsFnArraySet(const BSValue *args, size_t argCount, BSOptions *opt
 }
 
 
-static const BSArgModel arrayShiftArgs[] = {{"array", BS_ARG_ARRAY, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnArrayShift(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(arrayShiftArgs, 1, args, argCount, values, options, "arrayShift")) {
-        return bsNull();
-    }
+    BS_ARGS(arrayArgs, bsNull());
     if (bsArrayCount(values[0]) == 0) {
         return bsArgFail(options, "array", values[0], bsNull());
     }
@@ -551,10 +505,7 @@ static const BSArgModel arraySliceArgs[] = {
 
 static BSValue bsFnArraySlice(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(arraySliceArgs, 3, args, argCount, values, options, "arraySlice")) {
-        return bsNull();
-    }
+    BS_ARGS(arraySliceArgs, bsNull());
     size_t count = bsArrayCount(values[0]);
     size_t start = (size_t) values[1].u.number;
     size_t end = values[2].type == BS_NUMBER ? (size_t) values[2].u.number : count;
@@ -602,10 +553,7 @@ static const BSArgModel arraySortArgs[] = {
 
 static BSValue bsFnArraySort(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(arraySortArgs, 2, args, argCount, values, options, "arraySort")) {
-        return bsNull();
-    }
+    BS_ARGS(arraySortArgs, bsNull());
     BSSortContext context = {values[1], options};
     bsArraySort(values[0], bsSortCompare, &context);
     return bsRetain(values[0]);
@@ -626,11 +574,7 @@ static const BSArgModel barescriptEvaluateExpressionArgs[] = {
 static BSValue bsFnBarescriptEvaluateExpression(const BSValue *args, size_t argCount, BSOptions *options,
                                                 void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(barescriptEvaluateExpressionArgs, 3, args, argCount, values, options,
-                        "barescriptEvaluateExpression")) {
-        return bsNull();
-    }
+    BS_ARGS(barescriptEvaluateExpressionArgs, bsNull());
     return bsEvaluateExpressionModel(values[0], options, values[1], values[2].u.boolean);
 }
 
@@ -642,25 +586,22 @@ static BSValue bsFnBarescriptEvaluateExpression(const BSValue *args, size_t argC
 
 static const BSArgModel datetimeArgs[] = {{"datetime", BS_ARG_DATETIME, 0, 0, 0, 0, 0}};
 
-#define BS_DATETIME_PART(fnName, name, member) \
+#define BS_DATETIME_PART(fnName, member) \
     static BSValue fnName(const BSValue *args, size_t argCount, BSOptions *options, void *data) \
     { \
-        BSValue values[1]; \
-        if (!bsArgsValidate(datetimeArgs, 1, args, argCount, values, options, name)) { \
-            return bsNull(); \
-        } \
+        BS_ARGS(datetimeArgs, bsNull()); \
         BSDatetimeParts parts; \
         bsDatetimeParts(values[0].u.datetime, &parts); \
         return bsNumber(parts.member); \
     }
 
-BS_DATETIME_PART(bsFnDatetimeDay, "datetimeDay", day)
-BS_DATETIME_PART(bsFnDatetimeHour, "datetimeHour", hour)
-BS_DATETIME_PART(bsFnDatetimeMillisecond, "datetimeMillisecond", millisecond)
-BS_DATETIME_PART(bsFnDatetimeMinute, "datetimeMinute", minute)
-BS_DATETIME_PART(bsFnDatetimeMonth, "datetimeMonth", month)
-BS_DATETIME_PART(bsFnDatetimeSecond, "datetimeSecond", second)
-BS_DATETIME_PART(bsFnDatetimeYear, "datetimeYear", year)
+BS_DATETIME_PART(bsFnDatetimeDay, day)
+BS_DATETIME_PART(bsFnDatetimeHour, hour)
+BS_DATETIME_PART(bsFnDatetimeMillisecond, millisecond)
+BS_DATETIME_PART(bsFnDatetimeMinute, minute)
+BS_DATETIME_PART(bsFnDatetimeMonth, month)
+BS_DATETIME_PART(bsFnDatetimeSecond, second)
+BS_DATETIME_PART(bsFnDatetimeYear, year)
 
 
 static const BSArgModel datetimeISOFormatArgs[] = {
@@ -670,10 +611,7 @@ static const BSArgModel datetimeISOFormatArgs[] = {
 
 static BSValue bsFnDatetimeISOFormat(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(datetimeISOFormatArgs, 2, args, argCount, values, options, "datetimeISOFormat")) {
-        return bsNull();
-    }
+    BS_ARGS(datetimeISOFormatArgs, bsNull());
     if (!values[1].u.boolean) {
         return bsValueString(values[0]);
     }
@@ -683,14 +621,9 @@ static BSValue bsFnDatetimeISOFormat(const BSValue *args, size_t argCount, BSOpt
 }
 
 
-static const BSArgModel datetimeISOParseArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnDatetimeISOParse(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(datetimeISOParseArgs, 1, args, argCount, values, options, "datetimeISOParse")) {
-        return bsNull();
-    }
+    BS_ARGS(stringArgs, bsNull());
     int64_t milliseconds;
     if (!bsDatetimeParse(bsStringData(values[0]), bsStringSize(values[0]), &milliseconds)) {
         return bsNull();
@@ -711,10 +644,7 @@ static const BSArgModel datetimeNewArgs[] = {
 
 static BSValue bsFnDatetimeNew(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[7];
-    if (!bsArgsValidate(datetimeNewArgs, 7, args, argCount, values, options, "datetimeNew")) {
-        return bsNull();
-    }
+    BS_ARGS(datetimeNewArgs, bsNull());
     return bsDatetime(bsDatetimeFromParts(values[0].u.number, values[1].u.number, values[2].u.number,
                                           values[3].u.number, values[4].u.number, values[5].u.number,
                                           values[6].u.number));
@@ -738,14 +668,9 @@ static BSValue bsFnDatetimeToday(const BSValue *args, size_t argCount, BSOptions
  */
 
 
-static const BSArgModel jsonParseArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnJSONParse(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(jsonParseArgs, 1, args, argCount, values, options, "jsonParse")) {
-        return bsNull();
-    }
+    BS_ARGS(stringArgs, bsNull());
     const char *error = NULL;
     size_t errorOffset = 0;
     BSValue result = bsJSONDecodeEx(bsStringData(values[0]), bsStringSize(values[0]), &error,
@@ -778,10 +703,7 @@ static const BSArgModel jsonStringifyArgs[] = {
 
 static BSValue bsFnJSONStringify(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(jsonStringifyArgs, 2, args, argCount, values, options, "jsonStringify")) {
-        return bsNull();
-    }
+    BS_ARGS(jsonStringifyArgs, bsNull());
     return bsJSONEncode(values[0], values[1].type == BS_NUMBER ? (int) values[1].u.number : 0);
 }
 
@@ -793,27 +715,24 @@ static BSValue bsFnJSONStringify(const BSValue *args, size_t argCount, BSOptions
 
 static const BSArgModel mathXArgs[] = {{"x", BS_ARG_NUMBER, 0, 0, 0, 0, 0}};
 
-#define BS_MATH_FN(fnName, name, expression) \
+#define BS_MATH_FN(fnName, expression) \
     static BSValue fnName(const BSValue *args, size_t argCount, BSOptions *options, void *data) \
     { \
-        BSValue values[1]; \
-        if (!bsArgsValidate(mathXArgs, 1, args, argCount, values, options, name)) { \
-            return bsNull(); \
-        } \
+        BS_ARGS(mathXArgs, bsNull()); \
         double x = values[0].u.number; \
         return bsNumber(expression); \
     }
 
-BS_MATH_FN(bsFnMathAbs, "mathAbs", fabs(x))
-BS_MATH_FN(bsFnMathAcos, "mathAcos", acos(x))
-BS_MATH_FN(bsFnMathAsin, "mathAsin", asin(x))
-BS_MATH_FN(bsFnMathAtan, "mathAtan", atan(x))
-BS_MATH_FN(bsFnMathCeil, "mathCeil", ceil(x))
-BS_MATH_FN(bsFnMathCos, "mathCos", cos(x))
-BS_MATH_FN(bsFnMathFloor, "mathFloor", floor(x))
-BS_MATH_FN(bsFnMathSign, "mathSign", x < 0 ? -1 : (x == 0 ? 0 : 1))
-BS_MATH_FN(bsFnMathSin, "mathSin", sin(x))
-BS_MATH_FN(bsFnMathTan, "mathTan", tan(x))
+BS_MATH_FN(bsFnMathAbs, fabs(x))
+BS_MATH_FN(bsFnMathAcos, acos(x))
+BS_MATH_FN(bsFnMathAsin, asin(x))
+BS_MATH_FN(bsFnMathAtan, atan(x))
+BS_MATH_FN(bsFnMathCeil, ceil(x))
+BS_MATH_FN(bsFnMathCos, cos(x))
+BS_MATH_FN(bsFnMathFloor, floor(x))
+BS_MATH_FN(bsFnMathSign, x < 0 ? -1 : (x == 0 ? 0 : 1))
+BS_MATH_FN(bsFnMathSin, sin(x))
+BS_MATH_FN(bsFnMathTan, tan(x))
 
 
 static const BSArgModel mathAtan2Args[] = {
@@ -823,10 +742,7 @@ static const BSArgModel mathAtan2Args[] = {
 
 static BSValue bsFnMathAtan2(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(mathAtan2Args, 2, args, argCount, values, options, "mathAtan2")) {
-        return bsNull();
-    }
+    BS_ARGS(mathAtan2Args, bsNull());
     return bsNumber(atan2(values[0].u.number, values[1].u.number));
 }
 
@@ -847,10 +763,7 @@ static const BSArgModel mathLnArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GT, 0, 0, 0,
 
 static BSValue bsFnMathLn(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(mathLnArgs, 1, args, argCount, values, options, "mathLn")) {
-        return bsNull();
-    }
+    BS_ARGS(mathLnArgs, bsNull());
     return bsNumber(log(values[0].u.number));
 }
 
@@ -862,10 +775,7 @@ static const BSArgModel mathLogArgs[] = {
 
 static BSValue bsFnMathLog(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(mathLogArgs, 2, args, argCount, values, options, "mathLog")) {
-        return bsNull();
-    }
+    BS_ARGS(mathLogArgs, bsNull());
     if (values[1].u.number == 1) {
         return bsArgFail(options, "base", values[1], bsNull());
     }
@@ -921,10 +831,7 @@ static const BSArgModel mathRoundArgs[] = {
 
 static BSValue bsFnMathRound(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(mathRoundArgs, 2, args, argCount, values, options, "mathRound")) {
-        return bsNull();
-    }
+    BS_ARGS(mathRoundArgs, bsNull());
     return bsNumber(bsNumberRound(values[0].u.number, (int) values[1].u.number));
 }
 
@@ -933,10 +840,7 @@ static const BSArgModel mathSqrtArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GTE, 0, 0,
 
 static BSValue bsFnMathSqrt(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(mathSqrtArgs, 1, args, argCount, values, options, "mathSqrt")) {
-        return bsNull();
-    }
+    BS_ARGS(mathSqrtArgs, bsNull());
     return bsNumber(sqrt(values[0].u.number));
 }
 
@@ -946,14 +850,9 @@ static BSValue bsFnMathSqrt(const BSValue *args, size_t argCount, BSOptions *opt
  */
 
 
-static const BSArgModel numberParseFloatArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnNumberParseFloat(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(numberParseFloatArgs, 1, args, argCount, values, options, "numberParseFloat")) {
-        return bsNull();
-    }
+    BS_ARGS(stringArgs, bsNull());
     double number;
     if (!bsNumberParse(bsStringData(values[0]), bsStringSize(values[0]), &number)) {
         return bsNull();
@@ -969,10 +868,7 @@ static const BSArgModel numberParseIntArgs[] = {
 
 static BSValue bsFnNumberParseInt(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(numberParseIntArgs, 2, args, argCount, values, options, "numberParseInt")) {
-        return bsNull();
-    }
+    BS_ARGS(numberParseIntArgs, bsNull());
     double number;
     if (!bsIntegerParse(bsStringData(values[0]), bsStringSize(values[0]), (int) values[1].u.number, &number)) {
         return bsNull();
@@ -989,10 +885,7 @@ static const BSArgModel numberToFixedArgs[] = {
 
 static BSValue bsFnNumberToFixed(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(numberToFixedArgs, 3, args, argCount, values, options, "numberToFixed")) {
-        return bsNull();
-    }
+    BS_ARGS(numberToFixedArgs, bsNull());
     int digits = (int) values[1].u.number;
     if (digits > 100) {
         return bsArgFail(options, "digits", values[1], bsNull());
@@ -1028,10 +921,7 @@ static const BSArgModel numberToStringArgs[] = {
 
 static BSValue bsFnNumberToString(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(numberToStringArgs, 2, args, argCount, values, options, "numberToString")) {
-        return bsNull();
-    }
+    BS_ARGS(numberToStringArgs, bsNull());
     static const char digitChars[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     double x = values[0].u.number;
     int radix = (int) values[1].u.number;
@@ -1074,23 +964,15 @@ static const BSArgModel objectAssignArgs[] = {
 
 static BSValue bsFnObjectAssign(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(objectAssignArgs, 2, args, argCount, values, options, "objectAssign")) {
-        return bsNull();
-    }
+    BS_ARGS(objectAssignArgs, bsNull());
     bsObjectIter(values[1], bsObjectAssignIter, &values[0]);
     return bsRetain(values[0]);
 }
 
 
-static const BSArgModel objectCopyArgs[] = {{"object", BS_ARG_OBJECT, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnObjectCopy(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(objectCopyArgs, 1, args, argCount, values, options, "objectCopy")) {
-        return bsNull();
-    }
+    BS_ARGS(objectArgs, bsNull());
     return bsObjectCopy(values[0]);
 }
 
@@ -1102,10 +984,7 @@ static const BSArgModel objectDeleteArgs[] = {
 
 static BSValue bsFnObjectDelete(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(objectDeleteArgs, 2, args, argCount, values, options, "objectDelete")) {
-        return bsNull();
-    }
+    BS_ARGS(objectDeleteArgs, bsNull());
     bsObjectDelete(values[0], bsStringData(values[1]));
     return bsNull();
 }
@@ -1120,10 +999,7 @@ static const BSArgModel objectGetArgs[] = {
 static BSValue bsFnObjectGet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BSValue defaultValue = argCount >= 3 ? args[2] : bsNull();
-    BSValue values[3];
-    if (!bsArgsValidate(objectGetArgs, 3, args, argCount, values, options, "objectGet")) {
-        return bsRetain(defaultValue);
-    }
+    BS_ARGS(objectGetArgs, bsRetain(defaultValue));
     BSValue found;
     if (!bsObjectLookup(values[0], bsStringData(values[1]), bsStringSize(values[1]), &found)) {
         return bsRetain(values[2]);
@@ -1139,22 +1015,14 @@ static const BSArgModel objectHasArgs[] = {
 
 static BSValue bsFnObjectHas(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(objectHasArgs, 2, args, argCount, values, options, "objectHas")) {
-        return bsBoolean(false);
-    }
+    BS_ARGS(objectHasArgs, bsBoolean(false));
     return bsBoolean(bsObjectHasString(values[0], values[1]));
 }
 
 
-static const BSArgModel objectKeysArgs[] = {{"object", BS_ARG_OBJECT, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnObjectKeys(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(objectKeysArgs, 1, args, argCount, values, options, "objectKeys")) {
-        return bsNull();
-    }
+    BS_ARGS(objectArgs, bsNull());
     return bsObjectKeys(values[0]);
 }
 
@@ -1183,10 +1051,7 @@ static const BSArgModel objectSetArgs[] = {
 
 static BSValue bsFnObjectSet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(objectSetArgs, 3, args, argCount, values, options, "objectSet")) {
-        return bsNull();
-    }
+    BS_ARGS(objectSetArgs, bsNull());
     bsObjectSetString(values[0], values[1], bsRetain(values[2]));
     return bsRetain(values[2]);
 }
@@ -1197,14 +1062,9 @@ static BSValue bsFnObjectSet(const BSValue *args, size_t argCount, BSOptions *op
  */
 
 
-static const BSArgModel regexEscapeArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnRegexEscape(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(regexEscapeArgs, 1, args, argCount, values, options, "regexEscape")) {
-        return bsNull();
-    }
+    BS_ARGS(stringArgs, bsNull());
     return bsRegexEscape(values[0]);
 }
 
@@ -1254,19 +1114,8 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
             bsObjectAppend(groups, bsMatchKeyDigit[ix], text);
         } else {
             char key[8];
-            size_t keySize = 0;
-            size_t number = ix;
-            do {
-                key[keySize++] = (char) ('0' + number % 10);
-                number /= 10;
-            } while (number != 0);
-            key[keySize] = '\0';
-            for (size_t ixKey = 0; ixKey < keySize / 2; ixKey++) {
-                char swap = key[ixKey];
-                key[ixKey] = key[keySize - 1 - ixKey];
-                key[keySize - 1 - ixKey] = swap;
-            }
-            BSValue keyValue = bsStringIntern(key, keySize);
+            int keySize = snprintf(key, sizeof(key), "%zu", ix);
+            BSValue keyValue = bsStringIntern(key, (size_t) keySize);
             bsObjectAppend(groups, keyValue, text);
             bsRelease(keyValue);
         }
@@ -1307,10 +1156,7 @@ static const BSArgModel regexMatchArgs[] = {
 
 static BSValue bsFnRegexMatch(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(regexMatchArgs, 2, args, argCount, values, options, "regexMatch")) {
-        return bsNull();
-    }
+    BS_ARGS(regexMatchArgs, bsNull());
     return bsRegexMatchImpl(values[0], values[1]);
 }
 
@@ -1322,10 +1168,7 @@ static const BSArgModel regexMatchAllArgs[] = {
 
 static BSValue bsFnRegexMatchAll(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(regexMatchAllArgs, 2, args, argCount, values, options, "regexMatchAll")) {
-        return bsNull();
-    }
+    BS_ARGS(regexMatchAllArgs, bsNull());
     BSRegexSubject subject;
     bsRegexSubjectInit(&subject, values[1]);
     BSValue result = bsArrayNew();
@@ -1347,10 +1190,7 @@ static const BSArgModel regexNewArgs[] = {
 
 static BSValue bsFnRegexNew(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(regexNewArgs, 2, args, argCount, values, options, "regexNew")) {
-        return bsNull();
-    }
+    BS_ARGS(regexNewArgs, bsNull());
     unsigned flags = 0;
     if (values[1].type == BS_STRING) {
         const char *flagText = bsStringData(values[1]);
@@ -1373,6 +1213,15 @@ static BSValue bsFnRegexNew(const BSValue *args, size_t argCount, BSOptions *opt
         bsFunctionError(options, "%s", error);
     }
     return regex;
+}
+
+
+/* Append a matched capture group's text to a string builder */
+static void bsSBAppendGroup(BSStringBuilder *sb, BSValue string, const BSRegexMatch *match, size_t group)
+{
+    size_t begin = bsStringOffset(string, match->groups[group].begin);
+    size_t end = bsStringOffset(string, match->groups[group].end);
+    bsSBAppend(sb, bsStringData(string) + begin, end - begin);
 }
 
 
@@ -1401,9 +1250,7 @@ static void bsRegexExpand(BSStringBuilder *sb, BSValue regex, BSValue string, co
                 end++;
             }
             if (group < match->groupCount && match->matched[group]) {
-                size_t begin = bsStringOffset(string, match->groups[group].begin);
-                size_t groupEnd = bsStringOffset(string, match->groups[group].end);
-                bsSBAppend(sb, bsStringData(string) + begin, groupEnd - begin);
+                bsSBAppendGroup(sb, string, match, group);
             }
             ix = end - 1;
             continue;
@@ -1417,13 +1264,11 @@ static void bsRegexExpand(BSStringBuilder *sb, BSValue regex, BSValue string, co
             }
             if (end < substrSize) {
                 for (size_t group = 1; group < match->groupCount; group++) {
-                    const char *name = bsRegexGroupName(regex, group);
-                    if (name != NULL && strlen(name) == end - ix - 2 &&
-                        memcmp(name, substr + ix + 2, end - ix - 2) == 0) {
+                    BSValue name = bsRegexGroupNameValue(regex, group);
+                    if (name.type == BS_STRING && bsStringSize(name) == end - ix - 2 &&
+                        memcmp(bsStringData(name), substr + ix + 2, end - ix - 2) == 0) {
                         if (match->matched[group]) {
-                            size_t begin = bsStringOffset(string, match->groups[group].begin);
-                            size_t groupEnd = bsStringOffset(string, match->groups[group].end);
-                            bsSBAppend(sb, bsStringData(string) + begin, groupEnd - begin);
+                            bsSBAppendGroup(sb, string, match, group);
                         }
                         break;
                     }
@@ -1446,10 +1291,7 @@ static const BSArgModel regexReplaceArgs[] = {
 
 static BSValue bsFnRegexReplace(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(regexReplaceArgs, 3, args, argCount, values, options, "regexReplace")) {
-        return bsNull();
-    }
+    BS_ARGS(regexReplaceArgs, bsNull());
     BSRegexSubject subject;
     bsRegexSubjectInit(&subject, values[1]);
 
@@ -1490,10 +1332,7 @@ static const BSArgModel regexSplitArgs[] = {
 
 static BSValue bsFnRegexSplit(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(regexSplitArgs, 2, args, argCount, values, options, "regexSplit")) {
-        return bsNull();
-    }
+    BS_ARGS(regexSplitArgs, bsNull());
     BSRegexSubject subject;
     bsRegexSubjectInit(&subject, values[1]);
 
@@ -1539,10 +1378,7 @@ static const BSArgModel stringCharAtArgs[] = {
 
 static BSValue bsFnStringCharAt(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(stringCharAtArgs, 2, args, argCount, values, options, "stringCharAt")) {
-        return bsNull();
-    }
+    BS_ARGS(stringCharAtArgs, bsNull());
     size_t index = (size_t) values[1].u.number;
     if (index >= bsStringLength(values[0])) {
         return bsArgFail(options, "index", values[1], bsNull());
@@ -1560,10 +1396,7 @@ static const BSArgModel stringCharCodeAtArgs[] = {
 
 static BSValue bsFnStringCharCodeAt(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(stringCharCodeAtArgs, 2, args, argCount, values, options, "stringCharCodeAt")) {
-        return bsNull();
-    }
+    BS_ARGS(stringCharCodeAtArgs, bsNull());
     size_t index = (size_t) values[1].u.number;
     if (index >= bsStringLength(values[0])) {
         return bsArgFail(options, "index", values[1], bsNull());
@@ -1576,10 +1409,7 @@ static const BSArgModel stringDecodeArgs[] = {{"bytes", BS_ARG_ARRAY, 0, 0, 0, 0
 
 static BSValue bsFnStringDecode(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(stringDecodeArgs, 1, args, argCount, values, options, "stringDecode")) {
-        return bsNull();
-    }
+    BS_ARGS(stringDecodeArgs, bsNull());
     size_t count = bsArrayCount(values[0]);
     char *buffer = bsAlloc(count + 1);
     for (size_t ix = 0; ix < count; ix++) {
@@ -1602,14 +1432,9 @@ static BSValue bsFnStringDecode(const BSValue *args, size_t argCount, BSOptions 
 }
 
 
-static const BSArgModel stringEncodeArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnStringEncode(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(stringEncodeArgs, 1, args, argCount, values, options, "stringEncode")) {
-        return bsNull();
-    }
+    BS_ARGS(stringArgs, bsNull());
     size_t size = bsStringSize(values[0]);
     const char *text = bsStringData(values[0]);
     BSValue result = bsArrayNewCapacity(size);
@@ -1627,10 +1452,7 @@ static const BSArgModel stringEndsWithArgs[] = {
 
 static BSValue bsFnStringEndsWith(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(stringEndsWithArgs, 2, args, argCount, values, options, "stringEndsWith")) {
-        return bsNull();
-    }
+    BS_ARGS(stringEndsWithArgs, bsNull());
     size_t size = bsStringSize(values[0]);
     size_t searchSize = bsStringSize(values[1]);
     return bsBoolean(searchSize <= size &&
@@ -1684,10 +1506,7 @@ static const BSArgModel stringIndexOfArgs[] = {
 
 static BSValue bsFnStringIndexOf(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(stringIndexOfArgs, 3, args, argCount, values, options, "stringIndexOf")) {
-        return bsNumber(-1);
-    }
+    BS_ARGS(stringIndexOfArgs, bsNumber(-1));
     size_t index = (size_t) values[2].u.number;
     if (index > bsStringLength(values[0])) {
         return bsArgFail(options, "index", values[2], bsNumber(-1));
@@ -1709,10 +1528,7 @@ static const BSArgModel stringLastIndexOfArgs[] = {
 
 static BSValue bsFnStringLastIndexOf(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(stringLastIndexOfArgs, 3, args, argCount, values, options, "stringLastIndexOf")) {
-        return bsNumber(-1);
-    }
+    BS_ARGS(stringLastIndexOfArgs, bsNumber(-1));
     size_t length = bsStringLength(values[0]);
     size_t index;
     if (values[2].type == BS_NUMBER) {
@@ -1743,27 +1559,16 @@ static BSValue bsFnStringLastIndexOf(const BSValue *args, size_t argCount, BSOpt
 }
 
 
-static const BSArgModel stringLengthArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnStringLength(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(stringLengthArgs, 1, args, argCount, values, options, "stringLength")) {
-        return bsNumber(0);
-    }
+    BS_ARGS(stringArgs, bsNumber(0));
     return bsNumber((double) bsStringLength(values[0]));
 }
 
 
-static const BSArgModel stringCaseArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
-
-static BSValue bsStringCase(const BSValue *args, size_t argCount, BSOptions *options, const char *name,
-                            bool upper)
+static BSValue bsStringCase(const BSValue *args, size_t argCount, BSOptions *options, bool upper)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(stringCaseArgs, 1, args, argCount, values, options, name)) {
-        return bsNull();
-    }
+    BS_ARGS(stringArgs, bsNull());
     size_t size = bsStringSize(values[0]);
     const char *text = bsStringData(values[0]);
     BSStringBuilder sb;
@@ -1778,24 +1583,19 @@ static BSValue bsStringCase(const BSValue *args, size_t argCount, BSOptions *opt
 
 static BSValue bsFnStringLower(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    return bsStringCase(args, argCount, options, "stringLower", false);
+    return bsStringCase(args, argCount, options, false);
 }
 
 
 static BSValue bsFnStringUpper(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    return bsStringCase(args, argCount, options, "stringUpper", true);
+    return bsStringCase(args, argCount, options, true);
 }
 
 
-static const BSArgModel stringNewArgs[] = {{"value", BS_ARG_ANY, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnStringNewFn(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(stringNewArgs, 1, args, argCount, values, options, "stringNew")) {
-        return bsNull();
-    }
+    BS_ARGS(valueArgs, bsNull());
     return bsValueString(values[0]);
 }
 
@@ -1807,10 +1607,7 @@ static const BSArgModel stringRepeatArgs[] = {
 
 static BSValue bsFnStringRepeat(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(stringRepeatArgs, 2, args, argCount, values, options, "stringRepeat")) {
-        return bsNull();
-    }
+    BS_ARGS(stringRepeatArgs, bsNull());
     size_t count = (size_t) values[1].u.number;
     BSStringBuilder sb;
     bsSBInit(&sb);
@@ -1829,10 +1626,7 @@ static const BSArgModel stringReplaceArgs[] = {
 
 static BSValue bsFnStringReplace(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(stringReplaceArgs, 3, args, argCount, values, options, "stringReplace")) {
-        return bsNull();
-    }
+    BS_ARGS(stringReplaceArgs, bsNull());
     const char *text = bsStringData(values[0]);
     size_t size = bsStringSize(values[0]);
     const char *substr = bsStringData(values[1]);
@@ -1875,10 +1669,7 @@ static const BSArgModel stringSliceArgs[] = {
 
 static BSValue bsFnStringSlice(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[3];
-    if (!bsArgsValidate(stringSliceArgs, 3, args, argCount, values, options, "stringSlice")) {
-        return bsNull();
-    }
+    BS_ARGS(stringSliceArgs, bsNull());
     size_t length = bsStringLength(values[0]);
     size_t start = (size_t) values[1].u.number;
     size_t end = values[2].type == BS_NUMBER ? (size_t) values[2].u.number : length;
@@ -1904,10 +1695,7 @@ static const BSArgModel stringSplitArgs[] = {
 
 static BSValue bsFnStringSplit(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(stringSplitArgs, 2, args, argCount, values, options, "stringSplit")) {
-        return bsNull();
-    }
+    BS_ARGS(stringSplitArgs, bsNull());
     const char *text = bsStringData(values[0]);
     size_t size = bsStringSize(values[0]);
     size_t separatorSize = bsStringSize(values[1]);
@@ -1939,14 +1727,9 @@ static BSValue bsFnStringSplit(const BSValue *args, size_t argCount, BSOptions *
 }
 
 
-static const BSArgModel stringSplitLinesArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnStringSplitLines(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(stringSplitLinesArgs, 1, args, argCount, values, options, "stringSplitLines")) {
-        return bsNull();
-    }
+    BS_ARGS(stringArgs, bsNull());
     const char *text = bsStringData(values[0]);
     size_t size = bsStringSize(values[0]);
     BSValue result = bsArrayNew();
@@ -1972,24 +1755,16 @@ static const BSArgModel stringStartsWithArgs[] = {
 
 static BSValue bsFnStringStartsWith(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(stringStartsWithArgs, 2, args, argCount, values, options, "stringStartsWith")) {
-        return bsNull();
-    }
+    BS_ARGS(stringStartsWithArgs, bsNull());
     size_t searchSize = bsStringSize(values[1]);
     return bsBoolean(searchSize <= bsStringSize(values[0]) &&
                      memcmp(bsStringData(values[0]), bsStringData(values[1]), searchSize) == 0);
 }
 
 
-static const BSArgModel stringTrimArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnStringTrim(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(stringTrimArgs, 1, args, argCount, values, options, "stringTrim")) {
-        return bsNull();
-    }
+    BS_ARGS(stringArgs, bsNull());
     const char *text = bsStringData(values[0]);
     size_t begin = 0;
     size_t end = bsStringSize(values[0]);
@@ -2008,14 +1783,9 @@ static BSValue bsFnStringTrim(const BSValue *args, size_t argCount, BSOptions *o
  */
 
 
-static const BSArgModel systemBooleanArgs[] = {{"value", BS_ARG_ANY, 0, 0, 0, 0, 0}};
-
 static BSValue bsFnSystemBoolean(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(systemBooleanArgs, 1, args, argCount, values, options, "systemBoolean")) {
-        return bsNull();
-    }
+    BS_ARGS(valueArgs, bsNull());
     return bsBoolean(bsValueBoolean(values[0]));
 }
 
@@ -2027,10 +1797,7 @@ static const BSArgModel systemCompareArgs[] = {
 
 static BSValue bsFnSystemCompare(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(systemCompareArgs, 2, args, argCount, values, options, "systemCompare")) {
-        return bsNull();
-    }
+    BS_ARGS(systemCompareArgs, bsNull());
     return bsNumber(bsValueCompare(values[0], values[1]));
 }
 
@@ -2061,9 +1828,10 @@ static bool bsFetchRequestValidate(BSValue request)
 
 
 /* Fetch one request model - returns the response string value, or null */
+/* Fetch one request model, or one URL string */
 static BSValue bsFetchOne(BSValue request, BSOptions *options)
 {
-    BSValue url = bsObjectGet(request, "url");
+    BSValue url = request.type == BS_STRING ? request : bsObjectGet(request, "url");
     BSValue body = bsObjectGet(request, "body");
     BSValue headers = bsObjectGet(request, "headers");
 
@@ -2102,19 +1870,12 @@ static const BSArgModel systemFetchArgs[] = {{"url", BS_ARG_ANY, 0, 0, 0, 0, 0}}
 
 static BSValue bsFnSystemFetch(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(systemFetchArgs, 1, args, argCount, values, options, "systemFetch")) {
-        return bsNull();
-    }
+    BS_ARGS(systemFetchArgs, bsNull());
     BSValue url = values[0];
 
     /* A single URL string or request model */
     if (url.type == BS_STRING) {
-        BSValue request = bsObjectNew();
-        bsObjectSet(request, "url", bsRetain(url));
-        BSValue response = bsFetchOne(request, options);
-        bsRelease(request);
-        return response;
+        return bsFetchOne(url, options);
     }
     if (url.type == BS_OBJECT) {
         if (!bsFetchRequestValidate(url)) {
@@ -2129,12 +1890,7 @@ static BSValue bsFnSystemFetch(const BSValue *args, size_t argCount, BSOptions *
         BSValue responses = bsArrayNewCapacity(count);
         for (size_t ix = 0; ix < count; ix++) {
             BSValue item = bsArrayGet(url, ix);
-            if (item.type == BS_STRING) {
-                BSValue request = bsObjectNew();
-                bsObjectSet(request, "url", bsRetain(item));
-                bsArrayPush(responses, bsFetchOne(request, options));
-                bsRelease(request);
-            } else if (item.type == BS_OBJECT && bsFetchRequestValidate(item)) {
+            if (item.type == BS_STRING || (item.type == BS_OBJECT && bsFetchRequestValidate(item))) {
                 bsArrayPush(responses, bsFetchOne(item, options));
             } else {
                 bsRelease(responses);
@@ -2155,10 +1911,7 @@ static const BSArgModel systemGlobalGetArgs[] = {
 
 static BSValue bsFnSystemGlobalGet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(systemGlobalGetArgs, 2, args, argCount, values, options, "systemGlobalGet")) {
-        return bsNull();
-    }
+    BS_ARGS(systemGlobalGetArgs, bsNull());
     if (!bsObjectHasString(options->globals, values[0])) {
         return bsRetain(values[1]);
     }
@@ -2173,10 +1926,7 @@ static const BSArgModel systemGlobalSetArgs[] = {
 
 static BSValue bsFnSystemGlobalSet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(systemGlobalSetArgs, 2, args, argCount, values, options, "systemGlobalSet")) {
-        return bsNull();
-    }
+    BS_ARGS(systemGlobalSetArgs, bsNull());
     bsObjectSetString(options->globals, values[0], bsRetain(values[1]));
     return bsRetain(values[1]);
 }
@@ -2189,10 +1939,7 @@ static const BSArgModel systemIsArgs[] = {
 
 static BSValue bsFnSystemIs(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(systemIsArgs, 2, args, argCount, values, options, "systemIs")) {
-        return bsNull();
-    }
+    BS_ARGS(systemIsArgs, bsNull());
     return bsBoolean(bsValueIs(values[0], values[1]));
 }
 
@@ -2201,10 +1948,7 @@ static const BSArgModel systemLogArgs[] = {{"message", BS_ARG_ANY, 0, 0, 0, 0, 0
 
 static BSValue bsFnSystemLog(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(systemLogArgs, 1, args, argCount, values, options, "systemLog")) {
-        return bsNull();
-    }
+    BS_ARGS(systemLogArgs, bsNull());
     if (options->logFn != NULL) {
         BSValue text = bsValueString(values[0]);
         options->logFn(bsStringData(text), options->logData);
@@ -2216,10 +1960,7 @@ static BSValue bsFnSystemLog(const BSValue *args, size_t argCount, BSOptions *op
 
 static BSValue bsFnSystemLogDebug(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(systemLogArgs, 1, args, argCount, values, options, "systemLogDebug")) {
-        return bsNull();
-    }
+    BS_ARGS(systemLogArgs, bsNull());
     if (options->logFn != NULL && options->debug) {
         BSValue text = bsValueString(values[0]);
         options->logFn(bsStringData(text), options->logData);
@@ -2273,10 +2014,7 @@ static const BSArgModel systemPartialArgs[] = {
 
 static BSValue bsFnSystemPartial(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[2];
-    if (!bsArgsValidate(systemPartialArgs, 2, args, argCount, values, options, "systemPartial")) {
-        return bsNull();
-    }
+    BS_ARGS(systemPartialArgs, bsNull());
     if (bsArrayCount(values[1]) < 1) {
         BSValue result = bsArgFail(options, "args", values[1], bsNull());
         bsArgsFree(systemPartialArgs, 2, values);
@@ -2290,8 +2028,6 @@ static BSValue bsFnSystemPartial(const BSValue *args, size_t argCount, BSOptions
 }
 
 
-static const BSArgModel systemTypeArgs[] = {{"value", BS_ARG_ANY, 0, 0, 0, 0, 0}};
-
 /* Interned once; schemaValidate compares these on every value. */
 static BSValue bsSystemTypeNames[BS_REGEX + 1];
 
@@ -2299,11 +2035,8 @@ BSValue bsSystemTypeName(BSValue value)
 {
     static int ready;
     if (!ready) {
-        static const char *const names[] = {
-            "null", "boolean", "number", "datetime", "string", "array", "object", "function", "regex"
-        };
         for (int ix = 0; ix <= (int) BS_REGEX; ix++) {
-            bsSystemTypeNames[ix] = bsStringIntern(names[ix], strlen(names[ix]));
+            bsSystemTypeNames[ix] = bsStringIntern(bsTypeNames[ix], strlen(bsTypeNames[ix]));
         }
         ready = 1;
     }
@@ -2312,10 +2045,7 @@ BSValue bsSystemTypeName(BSValue value)
 
 static BSValue bsFnSystemType(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue values[1];
-    if (!bsArgsValidate(systemTypeArgs, 1, args, argCount, values, options, "systemType")) {
-        return bsNull();
-    }
+    BS_ARGS(valueArgs, bsNull());
     return bsSystemTypeName(values[0]);
 }
 
@@ -2595,15 +2325,4 @@ void bsLibraryCleanup(void)
     bsRelease(bsScriptFunctionValues);
     bsExpressionFunctionValues = bsNull();
     bsScriptFunctionValues = bsNull();
-}
-
-
-BSValue bsFunctionInvoke(BSValue function, const BSValue *args, size_t argCount, BSOptions *options)
-{
-    BSFunction *fn = function.u.function;
-    BSValue result;
-    if (fn->intrinsic != 0 && bsIntrinsicCall(fn->intrinsic, args, argCount, &result)) {
-        return result;
-    }
-    return fn->fn(args, argCount, options, fn->data);
 }
