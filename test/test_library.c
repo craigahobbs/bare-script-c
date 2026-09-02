@@ -16,16 +16,6 @@
 #include "../src/internal.h"
 
 
-/* Duplicate a string with malloc, for option data the runtime frees */
-static char *bsTestTempFileData(const char *text)
-{
-    size_t size = strlen(text) + 1;
-    char *result = malloc(size);
-    memcpy(result, text, size);
-    return result;
-}
-
-
 /* Execute "return <expression>" and assert the result's JSON */
 static void bsTestExpr(const char *expression, const char *expectedJSON)
 {
@@ -148,11 +138,7 @@ TEST(library_object_append)
     bsRelease(object);
 
     object = bsObjectNew();
-    char key[8];
-    for (int ix = 0; ix < 40; ix++) {
-        snprintf(key, sizeof(key), "k%d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "k%d", 0, 40);
     bsRelease(bsObjectKeysSorted(object));
     ASSERT_TRUE(object.u.object->u.tree.root != NULL);
     BSValue appended = bsStringIntern("k40", 3);
@@ -539,13 +525,11 @@ static char *bsTestLibraryFetchFn(const BSFetchRequest *request, size_t *respons
         bsSBAppendFormat(&sb, " headers=%zu", bsObjectCount(request->headers));
     }
     BSValue text = bsSBToValue(&sb);
-    size_t size = bsStringSize(text);
-    char *result = malloc(size + 1);
-    memcpy(result, bsStringData(text), size + 1);
-    bsRelease(text);
     if (responseSize != NULL) {
-        *responseSize = size;
+        *responseSize = bsStringSize(text);
     }
+    char *result = bsTestStrdup(bsStringData(text));
+    bsRelease(text);
     return result;
 }
 
@@ -593,7 +577,7 @@ TEST(library_system_fetch)
     options = bsTestOptions();
     options->fetchFn = bsTestLibraryFetchFn;
     options->urlFn = bsUrlFileRelative;
-    options->urlData = bsTestTempFileData("dir/script.bare");
+    options->urlData = bsTestStrdup("dir/script.bare");
     options->urlDataFree = free;
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch('a')", options), "\"url=dir/a\"");
     bsOptionsFree(options);

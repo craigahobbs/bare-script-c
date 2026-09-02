@@ -13,9 +13,9 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "barescript/barescript.h"
-#include "barescript/includeSource.h"
 
 
 typedef struct BSTestCase {
@@ -79,6 +79,24 @@ void bsTestPass(void);
         if (!bsTestDoubleEqual(bsActual_, bsExpected_)) { \
             bsTestFail(__FILE__, __LINE__, "%s == %s - actual %.17g, expected %.17g", \
                        #actual, #expected, bsActual_, bsExpected_); \
+        } else { bsTestPass(); } \
+    } while (0)
+
+#define ASSERT_STR_CONTAINS(haystack, needle) \
+    do { \
+        const char *bsHaystack_ = (haystack); \
+        const char *bsNeedle_ = (needle); \
+        if (strstr(bsHaystack_, bsNeedle_) == NULL) { \
+            bsTestFail(__FILE__, __LINE__, "%s contains %s - actual \"%s\"", #haystack, #needle, bsHaystack_); \
+        } else { bsTestPass(); } \
+    } while (0)
+
+#define ASSERT_STR_NOT_CONTAINS(haystack, needle) \
+    do { \
+        const char *bsHaystack_ = (haystack); \
+        const char *bsNeedle_ = (needle); \
+        if (strstr(bsHaystack_, bsNeedle_) != NULL) { \
+            bsTestFail(__FILE__, __LINE__, "%s omits %s - actual \"%s\"", #haystack, #needle, bsHaystack_); \
         } else { bsTestPass(); } \
     } while (0)
 
@@ -153,8 +171,11 @@ const char *bsTestTempDir(void);
 /* Write a temporary file; returns a static path valid until the next call */
 const char *bsTestTempFile(const char *name, const char *text);
 
-/* Remove the temporary directory and its contents */
-void bsTestTempClear(void);
+/* Duplicate a string with malloc, for data the runtime or the test frees */
+char *bsTestStrdup(const char *text);
+
+/* Set the keys "format" makes of each index in [begin, end) to their index */
+void bsTestObjectFill(BSValue object, const char *format, int begin, int end);
 
 
 #endif

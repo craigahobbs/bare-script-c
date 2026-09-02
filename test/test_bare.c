@@ -7,6 +7,7 @@
  * The CLI is exercised by calling bsMain directly with captured standard output and error.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,16 +20,24 @@
 static BSValue bsTestMainOutput = {BS_NULL, {0}};
 
 
-/* Run the command-line interface with captured stdout and stderr; returns the status code */
-static int bsTestMain(int argc, const char **argv)
+/*
+ * Run the command-line interface on a NULL-terminated argument list, "bare" implied, with captured
+ * stdout and stderr; returns the status code
+ */
+static int bsTestBare(const char *arg, ...)
 {
     /* Copy the arguments into mutable storage - bsMain takes "char **", as main does */
     static char storage[16][1024];
     char *args[16];
-    for (int ix = 0; ix < argc; ix++) {
-        snprintf(storage[ix], sizeof(storage[ix]), "%s", argv[ix]);
-        args[ix] = storage[ix];
+    int argc = 0;
+    va_list list;
+    va_start(list, arg);
+    for (const char *text = "bare"; text != NULL; text = argc == 1 ? arg : va_arg(list, const char *)) {
+        snprintf(storage[argc], sizeof(storage[argc]), "%s", text);
+        args[argc] = storage[argc];
+        argc++;
     }
+    va_end(list);
 
     char path[512];
     snprintf(path, sizeof(path), "%s/cli-output.txt", bsTestTempDir());
@@ -73,132 +82,105 @@ static const char *bsTestMainText(void)
 
 TEST(bare_help)
 {
-    const char *argvHelp[] = {"bare", "-h"};
-    ASSERT_INT_EQ(bsTestMain(2, argvHelp), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "usage: bare") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-h", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "usage: bare");
 
-    const char *argvLongHelp[] = {"bare", "--help"};
-    ASSERT_INT_EQ(bsTestMain(2, argvLongHelp), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "usage: bare") != NULL);
+    ASSERT_INT_EQ(bsTestBare("--help", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "usage: bare");
 
     /* No arguments prints the usage */
-    const char *argvNone[] = {"bare"};
-    ASSERT_INT_EQ(bsTestMain(1, argvNone), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "usage: bare") != NULL);
+    ASSERT_INT_EQ(bsTestBare(NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "usage: bare");
 
-    const char *argvVersion[] = {"bare", "--version"};
-    ASSERT_INT_EQ(bsTestMain(2, argvVersion), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), BARESCRIPT_VERSION) != NULL);
+    ASSERT_INT_EQ(bsTestBare("--version", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), BARESCRIPT_VERSION);
 }
 
 
 TEST(bare_code)
 {
-    const char *argv[] = {"bare", "-c", "systemLog('hello')"};
-    ASSERT_INT_EQ(bsTestMain(3, argv), 0);
+    ASSERT_INT_EQ(bsTestBare("-c", "systemLog('hello')", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "hello\n");
 
-    const char *argvLong[] = {"bare", "--code", "systemLog('long')"};
-    ASSERT_INT_EQ(bsTestMain(3, argvLong), 0);
+    ASSERT_INT_EQ(bsTestBare("--code", "systemLog('long')", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "long\n");
 
     /* Multiple inline scripts share globals and are numbered */
-    const char *argvTwo[] = {"bare", "-c", "x = 1", "-c", "undefinedFunc()"};
-    ASSERT_INT_EQ(bsTestMain(5, argvTwo), 1);
+    ASSERT_INT_EQ(bsTestBare("-c", "x = 1", "-c", "undefinedFunc()", NULL), 1);
     ASSERT_STR_EQ(bsTestMainText(), "<string2>:1: Undefined function \"undefinedFunc\"\n");
 
     /* A missing argument */
-    const char *argvMissing[] = {"bare", "-c"};
-    ASSERT_INT_EQ(bsTestMain(2, argvMissing), 2);
-    ASSERT_TRUE(strstr(bsTestMainText(), "expected one argument") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-c", NULL), 2);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "expected one argument");
 }
 
 
 TEST(bare_exit_codes)
 {
-    const char *argvZero[] = {"bare", "-c", "return 0"};
-    ASSERT_INT_EQ(bsTestMain(3, argvZero), 0);
+    ASSERT_INT_EQ(bsTestBare("-c", "return 0", NULL), 0);
 
-    const char *argvThree[] = {"bare", "-c", "return 3"};
-    ASSERT_INT_EQ(bsTestMain(3, argvThree), 3);
+    ASSERT_INT_EQ(bsTestBare("-c", "return 3", NULL), 3);
 
-    const char *argvBig[] = {"bare", "-c", "return 256"};
-    ASSERT_INT_EQ(bsTestMain(3, argvBig), 1);
+    ASSERT_INT_EQ(bsTestBare("-c", "return 256", NULL), 1);
 
-    const char *argvTrue[] = {"bare", "-c", "return true"};
-    ASSERT_INT_EQ(bsTestMain(3, argvTrue), 1);
+    ASSERT_INT_EQ(bsTestBare("-c", "return true", NULL), 1);
 
-    const char *argvFalse[] = {"bare", "-c", "return false"};
-    ASSERT_INT_EQ(bsTestMain(3, argvFalse), 0);
+    ASSERT_INT_EQ(bsTestBare("-c", "return false", NULL), 0);
 
-    const char *argvNull[] = {"bare", "-c", "return null"};
-    ASSERT_INT_EQ(bsTestMain(3, argvNull), 0);
+    ASSERT_INT_EQ(bsTestBare("-c", "return null", NULL), 0);
 
-    const char *argvString[] = {"bare", "-c", "return 'x'"};
-    ASSERT_INT_EQ(bsTestMain(3, argvString), 1);
+    ASSERT_INT_EQ(bsTestBare("-c", "return 'x'", NULL), 1);
 
-    const char *argvNegative[] = {"bare", "-c", "return -1"};
-    ASSERT_INT_EQ(bsTestMain(3, argvNegative), 1);
+    ASSERT_INT_EQ(bsTestBare("-c", "return -1", NULL), 1);
 
-    const char *argvFraction[] = {"bare", "-c", "return 1.5"};
-    ASSERT_INT_EQ(bsTestMain(3, argvFraction), 1);
+    ASSERT_INT_EQ(bsTestBare("-c", "return 1.5", NULL), 1);
 }
 
 
 TEST(bare_variables)
 {
-    const char *argv[] = {"bare", "-v", "vName", "'World'", "-c", "systemLog('Hello, ' + vName)"};
-    ASSERT_INT_EQ(bsTestMain(6, argv), 0);
+    ASSERT_INT_EQ(bsTestBare("-v", "vName", "'World'", "-c", "systemLog('Hello, ' + vName)", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "Hello, World\n");
 
-    const char *argvLong[] = {"bare", "--var", "vNum", "1 + 2", "-c", "systemLog(vNum)"};
-    ASSERT_INT_EQ(bsTestMain(6, argvLong), 0);
+    ASSERT_INT_EQ(bsTestBare("--var", "vNum", "1 + 2", "-c", "systemLog(vNum)", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "3\n");
 
     /* The built-in expression functions are available */
-    const char *argvBuiltin[] = {"bare", "-v", "vMax", "max(1, 5)", "-c", "systemLog(vMax)"};
-    ASSERT_INT_EQ(bsTestMain(6, argvBuiltin), 0);
+    ASSERT_INT_EQ(bsTestBare("-v", "vMax", "max(1, 5)", "-c", "systemLog(vMax)", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "5\n");
 
     /* An invalid expression */
-    const char *argvBad[] = {"bare", "-v", "vBad", "1 +", "-c", "systemLog('never')"};
-    ASSERT_INT_EQ(bsTestMain(6, argvBad), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "Syntax error") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-v", "vBad", "1 +", "-c", "systemLog('never')", NULL), 1);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "Syntax error");
 
     /* A missing argument */
-    const char *argvMissing[] = {"bare", "-v", "vName"};
-    ASSERT_INT_EQ(bsTestMain(3, argvMissing), 2);
-    ASSERT_TRUE(strstr(bsTestMainText(), "expected two arguments") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-v", "vName", NULL), 2);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "expected two arguments");
 }
 
 
 TEST(bare_files)
 {
     const char *path = bsTestTempFile("cli.bare", "systemLog('from file')\n");
-    const char *argv[] = {"bare", path};
-    ASSERT_INT_EQ(bsTestMain(2, argv), 0);
+    ASSERT_INT_EQ(bsTestBare(path, NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "from file\n");
 
     /* A missing file */
-    const char *argvMissing[] = {"bare", "no-such-file-xyz.bare"};
-    ASSERT_INT_EQ(bsTestMain(2, argvMissing), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "Failed to load") != NULL);
+    ASSERT_INT_EQ(bsTestBare("no-such-file-xyz.bare", NULL), 1);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "Failed to load");
 
     /* A file with a syntax error */
     const char *badPath = bsTestTempFile("bad.bare", "a = 1 +\n");
-    const char *argvBad[] = {"bare", badPath};
-    ASSERT_INT_EQ(bsTestMain(2, argvBad), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "Syntax error") != NULL);
+    ASSERT_INT_EQ(bsTestBare(badPath, NULL), 1);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "Syntax error");
 
     /* An unrecognized option */
-    const char *argvUnknown[] = {"bare", "--nope"};
-    ASSERT_INT_EQ(bsTestMain(2, argvUnknown), 2);
-    ASSERT_TRUE(strstr(bsTestMainText(), "unrecognized argument") != NULL);
+    ASSERT_INT_EQ(bsTestBare("--nope", NULL), 2);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "unrecognized argument");
 
     /* A bare "-" is a file name */
-    const char *argvDash[] = {"bare", "-"};
-    ASSERT_INT_EQ(bsTestMain(2, argvDash), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "Failed to load") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-", NULL), 1);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "Failed to load");
 }
 
 
@@ -212,8 +194,7 @@ TEST(bare_includes)
     fputs("include 'lib.bare'\nsystemLog(libFn())\n", file);
     fclose(file);
 
-    const char *argv[] = {"bare", mainPath};
-    ASSERT_INT_EQ(bsTestMain(2, argv), 0);
+    ASSERT_INT_EQ(bsTestBare(mainPath, NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "from lib\n");
 }
 
@@ -221,23 +202,19 @@ TEST(bare_includes)
 TEST(bare_debug_and_static)
 {
     /* Debug mode also logs the script execution time */
-    const char *argvDebug[] = {"bare", "-d", "-c", "systemLogDebug('debug on')"};
-    ASSERT_INT_EQ(bsTestMain(4, argvDebug), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "debug on\n") != NULL);
-    ASSERT_TRUE(strstr(bsTestMainText(), "BareScript executed in") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-d", "-c", "systemLogDebug('debug on')", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "debug on\n");
+    ASSERT_STR_CONTAINS(bsTestMainText(), "BareScript executed in");
 
-    const char *argvDebugLong[] = {"bare", "--debug", "-c", "systemLogDebug('debug long')"};
-    ASSERT_INT_EQ(bsTestMain(4, argvDebugLong), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "debug long\n") != NULL);
+    ASSERT_INT_EQ(bsTestBare("--debug", "-c", "systemLogDebug('debug long')", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "debug long\n");
 
     /* Static analysis parses without executing */
-    const char *argvStatic[] = {"bare", "-s", "-c", "systemLog('never runs')"};
-    ASSERT_INT_EQ(bsTestMain(4, argvStatic), 0);
+    ASSERT_INT_EQ(bsTestBare("-s", "-c", "systemLog('never runs')", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "BareScript static analysis \"<string>\" ... OK\n");
 
-    const char *argvStaticLong[] = {"bare", "--static", "-c", "a = 1 +"};
-    ASSERT_INT_EQ(bsTestMain(4, argvStaticLong), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "Syntax error") != NULL);
+    ASSERT_INT_EQ(bsTestBare("--static", "-c", "a = 1 +", NULL), 1);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "Syntax error");
 }
 
 
@@ -249,16 +226,14 @@ TEST(bare_include_path)
     setenv("BARESCRIPT_INCLUDE_PATH", bsStringData(path), 1);
     bsRelease(path);
 
-    const char *argv[] = {"bare", "-c", "include <sys.bare>\nsystemLog(sysFn())"};
-    ASSERT_INT_EQ(bsTestMain(3, argv), 0);
+    ASSERT_INT_EQ(bsTestBare("-c", "include <sys.bare>\nsystemLog(sysFn())", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "from system\n");
 
     setenv("BARESCRIPT_INCLUDE_PATH", "", 1);
-    const char *argvEmpty[] = {"bare", "-c", "systemLog('ok')"};
-    ASSERT_INT_EQ(bsTestMain(3, argvEmpty), 0);
+    ASSERT_INT_EQ(bsTestBare("-c", "systemLog('ok')", NULL), 0);
 
     unsetenv("BARESCRIPT_INCLUDE_PATH");
-    ASSERT_INT_EQ(bsTestMain(3, argvEmpty), 0);
+    ASSERT_INT_EQ(bsTestBare("-c", "systemLog('ok')", NULL), 0);
 
     bsAssign(&bsTestMainOutput, bsNull());
 }
@@ -272,8 +247,7 @@ TEST(bare_multiple_files)
     snprintf(firstPath, sizeof(firstPath), "%s", first);
     const char *second = bsTestTempFile("second.bare", "systemLog('second')\n");
 
-    const char *argv[] = {"bare", firstPath, second};
-    ASSERT_INT_EQ(bsTestMain(3, argv), 0);
+    ASSERT_INT_EQ(bsTestBare(firstPath, second, NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "first\nsecond\n");
     bsAssign(&bsTestMainOutput, bsNull());
 }
@@ -282,48 +256,40 @@ TEST(bare_multiple_files)
 TEST(bare_static_analysis)
 {
     /* Static analysis of a clean script */
-    const char *argvClean[] = {"bare", "-s", "-c", "return 1"};
-    ASSERT_INT_EQ(bsTestMain(4, argvClean), 0);
+    ASSERT_INT_EQ(bsTestBare("-s", "-c", "return 1", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "BareScript static analysis \"<string>\" ... OK\n");
 
     /* A script with one warning */
-    const char *argvOne[] = {"bare", "-s", "-c", "1 + 2"};
-    ASSERT_INT_EQ(bsTestMain(4, argvOne), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "... 1 warning:\n") != NULL);
-    ASSERT_TRUE(strstr(bsTestMainText(), "Pointless global statement") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-s", "-c", "1 + 2", NULL), 1);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "... 1 warning:\n");
+    ASSERT_STR_CONTAINS(bsTestMainText(), "Pointless global statement");
 
     /* A script with several warnings */
-    const char *argvMany[] = {"bare", "-s", "-c",
-                              "function f():\n    unused = 1\n    return 1\nendfunction\n1 + 2\n"};
-    ASSERT_INT_EQ(bsTestMain(4, argvMany), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), " warnings:\n") != NULL);
-    ASSERT_TRUE(strstr(bsTestMainText(), "Unused variable") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-s", "-c",
+                              "function f():\n    unused = 1\n    return 1\nendfunction\n1 + 2\n", NULL), 1);
+    ASSERT_STR_CONTAINS(bsTestMainText(), " warnings:\n");
+    ASSERT_STR_CONTAINS(bsTestMainText(), "Unused variable");
 
     /* Static analysis does not execute */
-    const char *argvNoRun[] = {"bare", "-s", "-c", "systemLog('never runs')"};
-    ASSERT_INT_EQ(bsTestMain(4, argvNoRun), 0);
-    ASSERT_NULL(strstr(bsTestMainText(), "never runs"));
+    ASSERT_INT_EQ(bsTestBare("-s", "-c", "systemLog('never runs')", NULL), 0);
+    ASSERT_STR_NOT_CONTAINS(bsTestMainText(), "never runs");
 
     /* Static analysis with execution */
-    const char *argvExecute[] = {"bare", "-x", "-c", "systemLog('runs')"};
-    ASSERT_INT_EQ(bsTestMain(4, argvExecute), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "runs\n") != NULL);
-    ASSERT_TRUE(strstr(bsTestMainText(), "... OK\n") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-x", "-c", "systemLog('runs')", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "runs\n");
+    ASSERT_STR_CONTAINS(bsTestMainText(), "... OK\n");
 
-    const char *argvExecuteLong[] = {"bare", "--staticx", "-c", "return 0"};
-    ASSERT_INT_EQ(bsTestMain(4, argvExecuteLong), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "... OK\n") != NULL);
+    ASSERT_INT_EQ(bsTestBare("--staticx", "-c", "return 0", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "... OK\n");
 
     /* A runtime error stops the run before static analysis */
-    const char *argvError[] = {"bare", "-x", "-c", "undefinedFunc()"};
-    ASSERT_INT_EQ(bsTestMain(4, argvError), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "Undefined function") != NULL);
-    ASSERT_NULL(strstr(bsTestMainText(), "static analysis"));
+    ASSERT_INT_EQ(bsTestBare("-x", "-c", "undefinedFunc()", NULL), 1);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "Undefined function");
+    ASSERT_STR_NOT_CONTAINS(bsTestMainText(), "static analysis");
 
     /* Static analysis continues past a failing script */
-    const char *argvTwo[] = {"bare", "-s", "-c", "1 + 2", "-c", "return 1"};
-    ASSERT_INT_EQ(bsTestMain(6, argvTwo), 1);
-    ASSERT_TRUE(strstr(bsTestMainText(), "<string2>") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-s", "-c", "1 + 2", "-c", "return 1", NULL), 1);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "<string2>");
 
     bsAssign(&bsTestMainOutput, bsNull());
 }
@@ -332,40 +298,33 @@ TEST(bare_static_analysis)
 TEST(bare_markdownup)
 {
     /* MarkdownUp text output wraps the scripts in the markdownUp.bare include */
-    const char *argvMarkdown[] = {"bare", "-m", "-c", "markdownPrint('# Heading')"};
-    ASSERT_INT_EQ(bsTestMain(4, argvMarkdown), 0);
+    ASSERT_INT_EQ(bsTestBare("-m", "-c", "markdownPrint('# Heading')", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "# Heading\n");
 
-    const char *argvMarkdownLong[] = {"bare", "--markdown", "-c", "markdownPrint('text')"};
-    ASSERT_INT_EQ(bsTestMain(4, argvMarkdownLong), 0);
+    ASSERT_INT_EQ(bsTestBare("--markdown", "-c", "markdownPrint('text')", NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "text\n");
 
     /* MarkdownUp HTML output brackets the scripts with the document begin and end */
-    const char *argvHTML[] = {"bare", "-l", "-c", "markdownPrint('# Heading')"};
-    ASSERT_INT_EQ(bsTestMain(4, argvHTML), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "<!DOCTYPE html>") != NULL);
-    ASSERT_TRUE(strstr(bsTestMainText(), "</html>") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-l", "-c", "markdownPrint('# Heading')", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "<!DOCTYPE html>");
+    ASSERT_STR_CONTAINS(bsTestMainText(), "</html>");
 
-    const char *argvHTMLLong[] = {"bare", "--html", "-c", "markdownPrint('x')"};
-    ASSERT_INT_EQ(bsTestMain(4, argvHTMLLong), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "<!DOCTYPE html>") != NULL);
+    ASSERT_INT_EQ(bsTestBare("--html", "-c", "markdownPrint('x')", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "<!DOCTYPE html>");
 
     /* The MarkdownUp modes set the unittest report globals */
-    const char *argvReport[] = {"bare", "-m", "-c", "systemLog(jsonStringify(vUnittestReport))"};
-    ASSERT_INT_EQ(bsTestMain(4, argvReport), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "true") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-m", "-c", "systemLog(jsonStringify(vUnittestReport))", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "true");
 
-    const char *argvDisabled[] = {"bare", "-m", "-x", "-c",
-                                  "systemLog(jsonStringify(vUnittestDisabled))"};
-    ASSERT_INT_EQ(bsTestMain(5, argvDisabled), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "true") != NULL);
+    ASSERT_INT_EQ(bsTestBare("-m", "-x", "-c",
+                                  "systemLog(jsonStringify(vUnittestDisabled))", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "true");
 
     /* Only the user's own scripts are named, timed, and analyzed */
-    const char *argvNamed[] = {"bare", "-m", "-s", "-c", "return 1", "-c", "return 2"};
-    ASSERT_INT_EQ(bsTestMain(7, argvNamed), 0);
-    ASSERT_TRUE(strstr(bsTestMainText(), "\"<string>\" ... OK") != NULL);
-    ASSERT_TRUE(strstr(bsTestMainText(), "\"<string2>\" ... OK") != NULL);
-    ASSERT_NULL(strstr(bsTestMainText(), "markdownUp.bare"));
+    ASSERT_INT_EQ(bsTestBare("-m", "-s", "-c", "return 1", "-c", "return 2", NULL), 0);
+    ASSERT_STR_CONTAINS(bsTestMainText(), "\"<string>\" ... OK");
+    ASSERT_STR_CONTAINS(bsTestMainText(), "\"<string2>\" ... OK");
+    ASSERT_STR_NOT_CONTAINS(bsTestMainText(), "markdownUp.bare");
 
     bsAssign(&bsTestMainOutput, bsNull());
 }
@@ -374,7 +333,6 @@ TEST(bare_markdownup)
 TEST(bare_status_code_sticky)
 {
     /* A later zero result does not clear an earlier non-zero status code */
-    const char *argv[] = {"bare", "-x", "-c", "return 3", "-c", "return 0"};
-    ASSERT_INT_EQ(bsTestMain(6, argv), 3);
+    ASSERT_INT_EQ(bsTestBare("-x", "-c", "return 3", "-c", "return 0", NULL), 3);
     bsAssign(&bsTestMainOutput, bsNull());
 }

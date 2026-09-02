@@ -460,11 +460,7 @@ TEST(value_object_intern)
 {
     /* Enough unique short keys to grow the intern table (32 slots, grow at 75%) */
     BSValue object = bsObjectNew();
-    char key[16];
-    for (int ix = 0; ix < 40; ix++) {
-        snprintf(key, sizeof(key), "k%d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "k%d", 0, 40);
     ASSERT_INT_EQ(bsObjectCount(object), 40);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k0").u.number, 0);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
@@ -477,10 +473,7 @@ TEST(value_object_intern)
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
 
     /* Further inserts grow the interned-pointer hash table */
-    for (int ix = 40; ix < 80; ix++) {
-        snprintf(key, sizeof(key), "k%d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "k%d", 40, 80);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k79").u.number, 79);
 
     /* Interned keys from the object compare by pointer; a 4-byte key hits the word hash */
@@ -606,10 +599,7 @@ TEST(value_object_tree)
     /* Insert enough keys, in sorted and reverse order, to exercise both treap rotations */
     BSValue object = bsObjectNew();
     char key[16];
-    for (int ix = 0; ix < 200; ix++) {
-        snprintf(key, sizeof(key), "k%03d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "k%03d", 0, 200);
     for (int ix = 400; ix >= 200; ix--) {
         snprintf(key, sizeof(key), "k%03d", ix);
         bsObjectSet(object, key, bsNumber(ix));
@@ -939,11 +929,7 @@ TEST(value_object_lazy_treap)
 {
     /* Past 32 keys, an all-interned object answers lookups from its hash table without a treap */
     BSValue object = bsObjectNew();
-    char key[8];
-    for (int ix = 0; ix < 40; ix++) {
-        snprintf(key, sizeof(key), "k%d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "k%d", 0, 40);
     ASSERT_TRUE(object.u.object->u.tree.root == NULL);
     ASSERT_TRUE(object.u.object->u.tree.lookup != NULL);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k7").u.number, 7);
@@ -973,10 +959,7 @@ TEST(value_object_lazy_treap)
 
     /* An uninterned key inserted past 32 keys builds the treap, since it is matched by content */
     object = bsObjectNew();
-    for (int ix = 0; ix < 40; ix++) {
-        snprintf(key, sizeof(key), "k%d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "k%d", 0, 40);
     ASSERT_TRUE(object.u.object->u.tree.root == NULL);
     BSValue longKey = bsStringNew("a key longer than the sixty-four byte limit of the intern table is never interned");
     bsObjectSetString(object, longKey, bsNumber(1));
@@ -1050,11 +1033,7 @@ static bool bsTestIterStopDeep(BSValue key, BSValue item, void *data)
 TEST(value_object_iterate_deep)
 {
     BSValue object = bsObjectNew();
-    char key[16];
-    for (int ix = 0; ix < 100; ix++) {
-        snprintf(key, sizeof(key), "k%03d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "k%03d", 0, 100);
     size_t count = 0;
     ASSERT_FALSE(bsObjectIterSorted(object, bsTestIterStopDeep, &count));
     ASSERT_INT_EQ(count, 51);
@@ -1066,11 +1045,7 @@ TEST(value_object_node_pool)
 {
     /* Overflow the recycled-node pool so further frees go to the allocator */
     BSValue object = bsObjectNew();
-    char key[16];
-    for (int ix = 0; ix < 8193; ix++) {
-        snprintf(key, sizeof(key), "p%04d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "p%04d", 0, 8193);
     ASSERT_INT_EQ(bsObjectCount(object), 8193);
     bsRelease(object);
 }
@@ -1128,11 +1103,7 @@ TEST(value_object_intern_cap)
 {
     /* Past the intern-table cap, new short keys stay uninterned and still look up */
     BSValue object = bsObjectNew();
-    char key[16];
-    for (int ix = 0; ix < 66000; ix++) {
-        snprintf(key, sizeof(key), "c%05d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "c%05d", 0, 66000);
     ASSERT_INT_EQ(bsObjectCount(object), 66000);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "c00000").u.number, 0);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "c65999").u.number, 65999);

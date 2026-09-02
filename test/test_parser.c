@@ -31,6 +31,15 @@ static BSValue bsTestParse(const char *text)
 }
 
 
+/* Assert that a script's parse result - its model JSON or its error message - contains "needle" */
+static void bsTestParseContains(const char *text, const char *needle)
+{
+    BSValue result = bsTestParse(text);
+    ASSERT_STR_CONTAINS(bsStringData(result), needle);
+    bsRelease(result);
+}
+
+
 /* Parse expression text and return its model as JSON, or the parse error message */
 static BSValue bsTestParseExpr(const char *text, bool arrayLiterals)
 {
@@ -47,6 +56,15 @@ static BSValue bsTestParseExpr(const char *text, bool arrayLiterals)
     bsRelease(model);
     bsExprFree(expr);
     return json;
+}
+
+
+/* The expression form of bsTestParseContains */
+static void bsTestParseExprContains(const char *text, const char *needle)
+{
+    BSValue result = bsTestParseExpr(text, false);
+    ASSERT_STR_CONTAINS(bsStringData(result), needle);
+    bsRelease(result);
 }
 
 
@@ -187,7 +205,7 @@ TEST(parser_expression_error_line_trim)
     bsSBAppendChar(&sb, '+');
     BSValue text = bsSBToValue(&sb);
     BSValue message = bsTestParseExpr(bsStringData(text), false);
-    ASSERT_TRUE(strstr(bsStringData(message), "... ") != NULL);
+    ASSERT_STR_CONTAINS(bsStringData(message), "... ");
     bsRelease(message);
     bsRelease(text);
 
@@ -199,7 +217,7 @@ TEST(parser_expression_error_line_trim)
     }
     text = bsSBToValue(&sb);
     message = bsTestParseExpr(bsStringData(text), false);
-    ASSERT_TRUE(strstr(bsStringData(message), " ...") != NULL);
+    ASSERT_STR_CONTAINS(bsStringData(message), " ...");
     bsRelease(message);
     bsRelease(text);
 
@@ -214,7 +232,7 @@ TEST(parser_expression_error_line_trim)
     }
     text = bsSBToValue(&sb);
     message = bsTestParseExpr(bsStringData(text), false);
-    ASSERT_TRUE(strstr(bsStringData(message), "... ") != NULL);
+    ASSERT_STR_CONTAINS(bsStringData(message), "... ");
     bsRelease(message);
     bsRelease(text);
 }
@@ -268,7 +286,7 @@ TEST(parser_includes)
                         "[{\"url\":\"a'b.bare\"}],\"lineNumber\":1}}]}");
 
     /* An unterminated include is an expression statement, which fails to parse */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("include 'a.bare")), "Syntax error") != NULL);
+    bsTestParseContains("include 'a.bare", "Syntax error");
 }
 
 
@@ -333,13 +351,13 @@ TEST(parser_function_errors)
                         "test.bare:2: Missing endfor statement\n    for a in b:\n^\n");
 
     /* A malformed function statement falls through to the expression parser */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("function f(:")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("function ():")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("function f()")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("function f(a,):")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("functionf():")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("async f():")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("endfunction x")), "Syntax error") != NULL);
+    bsTestParseContains("function f(:", "Syntax error");
+    bsTestParseContains("function ():", "Syntax error");
+    bsTestParseContains("function f()", "Syntax error");
+    bsTestParseContains("function f(a,):", "Syntax error");
+    bsTestParseContains("functionf():", "Syntax error");
+    bsTestParseContains("async f():", "Syntax error");
+    bsTestParseContains("endfunction x", "Syntax error");
 }
 
 
@@ -370,23 +388,23 @@ TEST(parser_structured_errors)
                         "test.bare:2: No matching for statement\n    endfor\n^\n");
 
     /* Expression errors inside structured statement headers */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("if 1 +:\nendif")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("if a:\nelif 1 +:\nendif")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("while 1 +:\nendwhile")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("for a in 1 +:\nendfor")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("jumpif (1 +) label")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("return 1 +")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("a = 1 +")), "Syntax error") != NULL);
+    bsTestParseContains("if 1 +:\nendif", "Syntax error");
+    bsTestParseContains("if a:\nelif 1 +:\nendif", "Syntax error");
+    bsTestParseContains("while 1 +:\nendwhile", "Syntax error");
+    bsTestParseContains("for a in 1 +:\nendfor", "Syntax error");
+    bsTestParseContains("jumpif (1 +) label", "Syntax error");
+    bsTestParseContains("return 1 +", "Syntax error");
+    bsTestParseContains("a = 1 +", "Syntax error");
 
     /* Malformed structured statements fall through to the expression parser */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("if a")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("for in b:\nendfor")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("for a b:\nendfor")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("for a, in b:\nendfor")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("jumpif x label")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("jump 1")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("jumpif (a) 1")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("break x")), "Syntax error") != NULL);
+    bsTestParseContains("if a", "Syntax error");
+    bsTestParseContains("for in b:\nendfor", "Syntax error");
+    bsTestParseContains("for a b:\nendfor", "Syntax error");
+    bsTestParseContains("for a, in b:\nendfor", "Syntax error");
+    bsTestParseContains("jumpif x label", "Syntax error");
+    bsTestParseContains("jump 1", "Syntax error");
+    bsTestParseContains("jumpif (a) 1", "Syntax error");
+    bsTestParseContains("break x", "Syntax error");
 }
 
 
@@ -423,16 +441,16 @@ TEST(parser_no_script_name)
 TEST(parser_coverage_gaps)
 {
     /* A keyword prefix followed by an identifier character is not a keyword */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("for a inx b:\nendfor")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("asyncx function f():\nendfunction")), "Syntax error") != NULL);
+    bsTestParseContains("for a inx b:\nendfor", "Syntax error");
+    bsTestParseContains("asyncx function f():\nendfunction", "Syntax error");
 
     /* Upper-case and invalid unicode string escapes */
     ASSERT_VALUE_STRING(bsTestParseExpr("'\\u00FF'", false), "{\"string\":\"\xc3\xbf\"}");
     ASSERT_VALUE_STRING(bsTestParseExpr("'\\u00zz'", false), "{\"string\":\"\\\\u00zz\"}");
 
     /* An object literal with a failing value expression */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParseExpr("{'a': 1 +}", false)), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParseExpr("{1 +: 2}", false)), "Syntax error") != NULL);
+    bsTestParseExprContains("{'a': 1 +}", "Syntax error");
+    bsTestParseExprContains("{1 +: 2}", "Syntax error");
 
     /* An array literal with many values grows the argument array */
     ASSERT_VALUE_STRING(bsTestParseExpr("[1,2,3,4,5]", true),
@@ -449,10 +467,10 @@ TEST(parser_coverage_gaps)
     ASSERT_VALUE_STRING(bsTestParseExpr("-1.5e-2", false), "{\"number\":-0.015}");
 
     /* A group with a failing inner expression */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParseExpr("(1 +)", false)), "Syntax error") != NULL);
+    bsTestParseExprContains("(1 +)", "Syntax error");
 
     /* A binary expression with a failing right operand */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParseExpr("1 + *", false)), "Syntax error") != NULL);
+    bsTestParseExprContains("1 + *", "Syntax error");
 
     /* An assignment whose expression is only whitespace */
     ASSERT_VALUE_STRING(bsTestParse("a = "), "test.bare:1: Syntax error\na = \n   ^\n");
@@ -471,7 +489,7 @@ TEST(parser_coverage_gaps)
                         "\"name\":\"a\"}}]}");
 
     /* A function definition with a malformed argument list frees its parsed arguments */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("function f(a, b:")), "Syntax error") != NULL);
+    bsTestParseContains("function f(a, b:", "Syntax error");
     /* A keyword followed by a colon is a label definition, as in the reference parser */
     ASSERT_VALUE_STRING(bsTestParse("function :"),
                         "{\"scriptName\":\"test.bare\",\"statements\":[{\"label\":{\"lineNumber\":1,"
@@ -530,17 +548,17 @@ TEST(parser_keyword_fallthrough)
      * A statement keyword that does not match its pattern falls through to the next check, and
      * ultimately to the expression parser - where a bare keyword is just a variable name
      */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("if a:\nelif\nendif")), "\"variable\":\"elif\"") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("if a:\nelse\nendif")), "\"variable\":\"else\"") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("while x\nendwhile")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("for x\nendfor")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("if a:\nelif x\nendif")), "Syntax error") != NULL);
+    bsTestParseContains("if a:\nelif\nendif", "\"variable\":\"elif\"");
+    bsTestParseContains("if a:\nelse\nendif", "\"variable\":\"else\"");
+    bsTestParseContains("while x\nendwhile", "Syntax error");
+    bsTestParseContains("for x\nendfor", "Syntax error");
+    bsTestParseContains("if a:\nelif x\nendif", "Syntax error");
 
     /* A keyword immediately followed by "(" has no whitespace for the header expression */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("if(a):\nendif")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("while(a):\nendwhile")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("if a:\nelif(b):\nendif")), "Syntax error") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("for a in(b):\nendfor")), "Syntax error") != NULL);
+    bsTestParseContains("if(a):\nendif", "Syntax error");
+    bsTestParseContains("while(a):\nendwhile", "Syntax error");
+    bsTestParseContains("if a:\nelif(b):\nendif", "Syntax error");
+    bsTestParseContains("for a in(b):\nendfor", "Syntax error");
 
     /* "return(...)" has no whitespace, so it parses as a call to a function named "return" */
     ASSERT_VALUE_STRING(bsTestParse("return(1)"),
@@ -568,7 +586,7 @@ TEST(parser_final_coverage)
     ASSERT_VALUE_STRING(bsTestParseExpr("0xzz", false), "Syntax error\n0xzz\n ^\n");
 
     /* A function definition whose name is not followed by an open parenthesis */
-    ASSERT_TRUE(strstr(bsStringData(bsTestParse("function f:")), "Syntax error") != NULL);
+    bsTestParseContains("function f:", "Syntax error");
 
     /* A nested function definition with arguments frees its parsed argument names */
     ASSERT_VALUE_STRING(bsTestParse("function f():\n    function g(a, b):\n    endfunction\nendfunction"),
@@ -624,7 +642,7 @@ TEST(parser_lint)
     ASSERT_TRUE(bsArrayCount(warnings) >= 2);
     BSValue json = bsJSONEncode(warnings, 0);
     ASSERT_TRUE(strstr(bsStringData(json), "Unused variable \\\"unused\\\"") != NULL);
-    ASSERT_TRUE(strstr(bsStringData(json), "Pointless global statement") != NULL);
+    ASSERT_STR_CONTAINS(bsStringData(json), "Pointless global statement");
     bsRelease(json);
     bsRelease(warnings);
 

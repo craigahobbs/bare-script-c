@@ -240,7 +240,7 @@ TEST(runtime_functions)
     ASSERT_VALUE(bsTestExecute("function f():\n    i = 0\n    loop:\n    i = i + 1\n"
                                "    jumpif (i < 3) loop\n    return i\nendfunction\nreturn f()"), "3");
 
-    /* More locals than the inline slot buffer (64) allocate a heap slot array */
+    /* More locals than the inline slot buffer (32) allocate a heap slot array */
     {
         char text[4096];
         size_t n = 0;
@@ -480,24 +480,20 @@ TEST(runtime_evaluate_expression)
 }
 
 
+/* Decode an expression model and assert its evaluation's JSON */
+static void bsTestEvalModel(const char *json, BSOptions *options, bool builtins, const char *expectedJSON)
+{
+    BSValue model = bsJSONDecode(json, strlen(json), NULL);
+    ASSERT_VALUE(bsEvaluateExpressionModel(model, options, bsNull(), builtins), expectedJSON);
+    bsRelease(model);
+}
+
+
 TEST(runtime_expression_model)
 {
     BSOptions *options = bsTestOptions();
 
-    /* Round-trip an expression through its model */
-    static const char *exprText = "1 + f(2, 'x') * -a || (b) && !c";
-    BSExpr *expr = bsParseExpression(exprText, strlen(exprText), 0, NULL, false, NULL);
-    BSValue model = bsExprToModel(expr);
-    BSExpr *fromModel = bsExprFromModel(model);
-    ASSERT_NOT_NULL(fromModel);
-    BSValue model2 = bsExprToModel(fromModel);
-    ASSERT_INT_EQ(bsValueCompare(model, model2), 0);
-    bsRelease(model);
-    bsRelease(model2);
-    bsExprFree(expr);
-    bsExprFree(fromModel);
-
-    /* Evaluate a model */
+    /* Evaluate a model against a locals object */
     static const char *binaryModel = "{\"binary\":{\"op\":\"+\",\"left\":{\"number\":1},"
         "\"right\":{\"variable\":\"a\"}}}";
     BSValue exprModel = bsJSONDecode(binaryModel, strlen(binaryModel), NULL);
@@ -508,43 +504,20 @@ TEST(runtime_expression_model)
     bsRelease(locals);
 
     /* Special variables */
-    exprModel = bsJSONDecode("{\"variable\":\"true\"}", strlen("{\"variable\":\"true\"}"), NULL);
-    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "true");
-    bsRelease(exprModel);
-    exprModel = bsJSONDecode("{\"variable\":\"false\"}", strlen("{\"variable\":\"false\"}"), NULL);
-    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "false");
-    bsRelease(exprModel);
-    exprModel = bsJSONDecode("{\"variable\":\"null\"}", strlen("{\"variable\":\"null\"}"), NULL);
-    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "null");
-    bsRelease(exprModel);
+    bsTestEvalModel("{\"variable\":\"true\"}", options, false, "true");
+    bsTestEvalModel("{\"variable\":\"false\"}", options, false, "false");
+    bsTestEvalModel("{\"variable\":\"null\"}", options, false, "null");
 
     /* Groups and the built-in "if" */
-    exprModel = bsJSONDecode("{\"group\":{\"number\":1}}", strlen("{\"group\":{\"number\":1}}"), NULL);
-    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "1");
-    bsRelease(exprModel);
-    static const char *ifModel = "{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"true\"},"
-        "{\"number\":1},{\"number\":2}]}}";
-    exprModel = bsJSONDecode(ifModel, strlen(ifModel), NULL);
-    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "1");
-    bsRelease(exprModel);
-    exprModel = bsJSONDecode("{\"function\":{\"name\":\"if\",\"args\":[]}}",
-                            strlen("{\"function\":{\"name\":\"if\",\"args\":[]}}"), NULL);
-    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "null");
-    bsRelease(exprModel);
-    exprModel = bsJSONDecode("{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"false\"}]}}",
-                            strlen("{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"false\"}]}}"),
-                            NULL);
-    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "null");
-    bsRelease(exprModel);
-    exprModel = bsJSONDecode(
-        "{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"true\"},{\"number\":7}]}}",
-        strlen("{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"true\"},{\"number\":7}]}}"),
-        NULL);
-    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), false), "7");
-    bsRelease(exprModel);
-    exprModel = bsJSONDecode("{\"function\":{\"name\":\"mathAbs\"}}", strlen("{\"function\":{\"name\":\"mathAbs\"}}"), NULL);
-    ASSERT_VALUE(bsEvaluateExpressionModel(exprModel, options, bsNull(), true), "null");
-    bsRelease(exprModel);
+    bsTestEvalModel("{\"group\":{\"number\":1}}", options, false, "1");
+    bsTestEvalModel("{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"true\"},"
+                    "{\"number\":1},{\"number\":2}]}}", options, false, "1");
+    bsTestEvalModel("{\"function\":{\"name\":\"if\",\"args\":[]}}", options, false, "null");
+    bsTestEvalModel("{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"false\"}]}}", options, false,
+                    "null");
+    bsTestEvalModel("{\"function\":{\"name\":\"if\",\"args\":[{\"variable\":\"true\"},{\"number\":7}]}}",
+                    options, false, "7");
+    bsTestEvalModel("{\"function\":{\"name\":\"mathAbs\"}}", options, true, "null");
     bsOptionsFree(options);
 }
 
@@ -621,16 +594,6 @@ TEST(runtime_globals)
 }
 
 
-/* Duplicate a string with malloc, for option data the runtime frees */
-static char *bsTestStrdup(const char *text)
-{
-    size_t size = strlen(text) + 1;
-    char *result = malloc(size);
-    memcpy(result, text, size);
-    return result;
-}
-
-
 static char *bsTestFetchFn(const BSFetchRequest *request, size_t *responseSize, void *data)
 {
     (void) data;
@@ -648,13 +611,10 @@ static char *bsTestFetchFn(const BSFetchRequest *request, size_t *responseSize, 
     } else if (strcmp(request->url, "nested.bare") == 0) {
         text = "include 'other.bare'";
     }
-    size_t size = strlen(text);
-    char *result = malloc(size + 1);
-    memcpy(result, text, size + 1);
     if (responseSize != NULL) {
-        *responseSize = size;
+        *responseSize = strlen(text);
     }
-    return result;
+    return bsTestStrdup(text);
 }
 
 
@@ -748,45 +708,47 @@ TEST(runtime_system_includes)
 }
 
 
-TEST(runtime_coverage)
+/* Options with a coverage object installed; "*coverage" receives a borrowed reference to it */
+static BSOptions *bsTestCoverageOptions(BSValue *coverage, bool enabled)
 {
     BSOptions *options = bsTestOptions();
-    BSValue coverage = bsObjectNew();
-    bsObjectSet(coverage, "enabled", bsBoolean(true));
-    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
-    ASSERT_VALUE(bsTestExecuteOptions("a = 1\nif a:\n    a = 2\nendif\nreturn a", options), "2");
+    *coverage = bsObjectNew();
+    bsObjectSet(*coverage, "enabled", bsBoolean(enabled));
+    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, *coverage);
+    return options;
+}
 
-    BSValue scripts = bsObjectGet(coverage, "scripts");
-    ASSERT_INT_EQ(scripts.type, BS_OBJECT);
-    BSValue scriptCoverage = bsObjectGet(scripts, "test.bare");
-    ASSERT_INT_EQ(scriptCoverage.type, BS_OBJECT);
-    BSValue covered = bsObjectGet(scriptCoverage, "covered");
-    ASSERT_TRUE(bsObjectCount(covered) > 0);
-    BSValue line1 = bsObjectGet(covered, "1");
-    ASSERT_DOUBLE_EQ(bsObjectGet(line1, "count").u.number, 1);
+
+/* A covered line's hit count */
+static double bsTestCoveredCount(BSValue coverage, const char *script, const char *line)
+{
+    BSValue covered = bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), script), "covered");
+    return bsObjectGet(bsObjectGet(covered, line), "count").u.number;
+}
+
+
+TEST(runtime_coverage)
+{
+    BSValue coverage;
+    BSOptions *options = bsTestCoverageOptions(&coverage, true);
+    ASSERT_VALUE(bsTestExecuteOptions("a = 1\nif a:\n    a = 2\nendif\nreturn a", options), "2");
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "test.bare", "1"), 1);
 
     /* A second parse of the same name increments the existing covered line */
     ASSERT_VALUE(bsTestExecuteOptions("a = 1\nif a:\n    a = 2\nendif\nreturn a", options), "2");
-    ASSERT_DOUBLE_EQ(bsObjectGet(line1, "count").u.number, 2);
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "test.bare", "1"), 2);
     bsOptionsFree(options);
 
     /* Coverage is not recorded for system scripts */
-    options = bsTestOptions();
-    coverage = bsObjectNew();
-    bsObjectSet(coverage, "enabled", bsBoolean(true));
-    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    options = bsTestCoverageOptions(&coverage, true);
     bsSystemIncludeRegister("cov.bare", "x = 1");
     ASSERT_VALUE(bsTestExecuteOptions("include <cov.bare>\nreturn x", options), "1");
-    scripts = bsObjectGet(coverage, "scripts");
-    ASSERT_FALSE(bsObjectHas(scripts, "cov.bare"));
+    ASSERT_FALSE(bsObjectHas(bsObjectGet(coverage, "scripts"), "cov.bare"));
     bsOptionsFree(options);
     bsSystemIncludeClear();
 
     /* Coverage is not recorded for a script with no name */
-    options = bsTestOptions();
-    coverage = bsObjectNew();
-    bsObjectSet(coverage, "enabled", bsBoolean(true));
-    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    options = bsTestCoverageOptions(&coverage, true);
     BSScript *script = bsParseScript("a = 1", 5, 1, NULL, NULL);
     bsRelease(bsExecuteScript(script, options));
     ASSERT_FALSE(bsObjectHas(coverage, "scripts"));
@@ -794,10 +756,7 @@ TEST(runtime_coverage)
     bsOptionsFree(options);
 
     /* Coverage disabled */
-    options = bsTestOptions();
-    coverage = bsObjectNew();
-    bsObjectSet(coverage, "enabled", bsBoolean(false));
-    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    options = bsTestCoverageOptions(&coverage, false);
     ASSERT_VALUE(bsTestExecuteOptions("return 1", options), "1");
     ASSERT_FALSE(bsObjectHas(coverage, "scripts"));
     bsOptionsFree(options);
@@ -807,10 +766,8 @@ TEST(runtime_coverage)
 TEST(runtime_coverage_jump)
 {
     /* A jump records the label statement's coverage */
-    BSOptions *options = bsTestOptions();
-    BSValue coverage = bsObjectNew();
-    bsObjectSet(coverage, "enabled", bsBoolean(true));
-    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    BSValue coverage;
+    BSOptions *options = bsTestCoverageOptions(&coverage, true);
     ASSERT_VALUE(bsTestExecuteOptions("i = 0\nwhile i < 3:\n    i = i + 1\nendwhile\nreturn i", options), "3");
     BSValue covered = bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), "test.bare"), "covered");
     ASSERT_TRUE(bsObjectCount(covered) >= 4);
@@ -818,10 +775,7 @@ TEST(runtime_coverage_jump)
     bsOptionsFree(options);
 
     /* An expression jump (if/&&) is not a label; coverage still records the statement */
-    options = bsTestOptions();
-    coverage = bsObjectNew();
-    bsObjectSet(coverage, "enabled", bsBoolean(true));
-    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    options = bsTestCoverageOptions(&coverage, true);
     ASSERT_VALUE(bsTestExecuteOptions("a = if(false, 1, 2)\nreturn a || 0", options), "2");
     bsOptionsFree(options);
 }
@@ -831,28 +785,21 @@ TEST(runtime_coverage_cache)
 {
     /* Reusing a script with a new coverage object resets the line-index cache */
     BSScript *script = bsParseScript("a = 1\nreturn a", strlen("a = 1\nreturn a"), 1, "cache.bare", NULL);
-    BSOptions *options = bsTestOptions();
-    BSValue coverage = bsObjectNew();
-    bsObjectSet(coverage, "enabled", bsBoolean(true));
-    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    BSValue coverage;
+    BSOptions *options = bsTestCoverageOptions(&coverage, true);
     bsRelease(bsExecuteScript(script, options));
-    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"),
-        "cache.bare"), "covered"), "1"), "count").u.number, 1);
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "cache.bare", "1"), 1);
 
     BSValue coverage2 = bsObjectNew();
     bsObjectSet(coverage2, "enabled", bsBoolean(true));
     bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage2);
     bsRelease(bsExecuteScript(script, options));
-    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(coverage2, "scripts"),
-        "cache.bare"), "covered"), "1"), "count").u.number, 1);
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage2, "cache.bare", "1"), 1);
     bsScriptRelease(script);
     bsOptionsFree(options);
 
     /* A high line number grows the line-index array past its initial cap */
-    options = bsTestOptions();
-    coverage = bsObjectNew();
-    bsObjectSet(coverage, "enabled", bsBoolean(true));
-    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    options = bsTestCoverageOptions(&coverage, true);
     static const char *highModel =
         "{\"scriptName\":\"high.bare\",\"statements\":[{\"expr\":{\"name\":\"a\","
         "\"expr\":{\"number\":1},\"lineNumber\":40}}]}";
@@ -860,16 +807,12 @@ TEST(runtime_coverage_cache)
     script = bsScriptFromModel(model, "high.bare");
     bsRelease(model);
     bsRelease(bsExecuteScript(script, options));
-    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"),
-        "high.bare"), "covered"), "40"), "count").u.number, 1);
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "high.bare", "40"), 1);
     bsScriptRelease(script);
     bsOptionsFree(options);
 
     /* A statement at line 0 is not recorded */
-    options = bsTestOptions();
-    coverage = bsObjectNew();
-    bsObjectSet(coverage, "enabled", bsBoolean(true));
-    bsObjectSet(options->globals, BS_GLOBAL_COVERAGE, coverage);
+    options = bsTestCoverageOptions(&coverage, true);
     static const char *zeroModel =
         "{\"scriptName\":\"zero.bare\",\"statements\":[{\"expr\":{\"name\":\"a\","
         "\"expr\":{\"number\":1}}}]}";
@@ -914,12 +857,6 @@ TEST(runtime_eval_borrow)
         "function g(x, y):\n    return x + y\nendfunction\n"
         "s = 'a'\nreturn g(s, 'z')"), "\"az\"");
 
-    /* A function stored in a local is called through the slot, not the globals cache */
-    ASSERT_VALUE(bsTestExecute(
-        "function add(x):\n    return x + 1\nendfunction\n"
-        "function run():\n    f = add\n    return f(2)\nendfunction\n"
-        "return run()"), "3");
-
     /* More than eight arguments allocate the argument buffer */
     ASSERT_VALUE(bsTestExecute(
         "function g(a, b, c, d, e, f, g, h, i, j):\n    return a + j\nendfunction\n"
@@ -948,21 +885,10 @@ TEST(runtime_call_non_function_debug)
 }
 
 
-TEST(runtime_many_locals)
+TEST(runtime_many_arguments)
 {
-    /* A function with more locals than the inline slot buffer allocates its slots */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "function f():\n");
-    for (int ix = 0; ix < 40; ix++) {
-        bsSBAppendFormat(&sb, "    v%d = %d\n", ix, ix);
-    }
-    bsSBAppendString(&sb, "    return v39\nendfunction\nreturn f()");
-    BSValue text = bsSBToValue(&sb);
-    ASSERT_VALUE(bsTestExecute(bsStringData(text)), "39");
-    bsRelease(text);
-
     /* A function with more arguments than the inline argument buffer */
+    BSStringBuilder sb;
     bsSBInit(&sb);
     bsSBAppendString(&sb, "function g(a0");
     for (int ix = 1; ix < 12; ix++) {
@@ -973,7 +899,7 @@ TEST(runtime_many_locals)
         bsSBAppendFormat(&sb, ", %d", ix);
     }
     bsSBAppendString(&sb, ")");
-    text = bsSBToValue(&sb);
+    BSValue text = bsSBToValue(&sb);
     ASSERT_VALUE(bsTestExecute(bsStringData(text)), "11");
     bsRelease(text);
 

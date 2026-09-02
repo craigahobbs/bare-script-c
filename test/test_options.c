@@ -267,22 +267,34 @@ static void bsTestHTTPWait(pid_t child)
 }
 
 
-TEST(options_fetch_http_get)
+/*
+ * Serve one HTTP response from a child process and point "request" at it. Returns false when the
+ * library has no HTTP support, in which case the test has nothing to check.
+ */
+static bool bsTestHTTPRequest(pid_t *child, BSFetchRequest *request, char *url, size_t urlSize,
+                              const char *status, const char *body)
 {
     if (!bsFetchHTTPAvailable()) {
+        return false; /* GCOV_EXCL_LINE */
+    }
+    int port = bsTestHTTPServe(child, status, body);
+    ASSERT_TRUE(port != 0);
+    snprintf(url, urlSize, "http://127.0.0.1:%d/x", port);
+    memset(request, 0, sizeof(*request));
+    request->url = url;
+    request->headers = bsNull();
+    return true;
+}
+
+
+TEST(options_fetch_http_get)
+{
+    pid_t child = 0;
+    BSFetchRequest request;
+    char url[64];
+    if (!bsTestHTTPRequest(&child, &request, url, sizeof(url), "200 OK", "hello from http")) {
         return; /* GCOV_EXCL_LINE */
     }
-
-    pid_t child = 0;
-    int port = bsTestHTTPServe(&child, "200 OK", "hello from http");
-    ASSERT_TRUE(port != 0);
-
-    char url[64];
-    snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", port);
-    BSFetchRequest request;
-    memset(&request, 0, sizeof(request));
-    request.url = url;
-    request.headers = bsNull();
     size_t size = 0;
     char *text = bsFetchHTTP(&request, &size, NULL);
     bsTestHTTPWait(child);
@@ -295,21 +307,14 @@ TEST(options_fetch_http_get)
 
 TEST(options_fetch_http_post)
 {
-    if (!bsFetchHTTPAvailable()) {
+    pid_t child = 0;
+    BSFetchRequest request;
+    char url[64];
+    if (!bsTestHTTPRequest(&child, &request, url, sizeof(url), "200 OK", "posted")) {
         return; /* GCOV_EXCL_LINE */
     }
-
-    pid_t child = 0;
-    int port = bsTestHTTPServe(&child, "200 OK", "posted");
-    ASSERT_TRUE(port != 0);
-
-    char url[64];
-    snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", port);
     BSValue headers = bsObjectNew();
     bsObjectSet(headers, "X-Test", bsStringNew("value"));
-    BSFetchRequest request;
-    memset(&request, 0, sizeof(request));
-    request.url = url;
     request.body = "body text";
     request.bodySize = 9;
     request.headers = headers;
@@ -324,20 +329,13 @@ TEST(options_fetch_http_post)
 
 TEST(options_fetch_http_empty_and_error)
 {
-    if (!bsFetchHTTPAvailable()) {
-        return; /* GCOV_EXCL_LINE */
-    }
-
     /* An empty response body */
     pid_t child = 0;
-    int port = bsTestHTTPServe(&child, "200 OK", "");
-    ASSERT_TRUE(port != 0);
-    char url[64];
-    snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", port);
     BSFetchRequest request;
-    memset(&request, 0, sizeof(request));
-    request.url = url;
-    request.headers = bsNull();
+    char url[64];
+    if (!bsTestHTTPRequest(&child, &request, url, sizeof(url), "200 OK", "")) {
+        return; /* GCOV_EXCL_LINE */
+    }
     size_t size = 1;
     char *text = bsFetchHTTP(&request, &size, NULL);
     bsTestHTTPWait(child);
@@ -347,10 +345,7 @@ TEST(options_fetch_http_empty_and_error)
     free(text);
 
     /* A non-200 status is a failed fetch */
-    port = bsTestHTTPServe(&child, "404 Not Found", "missing");
-    ASSERT_TRUE(port != 0);
-    snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", port);
-    request.url = url;
+    bsTestHTTPRequest(&child, &request, url, sizeof(url), "404 Not Found", "missing");
     ASSERT_NULL(bsFetchHTTP(&request, NULL, NULL));
     bsTestHTTPWait(child);
 }
@@ -358,10 +353,6 @@ TEST(options_fetch_http_empty_and_error)
 
 TEST(options_fetch_http_large)
 {
-    if (!bsFetchHTTPAvailable()) {
-        return; /* GCOV_EXCL_LINE */
-    }
-
     /* A response larger than the initial buffer exercises the buffer growth */
     BSStringBuilder sb;
     bsSBInit(&sb);
@@ -371,14 +362,12 @@ TEST(options_fetch_http_large)
     BSValue body = bsSBToValue(&sb);
 
     pid_t child = 0;
-    int port = bsTestHTTPServe(&child, "200 OK", bsStringData(body));
-    ASSERT_TRUE(port != 0);
-    char url[64];
-    snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", port);
     BSFetchRequest request;
-    memset(&request, 0, sizeof(request));
-    request.url = url;
-    request.headers = bsNull();
+    char url[64];
+    if (!bsTestHTTPRequest(&child, &request, url, sizeof(url), "200 OK", bsStringData(body))) {
+        bsRelease(body); /* GCOV_EXCL_LINE */
+        return; /* GCOV_EXCL_LINE */
+    }
     size_t size = 0;
     char *text = bsFetchHTTP(&request, &size, NULL);
     bsTestHTTPWait(child);

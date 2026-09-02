@@ -212,7 +212,7 @@ const char *bsTestTempFile(const char *name, const char *text)
 }
 
 
-void bsTestTempClear(void)
+static void bsTestTempClear(void)
 {
     if (bsTestTempPath[0] == '\0') {
         return;
@@ -265,4 +265,23 @@ int bsTestRun(const char *filter)
            bsTestAssertions, bsTestAssertions == 1 ? "" : "s", bsTestFailures,
            bsTestFailures == 1 ? "" : "s");
     return failCount != 0 ? 1 : 0;
+}
+
+
+char *bsTestStrdup(const char *text)
+{
+    size_t size = strlen(text) + 1;
+    char *result = malloc(size);
+    memcpy(result, text, size);
+    return result;
+}
+
+
+void bsTestObjectFill(BSValue object, const char *format, int begin, int end)
+{
+    char key[16];
+    for (int ix = begin; ix < end; ix++) {
+        snprintf(key, sizeof(key), format, ix);
+        bsObjectSet(object, key, bsNumber(ix));
+    }
 }

@@ -14,25 +14,23 @@
 #include "../src/internal.h"
 
 
-/* Inflate base64-encoded gzip test data given as NUL-terminated chunks. The bundled models are
+/* Inflate base64-encoded gzip test data. The bundled models are
  * raw bytes, so the library has no base64 decoder; this one trusts its input. */
-static char *bsTestGzipDecode(const char *const *chunks)
+static char *bsTestGzipDecode(const char *text)
 {
     static const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     unsigned char gzipBytes[1024];
     size_t gzipSize = 0;
     unsigned bits = 0;
     int count = 0;
-    for (const char *const *chunk = chunks; *chunk != NULL; chunk++) {
-        for (const char *ch = *chunk; *ch != '\0' && *ch != '='; ch++) {
-            bits = (bits << 6) | (unsigned) (strchr(chars, *ch) - chars);
-            if (++count == 4) {
-                gzipBytes[gzipSize++] = (unsigned char) (bits >> 16);
-                gzipBytes[gzipSize++] = (unsigned char) (bits >> 8);
-                gzipBytes[gzipSize++] = (unsigned char) bits;
-                bits = 0;
-                count = 0;
-            }
+    for (const char *ch = text; *ch != '\0' && *ch != '='; ch++) {
+        bits = (bits << 6) | (unsigned) (strchr(chars, *ch) - chars);
+        if (++count == 4) {
+            gzipBytes[gzipSize++] = (unsigned char) (bits >> 16);
+            gzipBytes[gzipSize++] = (unsigned char) (bits >> 8);
+            gzipBytes[gzipSize++] = (unsigned char) bits;
+            bits = 0;
+            count = 0;
         }
     }
     if (count == 2) {
@@ -157,87 +155,56 @@ TEST(include_system_include)
 
 TEST(include_gzip_decode)
 {
-    static const char *const hello[] = {"H4sIAAAAAAAC/8tIzcnJBwCGphA2BQAAAA==", NULL};
-    static const char *const helloChunks[] = {"H4sIAAAAAAAC/8tIzcnJB", "wCGphA2BQAAAA==", NULL};
-    static const char *const empty[] = {"H4sIAAAAAAAA/wMAAAAAAAAAAAA=", NULL};
-    static const char *const stored[] = {"H4sIAAAAAAAE/wEFAPr/aGVsbG+GphA2BQAAAA==", NULL};
-    static const char *const fname[] = {"H4sICAAAAAAA/3gAAwAAAAAAAAAAAA==", NULL};
-    static const char *const fextra[] = {"H4sIBAAAAAAA/wIAQUIDAAAAAAAAAAAA", NULL};
-    static const char *const fcomment[] = {"H4sIEAAAAAAA/2hpAAMAAAAAAAAAAAA=", NULL};
-    static const char *const fhcrc[] = {"H4sIAgAAAAAA/5DJAwAAAAAAAAAAAA==", NULL};
-    static const char *const ftext[] = {"H4sIAQAAAAAA/wMAAAAAAAAAAAA=", NULL};
-    static const char *const twoBlocks[] = {"H4sIAAAAAAAA/wAAAP//AwAAAAAAAAAAAA==", NULL};
-
-    char *decoded = bsTestGzipDecode(hello);
-    ASSERT_STR_EQ(decoded, "hello");
-    free(decoded);
-
-    decoded = bsTestGzipDecode(helloChunks);
-    ASSERT_STR_EQ(decoded, "hello");
-    free(decoded);
-
-    decoded = bsTestGzipDecode(empty);
-    ASSERT_STR_EQ(decoded, "");
-    free(decoded);
-
-    decoded = bsTestGzipDecode(stored);
-    ASSERT_STR_EQ(decoded, "hello");
-    free(decoded);
-
-    decoded = bsTestGzipDecode(fname);
-    ASSERT_STR_EQ(decoded, "");
-    free(decoded);
-
-    decoded = bsTestGzipDecode(fextra);
-    ASSERT_STR_EQ(decoded, "");
-    free(decoded);
-
-    decoded = bsTestGzipDecode(fcomment);
-    ASSERT_STR_EQ(decoded, "");
-    free(decoded);
-
-    decoded = bsTestGzipDecode(fhcrc);
-    ASSERT_STR_EQ(decoded, "");
-    free(decoded);
-
-    decoded = bsTestGzipDecode(ftext);
-    ASSERT_STR_EQ(decoded, "");
-    free(decoded);
-
-    decoded = bsTestGzipDecode(twoBlocks);
-    ASSERT_STR_EQ(decoded, "");
-    free(decoded);
+    static const struct {
+        const char *gzip;
+        const char *text;
+    } cases[] = {
+        {"H4sIAAAAAAAC/8tIzcnJBwCGphA2BQAAAA==", "hello"},
+        {"H4sIAAAAAAAA/wMAAAAAAAAAAAA=", ""},
+        {"H4sIAAAAAAAE/wEFAPr/aGVsbG+GphA2BQAAAA==", "hello"}, /* a stored block */
+        {"H4sICAAAAAAA/3gAAwAAAAAAAAAAAA==", ""},             /* FNAME */
+        {"H4sIBAAAAAAA/wIAQUIDAAAAAAAAAAAA", ""},             /* FEXTRA */
+        {"H4sIEAAAAAAA/2hpAAMAAAAAAAAAAAA=", ""},             /* FCOMMENT */
+        {"H4sIAgAAAAAA/5DJAwAAAAAAAAAAAA==", ""},             /* FHCRC */
+        {"H4sIAQAAAAAA/wMAAAAAAAAAAAA=", ""},                 /* FTEXT */
+        {"H4sIAAAAAAAA/wAAAP//AwAAAAAAAAAAAA==", ""},         /* two blocks */
+    };
+    for (size_t ix = 0; ix < sizeof(cases) / sizeof(cases[0]); ix++) {
+        char *decoded = bsTestGzipDecode(cases[ix].gzip);
+        ASSERT_STR_EQ(decoded, cases[ix].text);
+        free(decoded);
+    }
 }
 
 
 TEST(include_gzip_invalid)
 {
-    static const char *const invalid[][3] = {
-        {"YWJj", NULL},
-        {"H4sIAAAAAAAC/8tIzcnJBwCGphA3BQAAAA==", NULL},
-        {"H4sIAAAAAAAC/8tIzcnJBwCGphA2BQAAAQ==", NULL},
-        {"H4sIAAAAAAAA/wcAAAAAAAAAAA==", NULL},
-        {"H4sIAAAAAAAA//UAAAAAAAAAAAAA", NULL},
-        {"H4sIIAAAAAAA/wMAAAAAAAAAAAA=", NULL},
-        {"H4sAAAAAAAAA/wMAAAAAAAAAAAA=", NULL},
-        {"HosIAAAAAAAA/wMAAAAAAAAAAAA=", NULL},
-        {"H4sIBAAAAAAA/wA=", NULL},
-        {"H4sICAAAAAAA/2Fi", NULL},
-        {"H4sIEAAAAAAA/2E=", NULL},
-        {"H4sIAgAAAAAA/wA=", NULL},
-        {"H4sIAAAAAAAA/wMAAAA=", NULL},
-        {"H4sIAAAAAAAA/wMAAAAAAAAAAA==", NULL},
-        {"H4sIAAAAAAAA/wEBAP//AAAAAAAAAAA=", NULL},
-        {"H4sIAAAAAAAA/wEFAPr/YQAAAAAAAAAA", NULL},
-        {"H4sIAAAAAAAA/8tIzcnJBwAAAAAAAAAAAA==", NULL},
-        {"H4sIAAAAAAAA/wAAAAAAAAAA", NULL},
-        {"H4sIBAAAAAAA/wA=", NULL},
-        {"H4sICAAAAAAA/2FiAAAAAAAAAAA=", NULL},
-        {"H4sIEAAAAAAA/wEBAQEB", NULL},
-        {"H4sIAgAAAAAA/wE=", NULL},
-        {NULL}
+    static const char *const invalid[] = {
+        "YWJj",
+        "H4sIAAAAAAAC/8tIzcnJBwCGphA3BQAAAA==",
+        "H4sIAAAAAAAC/8tIzcnJBwCGphA2BQAAAQ==",
+        "H4sIAAAAAAAA/wcAAAAAAAAAAA==",
+        "H4sIAAAAAAAA//UAAAAAAAAAAAAA",
+        "H4sIIAAAAAAA/wMAAAAAAAAAAAA=",
+        "H4sAAAAAAAAA/wMAAAAAAAAAAAA=",
+        "HosIAAAAAAAA/wMAAAAAAAAAAAA=",
+        "H4sIBAAAAAAA/wA=",
+        "H4sICAAAAAAA/2Fi",
+        "H4sIEAAAAAAA/2E=",
+        "H4sIAgAAAAAA/wA=",
+        "H4sIAAAAAAAA/wMAAAA=",
+        "H4sIAAAAAAAA/wMAAAAAAAAAAA==",
+        "H4sIAAAAAAAA/wEBAP//AAAAAAAAAAA=",
+        "H4sIAAAAAAAA/wEFAPr/YQAAAAAAAAAA",
+        "H4sIAAAAAAAA/8tIzcnJBwAAAAAAAAAAAA==",
+        "H4sIAAAAAAAA/wAAAAAAAAAA",
+        "H4sIBAAAAAAA/wA=",
+        "H4sICAAAAAAA/2FiAAAAAAAAAAA=",
+        "H4sIEAAAAAAA/wEBAQEB",
+        "H4sIAgAAAAAA/wE=",
+        NULL
     };
-    for (size_t ix = 0; invalid[ix][0] != NULL; ix++) {
+    for (size_t ix = 0; invalid[ix] != NULL; ix++) {
         char *decoded = bsTestGzipDecode(invalid[ix]);
         ASSERT_NULL(decoded);
         free(decoded);
