@@ -569,14 +569,14 @@ Milliseconds per 1000 runs, best of two, on one machine - lower is better:
 
 | Test             | BareScript (C) | BareScript (JS) | BareScript (PyC) | BareScript (Py) |
 | ---------------- | --------------:| ---------------:| ----------------:| ---------------:|
-| mandelbrot       |     **25,000** |         305,000 |          114,000 |       3,519,000 |
-| markdownElements |        **403** |             750 |              668 |           5,215 |
-| markdownParse    |      **2,616** |           3,028 |            7,296 |          20,960 |
-| qrcodeMatrix     |      **2,067** |          13,030 |            9,167 |         124,200 |
-| schemaParse      |        **156** |           1,224 |            1,260 |           9,192 |
-| schemaValidate   |        **204** |           1,960 |            1,072 |          14,440 |
-| urlDecode        |          **9** |              90 |              133 |             683 |
-| urlEncode        |          **7** |            50.5 |             57.5 |             394 |
+| mandelbrot       |     **24,000** |         303,000 |          114,000 |       3,421,000 |
+| markdownElements |        **392** |             740 |              665 |           5,227 |
+| markdownParse    |      **2,460** |           2,968 |            7,236 |          20,952 |
+| qrcodeMatrix     |      **1,833** |          12,800 |            9,033 |         124,800 |
+| schemaParse      |        **152** |           1,188 |            1,256 |           9,044 |
+| schemaValidate   |        **196** |           1,920 |            1,060 |          14,428 |
+| urlDecode        |        **9.5** |              90 |            131.5 |           683.5 |
+| urlEncode        |        **6.5** |            50.5 |             57.5 |             394 |
 
 The C runtime is the fastest BareScript runtime on all eight tests. (`BareScript (PyC)` is the
 Python implementation running its C extension for the runtime core, so it is not a pure-Python
@@ -588,10 +588,10 @@ The release build is about 1.35x the default build, milliseconds per test run:
 
 | Test                        | C (`-O2`) | C (release) |
 | --------------------------- | ---------:| -----------:|
-| mandelbrot, 1 run           |        38 |          25 |
-| markdownParse, 250 runs     |       845 |         659 |
-| qrcodeMatrix, 30 runs       |        88 |          65 |
-| schemaValidate, 250 runs    |        71 |          52 |
+| mandelbrot, 1 run           |        37 |          24 |
+| markdownParse, 250 runs     |       821 |         615 |
+| qrcodeMatrix, 30 runs       |        76 |          55 |
+| schemaValidate, 250 runs    |        72 |          49 |
 | urlDecode, 2000 runs        |        27 |          19 |
 
 And parsing is its own story, because the parser is an interpreted BareScript script in every
@@ -600,9 +600,9 @@ BareScript before it runs a single test:
 
 | Implementation            | Time  |
 | ------------------------- | -----:|
-| C (release)               | 0.30s |
-| C (`-O2`)                 | 0.39s |
-| JavaScript                | 1.85s |
+| C (release)               | 0.28s |
+| C (`-O2`)                 | 0.36s |
+| JavaScript                | 1.81s |
 | Python (with C extension) |  7.5s |
 | Python                    | 10.2s |
 
