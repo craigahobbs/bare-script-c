@@ -248,14 +248,15 @@ size_t bsUTF8Length(const char *data, size_t size)
 
 static BSString *bsStringAlloc(size_t size)
 {
-    BSString *string = bsAlloc(sizeof(BSString) + size);
+    BSString *string = bsAlloc(sizeof(BSString) + size + 1);
     string->refcount = 1;
-    string->interned = 0;
-    string->size = size;
+    string->flags = 0;
+    string->size = (uint32_t) size;
     string->length = 0;
     string->offsets = NULL;
     string->cursorIndex = 0;
     string->cursorOffset = 0;
+    string->data = (char *) (string + 1);
     string->data[size] = '\0';
     return string;
 }
@@ -287,7 +288,8 @@ BSValue bsStringNewAscii(const char *text, size_t size)
 {
     BSString *string = bsStringAlloc(size);
     memcpy(string->data, text, size);
-    string->length = size;
+    string->length = (uint32_t) size;
+    string->flags = BS_STR_ASCII;
     return bsStringTake(string);
 }
 
@@ -300,7 +302,7 @@ BSValue bsStringNewSize(const char *text, size_t size)
     BSString *string = bsStringAlloc(size);
     memcpy(string->data, text, size);
     size_t length = bsUTF8Length(string->data, size);
-    string->length = (length != SIZE_MAX ? length : size);
+    string->length = (uint32_t) (length != SIZE_MAX ? length : size);
     return bsStringTake(string);
 }
 
@@ -335,11 +337,12 @@ BSValue bsStringNewVFormat(const char *format, va_list args)
     BSString *string = bsStringAlloc((size_t) size);
     vsnprintf(string->data, (size_t) size + 1, format, args);
     if (bsUtf8IsAscii(string->data, (size_t) size)) {
-        string->length = (size_t) size;
+        string->length = (uint32_t) size;
+        string->flags = BS_STR_ASCII;
         return bsStringTake(string);
     }
     size_t length = bsUTF8Length(string->data, (size_t) size);
-    string->length = (length != SIZE_MAX ? length : (size_t) size);
+    string->length = (uint32_t) (length != SIZE_MAX ? length : (size_t) size);
     return bsStringTake(string);
 }
 
@@ -413,7 +416,10 @@ BSValue bsStringConcat(BSValue left, BSValue right)
     BSString *string = bsStringAlloc(leftSize + rightSize);
     memcpy(string->data, leftData, leftSize);
     memcpy(string->data + leftSize, rightData, rightSize);
-    string->length = leftLength + rightLength;
+    string->length = (uint32_t) (leftLength + rightLength);
+    if (leftLength == leftSize && rightLength == rightSize) {
+        string->flags = BS_STR_ASCII;
+    }
 
     bsRelease(leftText);
     bsRelease(rightText);
@@ -629,7 +635,48 @@ BSValue bsSBToValue(BSStringBuilder *sb)
 
 static BSArray *bsArrayPool;
 static unsigned bsArrayPoolCount;
-#define BS_ARRAY_POOL_MAX 1024
+#define BS_ARRAY_POOL_MAX 256
+
+/* Recycle common array value buffers so JSON arrays are not two mallocs every time */
+#define BS_ARRAY_BUF_CLASS_COUNT 4
+static const size_t bsArrayBufClass[BS_ARRAY_BUF_CLASS_COUNT] = {8, 16, 32, 64};
+static BSValue *bsArrayBufPool[BS_ARRAY_BUF_CLASS_COUNT];
+static unsigned bsArrayBufPoolCount[BS_ARRAY_BUF_CLASS_COUNT];
+#define BS_ARRAY_BUF_POOL_MAX 64
+
+static int bsArrayBufClassIndex(size_t capacity)
+{
+    for (int ix = 0; ix < BS_ARRAY_BUF_CLASS_COUNT; ix++) {
+        if (bsArrayBufClass[ix] == capacity) {
+            return ix;
+        }
+    }
+    return -1;
+}
+
+static BSValue *bsArrayBufAlloc(size_t capacity)
+{
+    int classIndex = bsArrayBufClassIndex(capacity);
+    if (classIndex >= 0 && bsArrayBufPool[classIndex] != NULL) {
+        BSValue *values = bsArrayBufPool[classIndex];
+        bsArrayBufPool[classIndex] = (BSValue *) values[0].u.ref;
+        bsArrayBufPoolCount[classIndex]--;
+        return values;
+    }
+    return bsAlloc(capacity * sizeof(BSValue));
+}
+
+static void bsArrayBufFree(BSValue *values, size_t capacity)
+{
+    int classIndex = bsArrayBufClassIndex(capacity);
+    if (classIndex >= 0 && bsArrayBufPoolCount[classIndex] < BS_ARRAY_BUF_POOL_MAX) {
+        values[0].u.ref = bsArrayBufPool[classIndex];
+        bsArrayBufPool[classIndex] = values;
+        bsArrayBufPoolCount[classIndex]++;
+        return;
+    }
+    free(values);
+}
 
 static BSArray *bsArrayAlloc(void)
 {
@@ -660,7 +707,7 @@ BSValue bsArrayNewCapacity(size_t capacity)
     array->refcount = 1;
     array->count = 0;
     array->capacity = capacity;
-    array->values = capacity != 0 ? bsAlloc(capacity * sizeof(BSValue)) : NULL;
+    array->values = capacity != 0 ? bsArrayBufAlloc(capacity) : NULL;
 
     BSValue value;
     value.type = BS_ARRAY;
@@ -698,7 +745,12 @@ void bsArrayReserve(BSValue value, size_t capacity)
         while (newCapacity < capacity) {
             newCapacity *= 2;
         }
-        array->values = bsRealloc(array->values, newCapacity * sizeof(BSValue));
+        BSValue *grown = bsArrayBufAlloc(newCapacity);
+        if (array->values != NULL) {
+            memcpy(grown, array->values, array->count * sizeof(BSValue));
+            bsArrayBufFree(array->values, array->capacity);
+        }
+        array->values = grown;
         array->capacity = newCapacity;
     }
 }
@@ -800,7 +852,7 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
 
 static BSObject *bsObjectPool;
 static unsigned bsObjectPoolCount;
-#define BS_OBJECT_POOL_MAX 8192
+#define BS_OBJECT_POOL_MAX 1024
 
 static BSObject *bsObjectAlloc(void)
 {
@@ -865,7 +917,7 @@ static uint32_t bsObjectPriorityState = 0x9E3779B9u;
 /* Recycled treap nodes - BareScript allocates and frees objects constantly */
 static BSObjectNode *bsObjectNodePool;
 static unsigned bsObjectNodePoolCount;
-#define BS_OBJECT_NODE_POOL_MAX 8192
+#define BS_OBJECT_NODE_POOL_MAX 1024
 
 static BSObjectNode *bsObjectNodeAlloc(void)
 {
@@ -903,11 +955,14 @@ static uint32_t bsObjectPriority(void)
 /*
  * Interned object keys
  *
- * Short keys are interned so lookup can compare BSString pointers instead of memcmp. The intern
- * table holds one reference; interned strings live until process exit.
+ * Short C-string keys (script names, bsObjectSet) are interned so lookup can compare pointers.
+ * JSON keys reuse an interned string when the name is already interned and otherwise stay ordinary
+ * strings, so untrusted unique keys cannot grow the table without bound. The table holds one
+ * reference; interned strings live until process exit. New intern entries stop at COUNT_MAX.
  */
 #define BS_INTERN_MAX 64
 #define BS_INTERN_INITIAL 32
+#define BS_INTERN_COUNT_MAX 65536
 
 typedef struct {
     BSString *string;
@@ -1007,11 +1062,14 @@ BSValue bsStringIntern(const char *data, size_t size)
         found->refcount++;
         return bsStringTake(found);
     }
+    if (bsInternCount >= BS_INTERN_COUNT_MAX) {
+        return ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
+    }
     if ((bsInternCount + 1) * 4 >= (bsInternMask + 1) * 3) {
         bsInternGrow();
     }
     BSValue value = ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
-    value.u.string->interned = 1;
+    value.u.string->flags |= BS_STR_INTERNED;
     value.u.string->refcount++;
     for (size_t probe = 0;; probe++) {
         size_t slot = (hash + probe) & bsInternMask;
@@ -1073,7 +1131,7 @@ static void bsObjectLookupGrow(BSObject *object);
 
 static void bsObjectLookupPut(BSObject *object, BSObjectNode *node)
 {
-    if (object->lookup == NULL || node->key == NULL || !node->key->interned) {
+    if (object->lookup == NULL || node->key == NULL || (node->key->flags & BS_STR_INTERNED) == 0) {
         return;
     }
     if ((object->count + 1) * 2 > object->lookupMask + 1) {
@@ -1172,7 +1230,7 @@ static int bsObjectPackedFind(const BSObject *object, const char *key, size_t si
                 return (int) ix;
             }
         } else if (object->smallKeys[ix]->size == size &&
-                   memcmp(object->smallKeys[ix]->data, key, size) == 0) {
+                   (size == 0 || memcmp(object->smallKeys[ix]->data, key, size) == 0)) {
             return (int) ix;
         }
     }
@@ -1186,9 +1244,6 @@ static BSValue *bsObjectFindValue(BSObject *object, const char *key, size_t size
     if (object->packed) {
         if (interned == NULL && size <= BS_INTERN_MAX) {
             interned = bsInternLookup(key, size);
-            if (interned == NULL) {
-                return NULL;
-            }
         }
         int found = bsObjectPackedFind(object, key, size, interned);
         return found >= 0 ? &object->smallValues[found] : NULL;
@@ -1315,6 +1370,9 @@ static void bsObjectBuildTreap(BSObject *object)
     for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
         bsObjectTreapLink(object, node);
     }
+    if (object->lookup == NULL) {
+        bsObjectLookupGrow(object);
+    }
 }
 
 
@@ -1381,11 +1439,11 @@ static void bsObjectTreapInsert(BSObject *object, BSValue key, BSValue item)
 
 
 /* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created.
- * Short keys must already be interned. Objects at or under BS_OBJECT_SMALL stay a list. */
+ * Objects at or under BS_OBJECT_SMALL stay a list. */
 static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
 {
     if (object->packed) {
-        BSString *interned = (key.type == BS_STRING && key.u.string->interned) ? key.u.string : NULL;
+        BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
         const char *keyData = bsStringData(key);
         size_t keySize = bsStringSize(key);
         int found = bsObjectPackedFind(object, keyData, keySize, interned);
@@ -1405,7 +1463,7 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
         bsObjectSpill(object);
     }
     if (object->root == NULL) {
-        BSString *interned = (key.type == BS_STRING && key.u.string->interned) ? key.u.string : NULL;
+        BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
         const char *keyData = bsStringData(key);
         size_t keySize = bsStringSize(key);
         for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
@@ -1452,19 +1510,15 @@ static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t s
 {
     if (interned == NULL && size <= BS_INTERN_MAX) {
         interned = bsInternLookup(key, size);
-        if (interned == NULL) {
-            return NULL;
+        if (interned != NULL) {
+            key = interned->data;
+            size = interned->size;
         }
-        key = interned->data;
-        size = interned->size;
     } else if (interned != NULL) {
         key = interned->data;
         size = interned->size;
     }
-    if (interned != NULL && object->count > BS_OBJECT_SMALL) {
-        if (object->lookup == NULL) {
-            bsObjectLookupGrow(object);
-        }
+    if (interned != NULL && object->count > BS_OBJECT_SMALL && object->lookup != NULL) {
         return bsObjectLookupGet(object, interned);
     }
     if (object->count <= BS_OBJECT_SMALL) {
@@ -1473,7 +1527,8 @@ static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t s
                 if (node->key == interned) {
                     return node;
                 }
-            } else if (node->key->size == size && (size == 0 || memcmp(node->key->data, key, size) == 0)) {
+            } else if (node->key->size == size &&
+                       (size == 0 || memcmp(node->key->data, key, size) == 0)) {
                 return node;
             }
         }
@@ -1554,7 +1609,9 @@ static void bsObjectNodesFree(BSObject *object)
 void bsObjectSetString(BSValue value, BSValue key, BSValue item)
 {
     BSObject *object = value.u.object;
-    if (key.type == BS_STRING && !key.u.string->interned && key.u.string->size <= BS_INTERN_MAX) {
+    if (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) == 0 &&
+        key.u.string->size <= BS_INTERN_MAX) {
+        /* Intern short keys so interned lookup stays pointer-only. New intern entries stop at cap. */
         BSValue interned = bsStringIntern(key.u.string->data, key.u.string->size);
         bsObjectInsert(object, interned, item);
         bsRelease(interned);
@@ -1591,7 +1648,7 @@ bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out)
     if (object.type != BS_OBJECT) {
         return false;
     }
-    BSString *interned = (key.type == BS_STRING && key.u.string->interned) ? key.u.string : NULL;
+    BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
     BSValue *found = bsObjectFindValue(object.u.object, bsStringData(key), bsStringSize(key), interned);
     if (found == NULL) {
         return false;
@@ -1626,7 +1683,7 @@ bool bsObjectHasString(BSValue value, BSValue key)
     if (value.type != BS_OBJECT) {
         return false;
     }
-    BSString *interned = (key.type == BS_STRING && key.u.string->interned) ? key.u.string : NULL;
+    BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
     return bsObjectFindValue(value.u.object, bsStringData(key), bsStringSize(key), interned) != NULL;
 }
 
@@ -1644,11 +1701,10 @@ bool bsObjectDelete(BSValue value, const char *key)
     BSString *interned = NULL;
     if (size <= BS_INTERN_MAX) {
         interned = bsInternLookup(key, size);
-        if (interned == NULL) {
-            return false;
+        if (interned != NULL) {
+            key = interned->data;
+            size = interned->size;
         }
-        key = interned->data;
-        size = interned->size;
     }
     if (object->packed) {
         int found = bsObjectPackedFind(object, key, size, interned);
@@ -1885,7 +1941,9 @@ void bsReleaseDestroyed(BSValue value)
         for (size_t ix = 0; ix < array->count; ix++) {
             bsRelease(array->values[ix]);
         }
-        free(array->values);
+        if (array->values != NULL) {
+            bsArrayBufFree(array->values, array->capacity);
+        }
         bsArrayRecycle(array);
         break;
     }

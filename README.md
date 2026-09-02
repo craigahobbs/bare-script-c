@@ -270,10 +270,11 @@ The reference counting rules are uniform:
   it keeps it beyond the call.
 - Container accessors (`bsArrayGet`, `bsObjectGet`) return *borrowed* references.
 
-**Strings** are immutable, reference-counted UTF-8 buffers that cache their code point length, so
-an all-ASCII string - the common case - indexes by byte. Construction skips the UTF-8 walk when
-the buffer has no high bit. Non-ASCII indexing keeps a cursor and, after a backward lookup, a
-sparse stride-16 offset table. String library functions index by Unicode code point.
+**Strings** are immutable, reference-counted UTF-8 buffers. The header is 40 bytes plus a pointer
+to a NUL-terminated payload allocated with it. They cache their code point length, so an
+all-ASCII string - the common case - indexes by byte. Construction skips the UTF-8 walk when the
+buffer has no high bit. Non-ASCII indexing keeps a cursor and, after a backward lookup, a sparse
+stride-16 offset table. String library functions index by Unicode code point.
 
 **Arrays** are vectors of values with amortized growth.
 
@@ -284,12 +285,11 @@ matters because BareScript code routinely inserts keys in sorted order - the wor
 plain binary search tree. Nodes are additionally threaded on a doubly-linked list in insertion
 order, so objects iterate in insertion order (matching the reference implementations, whose
 objects are JavaScript objects and Python dictionaries) while the tree still provides the sorted
-traversal that JSON encoding and value comparison are defined over. Keys of at most 64 bytes are
-interned, so a missing short key is an intern-table miss and a hit can compare interned
-`BSString` pointers instead of `memcmp`. The intern table stores each key's hash so a collision
-skips `memcmp`; interned names on the compiled script skip hashing entirely. Objects of more than
-32 keys keep an interned-pointer hash table for lookup. The intern table holds one reference;
-interned strings live until process exit.
+traversal that JSON encoding and value comparison are defined over. Short keys of at most 64 bytes are interned, so a hit can compare interned `BSString` pointers
+instead of `memcmp`. The intern table is capped so untrusted unique keys cannot grow it without
+bound. Interned names on the compiled script skip hashing entirely. Objects of
+more than 32 keys keep an interned-pointer hash table for lookup. The intern table holds one
+reference; interned strings live until process exit.
 
 Allocation failure is fatal: there is no useful way for a script runtime to continue without
 memory, and threading an out-of-memory result through every value operation would obscure the code

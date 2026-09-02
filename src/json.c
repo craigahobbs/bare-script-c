@@ -299,6 +299,21 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result)
     }
     parser->offset++;
 
+    /* Unescaped strings copy once from the input; escapes fall through to the builder */
+    size_t ix = parser->offset;
+    while (ix < parser->size) {
+        unsigned char ch = (unsigned char) parser->text[ix];
+        if (ch == '"') {
+            *result = bsStringNewSize(parser->text + parser->offset, ix - parser->offset);
+            parser->offset = ix + 1;
+            return true;
+        }
+        if (ch == '\\' || ch < 0x20) {
+            break;
+        }
+        ix++;
+    }
+
     BSStringBuilder sb;
     bsSBInit(&sb);
     char utf8[4];
@@ -405,6 +420,7 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
         *result = array;
         return true;
     }
+    bsArrayReserve(array, 8);
     while (true) {
         BSValue item;
         if (!bsJSONDecodeValue(parser, depth + 1, &item)) {
@@ -599,8 +615,33 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
 }
 
 
+/*
+ * Intern the closed set of script-model object keys before decoding JSON. JSON insert reuses
+ * interned names so later interned lookup stays pointer-only. Unique payload keys stay ordinary
+ * strings.
+ */
+static void bsJSONInternModelKeys(void)
+{
+    static int done;
+    if (done) {
+        return;
+    }
+    done = 1;
+    static const char *const keys[] = {
+        "args", "async", "binary", "expr", "function", "group", "include", "includes",
+        "jump", "label", "lastArgArray", "left", "lineCount", "lineNumber", "name",
+        "number", "op", "return", "right", "scriptLines", "scriptName", "statements",
+        "string", "system", "unary", "url", "variable", NULL
+    };
+    for (const char *const *key = keys; *key != NULL; key++) {
+        bsRelease(bsStringIntern(*key, strlen(*key)));
+    }
+}
+
+
 BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t *errorOffset)
 {
+    bsJSONInternModelKeys();
     BSJSONParser parser = {text, size, 0, NULL, 0};
     BSValue result;
     if (!bsJSONDecodeValue(&parser, 0, &result)) {

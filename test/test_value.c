@@ -404,6 +404,36 @@ TEST(value_object)
 }
 
 
+TEST(value_object_json_keys)
+{
+    /* JSON short keys that are not already interned still round-trip */
+    const char *json = "{\"zzUniqueKey\":1,\"zzOtherKey\":2}";
+    BSValue object = bsJSONDecode(json, strlen(json), NULL);
+    ASSERT_INT_EQ(bsObjectCount(object), 2);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "zzUniqueKey").u.number, 1);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "zzOtherKey").u.number, 2);
+    ASSERT_TRUE(bsObjectDelete(object, "zzUniqueKey"));
+    ASSERT_FALSE(bsObjectHas(object, "zzUniqueKey"));
+    ASSERT_TRUE(bsObjectHas(object, "zzOtherKey"));
+    bsRelease(object);
+}
+
+
+TEST(value_array_buffer_pool)
+{
+    /* Overflow the recycled array-buffer size class so a free returns memory */
+    enum { COUNT = 70 };
+    BSValue arrays[COUNT];
+    for (int ix = 0; ix < COUNT; ix++) {
+        arrays[ix] = bsArrayNewCapacity(8);
+        bsArrayPush(arrays[ix], bsNumber(ix));
+    }
+    for (int ix = 0; ix < COUNT; ix++) {
+        bsRelease(arrays[ix]);
+    }
+}
+
+
 TEST(value_object_intern)
 {
     /* Enough unique short keys to grow the intern table (32 slots, grow at 75%) */
@@ -419,6 +449,7 @@ TEST(value_object_intern)
     ASSERT_FALSE(bsObjectHas(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "a"));
+    ASSERT_TRUE(object.u.object->lookup != NULL);
     ASSERT_TRUE(bsObjectDelete(object, "k0"));
     ASSERT_FALSE(bsObjectHas(object, "k0"));
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
@@ -432,6 +463,7 @@ TEST(value_object_intern)
 
     /* Interned keys from the object compare by pointer; a 4-byte key hits the word hash */
     BSValue keys = bsObjectKeys(object);
+    ASSERT_TRUE((bsArrayGet(keys, 0).u.string->flags & BS_STR_INTERNED) != 0);
     ASSERT_TRUE(bsObjectHasString(object, bsArrayGet(keys, 0)));
     bsRelease(keys);
     bsObjectSet(object, "abcd", bsNumber(4));
@@ -1009,5 +1041,25 @@ TEST(value_json_wrapper)
     bsObjectSet(object, "a", bsNumber(1));
     ASSERT_VALUE_STRING(bsValueJSON(object, 0), "{\"a\":1}");
     ASSERT_VALUE_STRING(bsValueJSON(object, 2), "{\n  \"a\": 1\n}");
+    bsRelease(object);
+}
+
+
+TEST(value_object_intern_cap)
+{
+    /* Past the intern-table cap, new short keys stay uninterned and still look up */
+    BSValue object = bsObjectNew();
+    char key[16];
+    for (int ix = 0; ix < 66000; ix++) {
+        snprintf(key, sizeof(key), "c%05d", ix);
+        bsObjectSet(object, key, bsNumber(ix));
+    }
+    ASSERT_INT_EQ(bsObjectCount(object), 66000);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "c00000").u.number, 0);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "c65999").u.number, 65999);
+    ASSERT_TRUE(bsObjectDelete(object, "c65999"));
+    ASSERT_FALSE(bsObjectHas(object, "c65999"));
+    /* An interned name that is not a key of this object misses the pointer hash and scans */
+    ASSERT_FALSE(bsObjectHas(object, "a"));
     bsRelease(object);
 }

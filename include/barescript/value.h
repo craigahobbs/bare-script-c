@@ -69,16 +69,20 @@ typedef struct BSValue {
 } BSValue;
 
 
+/* String flags */
+#define BS_STR_INTERNED 0x01u /* the intern table holds a reference */
+#define BS_STR_ASCII    0x02u /* every byte is ASCII; length == size */
+
 /* An immutable, reference-counted UTF-8 string */
 struct BSString {
     int32_t refcount;
-    uint8_t interned; /* 1 if the intern table holds a reference; sits in padding after refcount */
-    size_t size;      /* the string's size, in bytes */
-    size_t length;    /* the string's length, in Unicode code points */
-    uint32_t *offsets; /* sparse code-point-to-byte map, or NULL; see bsStringOffsetSlow */
+    uint8_t flags;
+    uint32_t size;         /* bytes */
+    uint32_t length;       /* Unicode code points */
     uint32_t cursorIndex;  /* last code-point index passed to bsStringOffsetSlow */
     uint32_t cursorOffset; /* corresponding byte offset */
-    char data[1];     /* the NUL-terminated UTF-8 string data */
+    uint32_t *offsets;     /* sparse code-point-to-byte map, or NULL */
+    char *data;            /* NUL-terminated UTF-8; owned payload follows the header */
 };
 
 

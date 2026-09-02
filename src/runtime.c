@@ -1111,22 +1111,22 @@ static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions
         bsObjectSetString(includes, includeKey, bsBoolean(true));
         bsRelease(includeKey);
 
-        /* Get the include script text */
-        char *includeText = NULL;
+        /* Get the include script text. Bundled models are decoded in place; do not copy. */
+        const char *includeText = NULL;
+        char *includeOwned = NULL;
         size_t includeSize = 0;
         if (system) {
-            const char *systemText = bsSystemIncludeGet(bsStringData(includeUrl));
-            if (systemText != NULL) {
-                includeSize = strlen(systemText);
-                includeText = bsAlloc(includeSize + 1);
-                memcpy(includeText, systemText, includeSize + 1);
+            includeText = bsSystemIncludeGet(bsStringData(includeUrl));
+            if (includeText != NULL) {
+                includeSize = strlen(includeText);
             }
         } else if (options->fetchFn != NULL) {
             BSFetchRequest request;
             memset(&request, 0, sizeof(request));
             request.url = bsStringData(includeUrl);
             request.headers = bsNull();
-            includeText = options->fetchFn(&request, &includeSize, options->fetchData);
+            includeOwned = options->fetchFn(&request, &includeSize, options->fetchData);
+            includeText = includeOwned;
         }
         if (includeText == NULL) {
             bsErrorSetStatement(options, script, statement, "Include of \"%s\" failed", bsStringData(includeUrl));
@@ -1144,7 +1144,7 @@ static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions
             BSValue model = bsJSONDecode(includeText, includeSize, NULL);
             includeScript = bsScriptFromModel(model, bsStringData(includeUrl));
             bsRelease(model);
-            free(includeText);
+            free(includeOwned);
             if (includeScript == NULL) {
                 bsErrorSetStatement(options, script, statement, "Include of \"%s\" failed",
                                     bsStringData(includeUrl));
@@ -1156,7 +1156,7 @@ static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions
             memset(&parserError, 0, sizeof(parserError));
             includeScript = bsParseScript(includeText, includeSize, 1, bsStringData(includeUrl),
                                           &parserError);
-            free(includeText);
+            free(includeOwned);
             if (includeScript == NULL) {
                 BSValue message = bsRetain(parserError.message);
                 bsErrorSet(options, "%s", bsStringData(message));
