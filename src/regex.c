@@ -1861,9 +1861,15 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     state.trailCount = 0;
     state.trailCapacity = sizeof(state.trailInline) / sizeof(state.trailInline[0]);
 
-    /* Only the pattern's own capture groups need clearing, not the whole capture array */
-    size_t groupBytes = compiled->groupCount * sizeof(BSRegexSpan);
-    size_t matchedBytes = compiled->groupCount * sizeof(bool);
+    /*
+     * Only the pattern's own capture groups need clearing, not the whole capture array - and only
+     * once: every capture write is on the trail, and a failed attempt unwinds all of them.
+     */
+    memset(match->groups, 0, compiled->groupCount * sizeof(BSRegexSpan));
+    memset(match->matched, 0, compiled->groupCount * sizeof(bool));
+    match->begin = 0;
+    match->end = 0;
+    match->groupCount = compiled->groupCount;
     size_t last = compiled->anchored ? start : subject->length;
     for (size_t pos = start; pos <= last; pos++) {
         /* Skip positions whose code point cannot begin a match */
@@ -1880,11 +1886,6 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
                 break;
             }
         }
-        memset(match->groups, 0, groupBytes);
-        memset(match->matched, 0, matchedBytes);
-        match->begin = 0;
-        match->end = 0;
-        match->groupCount = compiled->groupCount;
         RxCont end = {RX_CONT_END, NULL, 0, 0, NULL};
         state.depth = 0;
         state.steps = 0;
