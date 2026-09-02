@@ -9,7 +9,8 @@
 # $arg level: Optional (default is 6). The compression level, 0 (store) through 9 (best).
 # $return: The compressed gzip byte array, or null if compression fails
 function gzipCompress(bytes, level):
-    if !gzipIsByteArray(bytes):
+    crc = gzipCrc32Bytes(bytes)
+    if crc == null:
         systemLogDebug('gzip.bare: gzipCompress - Invalid "bytes" argument')
         return null
     endif
@@ -21,7 +22,6 @@ function gzipCompress(bytes, level):
     endif
 
     deflateBytes = gzipDeflate(bytes, arrayGet(gzipChainByLevel, level))
-    crc = gzipCrc32(bytes)
     xfl = if(level == 1, 4, if(level == 9, 2, 0))
     header = [31, 139, 8, 0, 0, 0, 0, 0, xfl, 255]
     trailer = gzipU32Bytes(crc)
@@ -58,7 +58,7 @@ function gzipIsByteArray(value):
         return false
     endif
     for byte in value:
-        if systemType(byte) != 'number' || byte != mathFloor(byte) || byte < 0 || byte > 255:
+        if systemType(byte) != 'number' || byte < 0 || byte > 255 || byte != (byte | 0):
             return false
         endif
     endfor
@@ -106,6 +106,23 @@ function gzipCrc32(bytes):
 endfunction
 
 
+# CRC-32 that also validates a byte array. Returns null if bytes is not an array of 0-255 integers.
+function gzipCrc32Bytes(bytes):
+    if systemType(bytes) != 'array':
+        return null
+    endif
+    crc = -1
+    table = gzipCrc32Table
+    for byte in bytes:
+        if systemType(byte) != 'number' || byte < 0 || byte > 255 || byte != (byte | 0):
+            return null
+        endif
+        crc = arrayGet(table, (crc ^ byte) & 255) ^ ((crc >> 8) & 16777215)
+    endfor
+    return crc ^ -1
+endfunction
+
+
 # Little-endian unsigned 32-bit bytes of a (possibly signed-int32) value
 function gzipU32Bytes(value):
     return [value & 255, (value >> 8) & 255, (value >> 16) & 255, (value >> 24) & 255]
@@ -132,10 +149,7 @@ endfunction
 
 
 function gzipReadBits(reader, n):
-    if arrayGet(reader, 4):
-        return 0
-    endif
-    if !n:
+    if arrayGet(reader, 4) || !n:
         return 0
     endif
 
@@ -143,25 +157,35 @@ function gzipReadBits(reader, n):
     shift = 0
     bytes = arrayGet(reader, 0)
     length = arrayLength(bytes)
+    offset = arrayGet(reader, 1)
+    current = arrayGet(reader, 2)
+    bitCount = arrayGet(reader, 3)
     while n > 0:
-        bitCount = arrayGet(reader, 3)
         if !bitCount:
-            offset = arrayGet(reader, 1)
             if offset >= length:
+                arraySet(reader, 1, offset)
+                arraySet(reader, 2, current)
+                arraySet(reader, 3, bitCount)
                 arraySet(reader, 4, true)
                 return 0
             endif
-            arraySet(reader, 2, arrayGet(bytes, offset))
-            arraySet(reader, 1, offset + 1)
+            current = arrayGet(bytes, offset)
+            offset = offset + 1
             bitCount = 8
         endif
-        take = mathMin(n, bitCount)
-        value = value | ((arrayGet(reader, 2) & ((1 << take) - 1)) << shift)
-        arraySet(reader, 2, arrayGet(reader, 2) >> take)
-        arraySet(reader, 3, bitCount - take)
+        take = n
+        if take > bitCount:
+            take = bitCount
+        endif
+        value = value | ((current & ((1 << take) - 1)) << shift)
+        current = current >> take
+        bitCount = bitCount - take
         shift = shift + take
         n = n - take
     endwhile
+    arraySet(reader, 1, offset)
+    arraySet(reader, 2, current)
+    arraySet(reader, 3, bitCount)
     return value
 endfunction
 
@@ -172,21 +196,26 @@ endfunction
 
 
 function gzipWriteBits(writer, value, n):
+    bytes = arrayGet(writer, 0)
+    current = arrayGet(writer, 1)
+    bitCount = arrayGet(writer, 2)
     while n > 0:
-        bitCount = arrayGet(writer, 2)
-        take = mathMin(n, 8 - bitCount)
-        arraySet(writer, 1, arrayGet(writer, 1) | ((value & ((1 << take) - 1)) << bitCount))
-        value = mathFloor(value / (1 << take))
+        take = 8 - bitCount
+        if n < take:
+            take = n
+        endif
+        current = current | ((value & ((1 << take) - 1)) << bitCount)
+        value = value >> take
         n = n - take
         bitCount = bitCount + take
         if bitCount == 8:
-            arrayPush(arrayGet(writer, 0), arrayGet(writer, 1))
-            arraySet(writer, 1, 0)
-            arraySet(writer, 2, 0)
-        else:
-            arraySet(writer, 2, bitCount)
+            arrayPush(bytes, current)
+            current = 0
+            bitCount = 0
         endif
     endwhile
+    arraySet(writer, 1, current)
+    arraySet(writer, 2, bitCount)
 endfunction
 
 
@@ -212,7 +241,7 @@ function gzipBitReverse(code, length):
     ix = 0
     while ix < length:
         result = result * 2 + (code & 1)
-        code = mathFloor(code / 2)
+        code = code >> 1
         ix = ix + 1
     endwhile
     return result
@@ -283,20 +312,42 @@ function gzipHuffmanDecode(reader, table):
     count = arrayGet(table, 0)
     first = arrayGet(table, 1)
     symbols = arrayGet(table, 2)
+    bytes = arrayGet(reader, 0)
+    length = arrayLength(bytes)
+    offset = arrayGet(reader, 1)
+    current = arrayGet(reader, 2)
+    bitCount = arrayGet(reader, 3)
     code = 0
     bits = 1
     while bits <= 15:
-        code = code * 2 + gzipReadBits(reader, 1)
-        if arrayGet(reader, 4):
-            return null
+        if !bitCount:
+            if offset >= length:
+                arraySet(reader, 1, offset)
+                arraySet(reader, 2, current)
+                arraySet(reader, 3, bitCount)
+                arraySet(reader, 4, true)
+                return null
+            endif
+            current = arrayGet(bytes, offset)
+            offset = offset + 1
+            bitCount = 8
         endif
+        code = code * 2 + (current & 1)
+        current = current >> 1
+        bitCount = bitCount - 1
         n = arrayGet(count, bits)
         base = arrayGet(first, bits)
         if n && code >= base && code < base + n:
+            arraySet(reader, 1, offset)
+            arraySet(reader, 2, current)
+            arraySet(reader, 3, bitCount)
             return arrayGet(arrayGet(symbols, bits), code - base)
         endif
         bits = bits + 1
     endwhile
+    arraySet(reader, 1, offset)
+    arraySet(reader, 2, current)
+    arraySet(reader, 3, bitCount)
     arraySet(reader, 4, true)
     return null
 endfunction
@@ -330,6 +381,10 @@ endfunction
 
 gzipStaticLit = gzipHuffmanBuild(gzipStaticLitLengthsNew())
 gzipStaticDist = gzipHuffmanBuild(gzipStaticDistLengthsNew())
+gzipStaticLitCode = arrayGet(gzipStaticLit, 3)
+gzipStaticLitLen = arrayGet(gzipStaticLit, 4)
+gzipStaticDistCode = arrayGet(gzipStaticDist, 3)
+gzipStaticDistLen = arrayGet(gzipStaticDist, 4)
 
 gzipLengthBase = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, \
     67, 83, 99, 115, 131, 163, 195, 227, 258]
@@ -340,13 +395,22 @@ gzipDistExtra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 
 gzipCodeLengthOrder = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
 
 
-function gzipLengthCode(length):
+function gzipLengthCodeTableNew():
+    table = arrayNewSize(259, 0)
     ix = 0
-    while ix < 28 && arrayGet(gzipLengthBase, ix + 1) <= length:
-        ix = ix + 1
+    length = 3
+    while length <= 258:
+        while ix < 28 && arrayGet(gzipLengthBase, ix + 1) <= length:
+            ix = ix + 1
+        endwhile
+        arraySet(table, length, ix)
+        length = length + 1
     endwhile
-    return ix
+    return table
 endfunction
+
+
+gzipLengthCodeOf = gzipLengthCodeTableNew()
 
 
 function gzipDistCode(dist):
@@ -364,6 +428,7 @@ endfunction
 
 
 function gzipInflateCodes(reader, output, litTable, distTable):
+    outLen = arrayLength(output)
     while !arrayGet(reader, 4):
         symbol = gzipHuffmanDecode(reader, litTable)
         if symbol == null:
@@ -371,6 +436,7 @@ function gzipInflateCodes(reader, output, litTable, distTable):
         endif
         if symbol < 256:
             arrayPush(output, symbol)
+            outLen = outLen + 1
         elif symbol == 256:
             return true
         elif symbol > 285:
@@ -383,15 +449,16 @@ function gzipInflateCodes(reader, output, litTable, distTable):
                 return false
             endif
             dist = arrayGet(gzipDistBase, distSymbol) + gzipReadBits(reader, arrayGet(gzipDistExtra, distSymbol))
-            if arrayGet(reader, 4) || dist < 1 || dist > arrayLength(output):
+            if arrayGet(reader, 4) || dist < 1 || dist > outLen:
                 return false
             endif
-            src = arrayLength(output) - dist
+            src = outLen - dist
             ix = 0
             while ix < length:
                 arrayPush(output, arrayGet(output, src + ix))
                 ix = ix + 1
             endwhile
+            outLen = outLen + length
         endif
     endwhile
     return false
@@ -490,11 +557,7 @@ function gzipInflateStored(reader, output):
     if offset + length > arrayLength(bytes):
         return false
     endif
-    ix = 0
-    while ix < length:
-        arrayPush(output, arrayGet(bytes, offset + ix))
-        ix = ix + 1
-    endwhile
+    arrayExtend(output, arraySlice(bytes, offset, offset + length))
     arraySet(reader, 1, offset + length)
     return true
 endfunction
@@ -606,48 +669,40 @@ gzipHashMask = 32767
 gzipChainByLevel = [0, 1, 4, 8, 16, 16, 32, 64, 128, 256]
 
 
-function gzipHash3(bytes, ix):
-    return ((arrayGet(bytes, ix) * 31 + arrayGet(bytes, ix + 1)) * 31 + arrayGet(bytes, ix + 2)) & gzipHashMask
-endfunction
-
-
 function gzipEmitMatch(writer, length, dist):
-    lenIx = gzipLengthCode(length)
-    gzipHuffmanWrite(writer, gzipStaticLit, 257 + lenIx)
+    lenIx = arrayGet(gzipLengthCodeOf, length)
+    gzipWriteBits(writer, arrayGet(gzipStaticLitCode, 257 + lenIx), \
+        arrayGet(gzipStaticLitLen, 257 + lenIx))
     gzipWriteBits(writer, length - arrayGet(gzipLengthBase, lenIx), arrayGet(gzipLengthExtra, lenIx))
     distIx = gzipDistCode(dist)
-    gzipHuffmanWrite(writer, gzipStaticDist, distIx)
+    gzipWriteBits(writer, arrayGet(gzipStaticDistCode, distIx), arrayGet(gzipStaticDistLen, distIx))
     gzipWriteBits(writer, dist - arrayGet(gzipDistBase, distIx), arrayGet(gzipDistExtra, distIx))
 endfunction
 
 
 function gzipDeflateStored(bytes):
-    writer = gzipWriterNew()
+    out = []
     n = arrayLength(bytes)
-    ix = 0
     if !n:
-        gzipWriteBits(writer, 1, 1)
-        gzipWriteBits(writer, 0, 2)
-        gzipWriteFlush(writer)
-        arrayExtend(arrayGet(writer, 0), [0, 0, 255, 255])
-        return arrayGet(writer, 0)
+        arrayExtend(out, [1, 0, 0, 255, 255])
+        return out
     endif
+    ix = 0
     while ix < n:
-        length = mathMin(65535, n - ix)
-        gzipWriteBits(writer, if(ix + length == n, 1, 0), 1)
-        gzipWriteBits(writer, 0, 2)
-        gzipWriteFlush(writer)
+        length = n - ix
+        if length > 65535:
+            length = 65535
+        endif
         nlen = length ^ 65535
-        arrayExtend(arrayGet(writer, 0), [length & 255, mathFloor(length / 256), nlen & 255, \
-            mathFloor(nlen / 256)])
-        k = 0
-        while k < length:
-            arrayPush(arrayGet(writer, 0), arrayGet(bytes, ix + k))
-            k = k + 1
-        endwhile
+        arrayPush(out, if(ix + length == n, 1, 0))
+        arrayPush(out, length & 255)
+        arrayPush(out, length >> 8)
+        arrayPush(out, nlen & 255)
+        arrayPush(out, nlen >> 8)
+        arrayExtend(out, arraySlice(bytes, ix, ix + length))
         ix = ix + length
     endwhile
-    return arrayGet(writer, 0)
+    return out
 endfunction
 
 
@@ -657,31 +712,44 @@ function gzipDeflate(bytes, chain):
     endif
 
     writer = gzipWriterNew()
-    gzipWriteBits(writer, 1, 1)
-    gzipWriteBits(writer, 1, 2)
+    gzipWriteBits(writer, 3, 3)
 
     n = arrayLength(bytes)
+    window = gzipWindow
+    minMatch = gzipMinMatch
+    maxMatch = gzipMaxMatch
+    hashMask = gzipHashMask
+    litCode = gzipStaticLitCode
+    litLen = gzipStaticLitLen
     hashTable = arrayNewSize(gzipHashSize, -1)
     prev = arrayNewSize(n, -1)
     ix = 0
     while ix < n:
-        if ix + gzipMinMatch <= n:
-            h = gzipHash3(bytes, ix)
-            bestLen = gzipMinMatch - 1
+        if ix + minMatch <= n:
+            h = ((arrayGet(bytes, ix) * 31 + arrayGet(bytes, ix + 1)) * 31 + \
+                arrayGet(bytes, ix + 2)) & hashMask
+            bestLen = minMatch - 1
             bestDist = 0
             pos = arrayGet(hashTable, h)
             chainIx = 0
-            while pos >= 0 && chainIx < chain && ix - pos <= gzipWindow:
-                maxLen = mathMin(gzipMaxMatch, n - ix)
-                matchLen = 0
-                while matchLen < maxLen && arrayGet(bytes, ix + matchLen) == arrayGet(bytes, pos + matchLen):
-                    matchLen = matchLen + 1
-                endwhile
-                if matchLen > bestLen:
-                    bestLen = matchLen
-                    bestDist = ix - pos
-                    if bestLen == gzipMaxMatch:
-                        break
+            maxLen = n - ix
+            if maxLen > maxMatch:
+                maxLen = maxMatch
+            endif
+            while pos >= 0 && chainIx < chain && ix - pos <= window:
+                if arrayGet(bytes, pos) == arrayGet(bytes, ix) && \
+                        arrayGet(bytes, pos + bestLen) == arrayGet(bytes, ix + bestLen):
+                    matchLen = 0
+                    while matchLen < maxLen && \
+                            arrayGet(bytes, ix + matchLen) == arrayGet(bytes, pos + matchLen):
+                        matchLen = matchLen + 1
+                    endwhile
+                    if matchLen > bestLen:
+                        bestLen = matchLen
+                        bestDist = ix - pos
+                        if bestLen == maxLen:
+                            break
+                        endif
                     endif
                 endif
                 pos = arrayGet(prev, pos)
@@ -689,13 +757,14 @@ function gzipDeflate(bytes, chain):
             endwhile
             arraySet(prev, ix, arrayGet(hashTable, h))
             arraySet(hashTable, h, ix)
-            if bestLen >= gzipMinMatch:
+            if bestLen >= minMatch:
                 gzipEmitMatch(writer, bestLen, bestDist)
                 k = 1
                 while k < bestLen:
                     j = ix + k
-                    if j + gzipMinMatch <= n:
-                        hj = gzipHash3(bytes, j)
+                    if j + minMatch <= n:
+                        hj = ((arrayGet(bytes, j) * 31 + arrayGet(bytes, j + 1)) * 31 + \
+                            arrayGet(bytes, j + 2)) & hashMask
                         arraySet(prev, j, arrayGet(hashTable, hj))
                         arraySet(hashTable, hj, j)
                     endif
@@ -705,11 +774,12 @@ function gzipDeflate(bytes, chain):
                 continue
             endif
         endif
-        gzipHuffmanWrite(writer, gzipStaticLit, arrayGet(bytes, ix))
+        literal = arrayGet(bytes, ix)
+        gzipWriteBits(writer, arrayGet(litCode, literal), arrayGet(litLen, literal))
         ix = ix + 1
     endwhile
 
-    gzipHuffmanWrite(writer, gzipStaticLit, 256)
+    gzipWriteBits(writer, arrayGet(litCode, 256), arrayGet(litLen, 256))
     gzipWriteFlush(writer)
     return arrayGet(writer, 0)
 endfunction
