@@ -720,7 +720,22 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
  * likewise trusted - LOAD_SLOT and STORE_SLOT are only emitted in a function body, which always
  * runs with its own slot array. A runtime error is detected where it can arise: at entry, after
  * each call, and at the statements that raise one themselves.
+ *
+ * With GNU C, each handler jumps straight to the next one through a label table, so the branch
+ * predictor sees one indirect branch per opcode rather than a single shared switch branch.
  */
+#if defined(__GNUC__) || defined(__clang__)
+#define BS_THREADED_DISPATCH 1
+#endif
+
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wgnu-label-as-value"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+
 BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
                   bool builtins)
 {
@@ -754,69 +769,95 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
 
     const uint32_t *insts = code->inst;
     size_t pc = 0;
+    uint32_t inst;
+    uint8_t op;
+    uint32_t arg;
+
+#ifdef BS_THREADED_DISPATCH
+    /* Indexed by opcode - the order is the BS_OP_ enumeration's */
+    static const void *const dispatch[] = {
+        &&op_LOAD_NULL, &&op_LOAD_TRUE, &&op_LOAD_FALSE, &&op_LOAD_CONST, &&op_LOAD_SLOT,
+        &&op_LOAD_NAME, &&op_STORE_SLOT, &&op_STORE_NAME, &&op_POP, &&op_DUP, &&op_JUMP,
+        &&op_JUMP_FALSE, &&op_JUMP_TRUE, &&op_JUMP_UNDEF, &&op_RETURN, &&op_CALL_NAME, &&op_CALL_SLOT,
+        &&op_ADD, &&op_SUB, &&op_MUL, &&op_DIV, &&op_MOD, &&op_POW, &&op_EQ, &&op_NE, &&op_LT,
+        &&op_LE, &&op_GT, &&op_GE, &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG,
+        &&op_NOT, &&op_BNOT, &&op_FUNCTION, &&op_INCLUDE, &&op_STMT
+    };
+#define BS_CASE(name) op_##name:
+#define BS_NEXT() \
+    do { \
+        inst = insts[pc++]; \
+        op = BS_OP(inst); \
+        arg = BS_ARG(inst); \
+        goto *dispatch[op]; \
+    } while (0)
+    BS_NEXT();
+#else
+#define BS_CASE(name) case BS_OP_##name:
+#define BS_NEXT() break
     for (;;) {
-        uint32_t inst = insts[pc++];
-        uint8_t op = BS_OP(inst);
-        uint32_t arg = BS_ARG(inst);
-
+        inst = insts[pc++];
+        op = BS_OP(inst);
+        arg = BS_ARG(inst);
         switch (op) {
-        case BS_OP_LOAD_NULL:
+#endif
+        BS_CASE(LOAD_NULL)
             stack[sp++] = bsNull();
-            break;
+            BS_NEXT();
 
-        case BS_OP_LOAD_TRUE:
+        BS_CASE(LOAD_TRUE)
             stack[sp++] = bsBoolean(true);
-            break;
+            BS_NEXT();
 
-        case BS_OP_LOAD_FALSE:
+        BS_CASE(LOAD_FALSE)
             stack[sp++] = bsBoolean(false);
-            break;
+            BS_NEXT();
 
-        case BS_OP_LOAD_CONST:
+        BS_CASE(LOAD_CONST)
             stack[sp++] = bsRetain(code->constants[arg]);
-            break;
+            BS_NEXT();
 
-        case BS_OP_LOAD_SLOT: {
+        BS_CASE(LOAD_SLOT) {
             BSValue value = slots[arg];
             if (BS_IS_UNSET(value)) {
                 value = bsLookupName(code->slotNames[arg], options, scope);
             }
             stack[sp++] = bsRetain(value);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_LOAD_NAME:
+        BS_CASE(LOAD_NAME)
             stack[sp++] = bsRetain(bsLookupName(code->constants[arg], options, scope));
-            break;
+            BS_NEXT();
 
-        case BS_OP_STORE_SLOT: {
+        BS_CASE(STORE_SLOT) {
             BSValue previous = slots[arg];
             slots[arg] = stack[--sp];
             if (!BS_IS_UNSET(previous)) {
                 bsRelease(previous);
             }
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_STORE_NAME:
+        BS_CASE(STORE_NAME)
             bsObjectSetString(options->globals, code->constants[arg], stack[--sp]);
-            break;
+            BS_NEXT();
 
-        case BS_OP_POP:
+        BS_CASE(POP)
             bsRelease(stack[--sp]);
-            break;
+            BS_NEXT();
 
-        case BS_OP_DUP:
+        BS_CASE(DUP)
             stack[sp] = bsRetain(stack[sp - 1]);
             sp++;
-            break;
+            BS_NEXT();
 
-        case BS_OP_JUMP:
+        BS_CASE(JUMP)
             bsJumpCover(code, arg, script, hasCoverage, coverage);
             pc = arg;
-            break;
+            BS_NEXT();
 
-        case BS_OP_JUMP_FALSE: {
+        BS_CASE(JUMP_FALSE) {
             BSValue value = stack[--sp];
             bool take = !bsValueBoolean(value);
             bsRelease(value);
@@ -824,10 +865,10 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
                 bsJumpCover(code, arg, script, hasCoverage, coverage);
                 pc = arg;
             }
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_JUMP_TRUE: {
+        BS_CASE(JUMP_TRUE) {
             BSValue value = stack[--sp];
             bool take = bsValueBoolean(value);
             bsRelease(value);
@@ -835,10 +876,10 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
                 bsJumpCover(code, arg, script, hasCoverage, coverage);
                 pc = arg;
             }
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_JUMP_UNDEF: {
+        BS_CASE(JUMP_UNDEF) {
             /* A trap past the chunk's return carries the jump statement's line in a data word */
             int line = (pc < code->count && BS_OP(insts[pc]) == BS_OP_ARGC) ? (int) BS_ARG(insts[pc]) :
                 bsCodeLine(code, pc - 1);
@@ -847,7 +888,7 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
             goto fail;
         }
 
-        case BS_OP_RETURN: {
+        BS_CASE(RETURN) {
             BSValue result = stack[--sp];
             if (stack != stackInline) {
                 free(stack);
@@ -855,8 +896,8 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
             return result;
         }
 
-        case BS_OP_CALL_NAME:
-        case BS_OP_CALL_SLOT: {
+        BS_CASE(CALL_NAME)
+        BS_CASE(CALL_SLOT) {
             size_t callPc = pc - 1;
             size_t argCount = BS_ARG(insts[pc++]);
             BSValue *callArgs = stack + (sp - argCount);
@@ -870,10 +911,10 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
             if (options->error.type == BS_STRING) {
                 goto fail;
             }
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_ADD: {
+        BS_CASE(ADD) {
             BSValue right = stack[--sp];
             BSValue left = stack[--sp];
             if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
@@ -883,10 +924,10 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
                 bsRelease(left);
                 bsRelease(right);
             }
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_SUB: {
+        BS_CASE(SUB) {
             BSValue right = stack[--sp];
             BSValue left = stack[--sp];
             if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
@@ -898,55 +939,55 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
                 bsRelease(left);
                 bsRelease(right);
             }
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_MUL: {
+        BS_CASE(MUL) {
             BSValue right = stack[--sp];
             BSValue left = stack[--sp];
             stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
                 bsArithmetic(left.u.number * right.u.number) : bsNull();
             bsRelease(left);
             bsRelease(right);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_DIV: {
+        BS_CASE(DIV) {
             BSValue right = stack[--sp];
             BSValue left = stack[--sp];
             stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
                 bsArithmetic(left.u.number / right.u.number) : bsNull();
             bsRelease(left);
             bsRelease(right);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_MOD: {
+        BS_CASE(MOD) {
             BSValue right = stack[--sp];
             BSValue left = stack[--sp];
             stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
                 bsArithmetic(fmod(left.u.number, right.u.number)) : bsNull();
             bsRelease(left);
             bsRelease(right);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_POW: {
+        BS_CASE(POW) {
             BSValue right = stack[--sp];
             BSValue left = stack[--sp];
             stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
                 bsArithmetic(pow(left.u.number, right.u.number)) : bsNull();
             bsRelease(left);
             bsRelease(right);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_EQ:
-        case BS_OP_NE:
-        case BS_OP_LT:
-        case BS_OP_LE:
-        case BS_OP_GT:
-        case BS_OP_GE: {
+        BS_CASE(EQ)
+        BS_CASE(NE)
+        BS_CASE(LT)
+        BS_CASE(LE)
+        BS_CASE(GT)
+        BS_CASE(GE) {
             BSValue right = stack[--sp];
             BSValue left = stack[--sp];
             int cmp;
@@ -980,44 +1021,44 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
                 break;
             }
             stack[sp++] = bsBoolean(result);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_BAND:
-        case BS_OP_BOR:
-        case BS_OP_BXOR:
-        case BS_OP_SHL:
-        case BS_OP_SHR: {
+        BS_CASE(BAND)
+        BS_CASE(BOR)
+        BS_CASE(BXOR)
+        BS_CASE(SHL)
+        BS_CASE(SHR) {
             BSValue right = stack[--sp];
             BSValue left = stack[--sp];
             stack[sp++] = bsBitwise(op, left, right);
             bsRelease(left);
             bsRelease(right);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_NEG: {
+        BS_CASE(NEG) {
             BSValue value = stack[--sp];
             stack[sp++] = value.type == BS_NUMBER ? bsNumber(-value.u.number) : bsNull();
             bsRelease(value);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_NOT: {
+        BS_CASE(NOT) {
             BSValue value = stack[--sp];
             stack[sp++] = bsBoolean(!bsValueBoolean(value));
             bsRelease(value);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_BNOT: {
+        BS_CASE(BNOT) {
             BSValue value = stack[--sp];
             stack[sp++] = bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull();
             bsRelease(value);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_FUNCTION: {
+        BS_CASE(FUNCTION) {
             BSFunctionDef *def = script->functions[arg];
             BSScriptFunction *scriptFunction = bsAlloc(sizeof(BSScriptFunction));
             scriptFunction->script = bsScriptRetain(script);
@@ -1025,16 +1066,16 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
             BSValue function = bsFunctionNew(bsStringData(def->name), bsScriptFunctionCall,
                                              scriptFunction, bsScriptFunctionFree);
             bsObjectSetString(options->globals, def->name, function);
-            break;
         }
+        BS_NEXT();
 
-        case BS_OP_INCLUDE:
+        BS_CASE(INCLUDE)
             if (!bsExecuteInclude(script, &code->includes[arg], bsCodeLine(code, pc - 1), options)) {
                 goto fail;
             }
-            break;
+            BS_NEXT();
 
-        case BS_OP_STMT:
+        BS_CASE(STMT)
             if (countStatements) {
                 options->statementCount++;
                 if (options->maxStatements > 0 && options->statementCount > options->maxStatements) {
@@ -1047,12 +1088,16 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
                     bsRecordCoverage(script, code->cover[arg], code->coverLines[arg], coverage);
                 }
             }
-            break;
+            BS_NEXT();
 
+#ifndef BS_THREADED_DISPATCH
         default: /* GCOV_EXCL_LINE - emit never produces an unknown opcode */
             break; /* GCOV_EXCL_LINE */
         }
     }
+#endif
+#undef BS_CASE
+#undef BS_NEXT
 
 fail:
     while (sp != 0) {
