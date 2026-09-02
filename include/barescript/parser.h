@@ -39,7 +39,7 @@ typedef struct BSInclude {
 
 
 /*
- * Call-site cache of a global function lookup
+ * Per-site cache of a global name lookup - a CALL_NAME function or a LOAD_NAME variable
  *
  * The cache points at the globals object's value slot for the name, so an assignment to the name
  * is seen through the slot. The slot is re-resolved when the globals object's structural
@@ -49,7 +49,7 @@ typedef struct BSCallCache {
     BSValue *slot;      /* the value slot in the globals object, or NULL if the name is absent */
     uint32_t gen;       /* the globals object's structural generation the slot was resolved at */
     uint32_t epoch;     /* the options instance the slot was resolved for */
-    uint32_t nameIndex; /* the function name's constant index */
+    uint32_t nameIndex; /* the name's constant index */
 } BSCallCache;
 
 
@@ -58,8 +58,8 @@ typedef struct BSCallCache {
  *
  * Instructions are (opcode << 24) | arg. Constants are interned names, string literals, and
  * numbers. STMT operands index cover[], borrowed statement models from the parser output.
- * CALL_NAME operands index caches[], one per call site. stackMax is the deepest value stack the
- * chunk can reach, computed at emit time, so the interpreter allocates the stack once.
+ * CALL_NAME and LOAD_NAME operands index caches[], one per site. stackMax is the deepest value
+ * stack the chunk can reach, computed at emit time, so the interpreter allocates the stack once.
  */
 typedef struct BSCode {
     uint32_t *inst;

@@ -225,7 +225,7 @@ typedef struct {
     BSInclude *includes;
     size_t includeCount;
     size_t includeCap;
-    uint32_t *callNames;  /* per CALL_NAME site, the name's constant index */
+    uint32_t *callNames;  /* per CALL_NAME or LOAD_NAME site, the name's constant index */
     size_t callCount;
     size_t callCap;
     int depth;            /* the value stack depth after the last emitted instruction */
@@ -364,6 +364,18 @@ static void bsSlotAdd(BSEmit *e, BSValue name)
 }
 
 
+/* Allocate a global-name cache site for a CALL_NAME or LOAD_NAME; the operand is its index */
+static uint32_t bsEmitSite(BSEmit *e, BSValue name)
+{
+    if (e->callCount == e->callCap) {
+        e->callCap = e->callCap != 0 ? e->callCap * 2 : 8;
+        e->callNames = bsRealloc(e->callNames, e->callCap * sizeof(uint32_t));
+    }
+    e->callNames[e->callCount] = bsEmitConst(e, name);
+    return (uint32_t) e->callCount++;
+}
+
+
 static void bsEmitJump(BSEmit *e, uint8_t op, BSValue label)
 {
     /* "jumpif (!expr)" - fold the NOT into the jump, unless another jump lands between them */
@@ -497,7 +509,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
             if (slot >= 0) {
                 bsEmitInst(e, BS_OP_LOAD_SLOT, (uint32_t) slot);
             } else {
-                bsEmitInst(e, BS_OP_LOAD_NAME, bsEmitConst(e, interned));
+                bsEmitInst(e, BS_OP_LOAD_NAME, bsEmitSite(e, interned));
             }
             bsRelease(interned);
         }
@@ -525,14 +537,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
         if (slot >= 0) {
             bsEmitInst(e, BS_OP_CALL_SLOT, (uint32_t) slot);
         } else {
-            /* The operand is the call site's cache index; the cache carries the name */
-            if (e->callCount == e->callCap) {
-                e->callCap = e->callCap != 0 ? e->callCap * 2 : 8;
-                e->callNames = bsRealloc(e->callNames, e->callCap * sizeof(uint32_t));
-            }
-            e->callNames[e->callCount] = bsEmitConst(e, interned);
-            bsEmitInst(e, BS_OP_CALL_NAME, (uint32_t) e->callCount);
-            e->callCount++;
+            bsEmitInst(e, BS_OP_CALL_NAME, bsEmitSite(e, interned));
         }
         /* The following word is the argument count (never dispatched) */
         bsEmitInst(e, BS_OP_ARGC, (uint32_t) argCount);

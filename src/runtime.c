@@ -246,18 +246,6 @@ static BSValue bsArithmetic(double result)
 }
 
 
-static BSValue bsLookupName(BSValue name, BSOptions *options, BSScope *scope)
-{
-    if (scope != NULL && scope->slots == NULL && scope->object.type == BS_OBJECT) {
-        BSValue found;
-        if (bsObjectLookupString(scope->object, name, &found)) {
-            return found;
-        }
-    }
-    return bsObjectGetString(options->globals, name);
-}
-
-
 static BSValue bsAddSlow(BSValue left, BSValue right)
 {
     if (left.type == BS_STRING || right.type == BS_STRING) {
@@ -498,6 +486,25 @@ BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *op
 
 
 /*
+ * Look up a global name through its site cache. Returns a borrowed value, or a null value if the
+ * name is absent.
+ */
+static inline BSValue bsGlobalLookup(BSCallCache *cache, BSValue name, BSOptions *options)
+{
+    if (options->globals.type != BS_OBJECT) {
+        return bsNull();
+    }
+    BSObject *globals = options->globals.u.object;
+    if (cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
+        cache->slot = bsObjectValuePtrString(options->globals, name);
+        cache->gen = globals->generation;
+        cache->epoch = options->cacheEpoch;
+    }
+    return cache->slot != NULL ? *cache->slot : bsNull();
+}
+
+
+/*
  * Call the function named by a CALL_NAME or CALL_SLOT instruction. "pc" is the call instruction's
  * index, for error line numbers. Returns the owned result.
  */
@@ -516,7 +523,8 @@ static BSValue bsCall(const BSCode *code, size_t pc, uint8_t op, uint32_t arg, c
             }
         }
         if (function.type == BS_NULL) {
-            function = bsLookupName(name, options, scope);
+            /* An unassigned local falls through to the globals, as does an unset slot below */
+            function = bsObjectGetString(options->globals, name);
         }
     } else {
         BSCallCache *cache = &code->caches[arg];
@@ -527,17 +535,8 @@ static BSValue bsCall(const BSCode *code, size_t pc, uint8_t op, uint32_t arg, c
                 function = found;
             }
         }
-        if (function.type == BS_NULL && options->globals.type == BS_OBJECT) {
-            /* The call site caches the globals object's value slot for the name */
-            BSObject *globals = options->globals.u.object;
-            if (cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
-                cache->slot = bsObjectValuePtrString(options->globals, name);
-                cache->gen = globals->generation;
-                cache->epoch = options->cacheEpoch;
-            }
-            if (cache->slot != NULL) {
-                function = *cache->slot;
-            }
+        if (function.type == BS_NULL) {
+            function = bsGlobalLookup(cache, name, options);
         }
     }
 
@@ -820,15 +819,23 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
         BS_CASE(LOAD_SLOT) {
             BSValue value = slots[arg];
             if (BS_IS_UNSET(value)) {
-                value = bsLookupName(code->slotNames[arg], options, scope);
+                value = bsObjectGetString(options->globals, code->slotNames[arg]);
             }
             stack[sp++] = bsRetain(value);
         }
         BS_NEXT();
 
-        BS_CASE(LOAD_NAME)
-            stack[sp++] = bsRetain(bsLookupName(code->constants[arg], options, scope));
-            BS_NEXT();
+        BS_CASE(LOAD_NAME) {
+            BSCallCache *cache = &code->caches[arg];
+            BSValue name = code->constants[cache->nameIndex];
+            BSValue value;
+            if (scope == NULL || scope->slots != NULL || scope->object.type != BS_OBJECT ||
+                !bsObjectLookupString(scope->object, name, &value)) {
+                value = bsGlobalLookup(cache, name, options);
+            }
+            stack[sp++] = bsRetain(value);
+        }
+        BS_NEXT();
 
         BS_CASE(STORE_SLOT) {
             BSValue previous = slots[arg];
