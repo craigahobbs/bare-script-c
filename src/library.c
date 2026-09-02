@@ -1251,7 +1251,7 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
             }
         }
         if (ix < 10) {
-            bsObjectSetString(groups, bsMatchKeyDigit[ix], text);
+            bsObjectAppend(groups, bsMatchKeyDigit[ix], text);
         } else {
             char key[8];
             size_t keySize = 0;
@@ -1266,7 +1266,9 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
                 key[ixKey] = key[keySize - 1 - ixKey];
                 key[keySize - 1 - ixKey] = swap;
             }
-            bsObjectSet(groups, key, text);
+            BSValue keyValue = bsStringIntern(key, keySize);
+            bsObjectAppend(groups, keyValue, text);
+            bsRelease(keyValue);
         }
 
         /* A named group is keyed by both its number and its name - an interned string already */
@@ -1277,9 +1279,9 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
     }
 
     BSValue model = bsObjectNew();
-    bsObjectSetString(model, bsMatchKeyIndex, bsNumber((double) match->begin));
-    bsObjectSetString(model, bsMatchKeyInput, bsRetain(string));
-    bsObjectSetString(model, bsMatchKeyGroups, groups);
+    bsObjectAppend(model, bsMatchKeyIndex, bsNumber((double) match->begin));
+    bsObjectAppend(model, bsMatchKeyInput, bsRetain(string));
+    bsObjectAppend(model, bsMatchKeyGroups, groups);
     return model;
 }
 

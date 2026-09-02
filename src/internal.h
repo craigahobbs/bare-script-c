@@ -177,6 +177,12 @@ bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out);
 BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size);
 BSValue *bsObjectValuePtrString(BSValue object, BSValue key);
 
+/*
+ * Append a key known to be absent, skipping the duplicate scan. Takes ownership of "item" and
+ * retains "key". For building an object from keys that are distinct by construction.
+ */
+void bsObjectAppend(BSValue object, BSValue key, BSValue item);
+
 /* Intern a short string. Strings longer than 64 bytes are not interned. Returns an owned value. */
 BSValue bsStringIntern(const char *data, size_t size);
 

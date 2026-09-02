@@ -1510,6 +1510,18 @@ static void bsObjectTreapInsert(BSObject *object, BSValue key, BSValue item)
 }
 
 
+/* Index the list once it outgrows the insertion-order scan; keys matched by content need the treap */
+static void bsObjectListGrew(BSObject *object)
+{
+    if (object->count > BS_OBJECT_SMALL && object->u.tree.lookup == NULL) {
+        bsObjectLookupGrow(object);
+        if (object->uninterned) {
+            bsObjectBuildTreap(object);
+        }
+    }
+}
+
+
 /* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created.
  * Objects at or under BS_OBJECT_SMALL stay a list. */
 static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
@@ -1567,12 +1579,32 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
         }
     }
     bsObjectNodeCreate(key, item, object);
-    if (object->count > BS_OBJECT_SMALL) {
-        bsObjectLookupGrow(object);
-        if (object->uninterned) {
-            bsObjectBuildTreap(object);
+    bsObjectListGrew(object);
+}
+
+
+void bsObjectAppend(BSValue value, BSValue key, BSValue item)
+{
+    BSObject *object = value.u.object;
+    if (object->packed) {
+        if (object->count < BS_OBJECT_PACKED) {
+            if (key.type != BS_STRING || (key.u.string->flags & BS_STR_INTERNED) == 0) {
+                object->uninterned = 1;
+            }
+            object->u.small.keys[object->count] = bsRetain(key).u.string;
+            object->u.small.values[object->count] = item;
+            object->count++;
+            object->generation++;
+            return;
         }
+        bsObjectSpill(object);
     }
+    if (object->u.tree.root != NULL) {
+        bsObjectTreapInsert(object, key, item);
+        return;
+    }
+    bsObjectNodeCreate(key, item, object);
+    bsObjectListGrew(object);
 }
 
 
