@@ -414,11 +414,10 @@ script models and embedded in the library. Including one costs a JSON decode rat
 the parser.
 
 The models are gzip-compressed at level 9 by `gzip.bare` (`gzipCompress` / `gzipUncompress`, byte
-arrays in and out) and base64-encoded by `base64.bare` (`base64Encode` / `base64Decode`) for
-embedding as C string literals. That compresses about 598 KB of include library source to 267 KB
-of embedded text (45%). `bin/includeSource.bare` serializes the object and array structure itself,
-in `objectKeys` (insertion) order, and delegates only leaf values to `jsonStringify` so number
-formatting and string escaping stay exactly what the runtime produces.
+arrays in and out) and embedded as `unsigned char` arrays. That compresses about 598 KB of include
+library source to about 201 KB of gzip. `bin/includeSource.bare` serializes the object and array
+structure itself, in `objectKeys` (insertion) order, and delegates only leaf values to
+`jsonStringify` so number formatting and string escaping stay exactly what the runtime produces.
 
 `src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
 fresh clone builds with no bootstrap. `make includes` regenerates them by running

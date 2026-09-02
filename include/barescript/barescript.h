@@ -18,11 +18,13 @@
 #include "regex.h"
 #include "runtime.h"
 #include "value.h"
+#include "export.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+BS_VISIBILITY_BEGIN
 
 /* The BareScript C library version */
 #define BARESCRIPT_VERSION "1.0.0"
@@ -30,9 +32,10 @@ extern "C" {
 /* Get the BareScript C library version string */
 const char *bsVersion(void);
 
-/* The BareScript command-line interface entry point */
+/* The BareScript command-line interface entry point. Linked with the CLI, not the dylib. */
 int bsMain(int argc, char **argv);
 
+BS_VISIBILITY_END
 
 #ifdef __cplusplus
 }

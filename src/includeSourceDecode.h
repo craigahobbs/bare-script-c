@@ -2,7 +2,7 @@
    https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE */
 
 /*
- * The bundled include library decoder - gzip+base64, internal to the include source implementation
+ * The bundled include library decoder - gzip, internal to the include source implementation
  */
 
 #ifndef BARESCRIPT_INCLUDE_SOURCE_DECODE_H

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "barescript/barescript.h"
 #include "barescript/options.h"
 
 #include "internal.h"
@@ -17,6 +18,12 @@
 #ifdef BARESCRIPT_CURL
 #include <curl/curl.h>
 #endif
+
+
+const char *bsVersion(void)
+{
+    return BARESCRIPT_VERSION;
+}
 
 
 bool bsUrlIsURL(const char *url)

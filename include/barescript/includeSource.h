@@ -6,8 +6,8 @@
 /*
  * The bundled BareScript include library
  *
- * Each include is embedded as its parser-compiled JSON script model, gzip-compressed and
- * base64-encoded. An accessor decodes its include's model on first use and caches it; the
+ * Each include is embedded as its parser-compiled JSON script model, gzip-compressed.
+ * An accessor decodes its include's model on first use and caches it; the
  * decoded text is released by bsIncludeCleanup.
  */
 
@@ -16,9 +16,13 @@
 
 #include <stddef.h>
 
+#include "export.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+BS_VISIBILITY_BEGIN
 
 
 /* The number of bundled include library scripts */
@@ -28,7 +32,8 @@ extern "C" {
 /* A bundled include library script */
 typedef struct BSIncludeSource {
     const char *name;
-    const char *const *compressed;
+    const unsigned char *gzip;
+    size_t gzipSize;
     char *decoded;
 } BSIncludeSource;
 
@@ -142,6 +147,8 @@ const char *bsIncludeSourceUnittestMock(void);
 /* url.bare - the decoded JSON script model */
 const char *bsIncludeSourceUrl(void);
 
+
+BS_VISIBILITY_END
 
 #ifdef __cplusplus
 }

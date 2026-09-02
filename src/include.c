@@ -5,8 +5,7 @@
  * The bundled BareScript include library
  *
  * Each include library script is embedded in the library as its parser-compiled JSON script model,
- * gzip-compressed and base64-encoded (see bin/includeSource.bare). A model is decoded on first use
- * and cached.
+ * gzip-compressed (see bin/includeSource.bare). A model is decoded on first use and cached.
  */
 
 #include <stdbool.h>
@@ -330,7 +329,7 @@ static void bsBase64Init(void)
 }
 
 
-static unsigned char *bsBase64Decode(const char *text, size_t size, size_t *outSize)
+unsigned char *bsBase64Decode(const char *text, size_t size, size_t *outSize)
 {
     if (!bsBase64Ready) {
         bsBase64Init();
@@ -368,7 +367,7 @@ static unsigned char *bsBase64Decode(const char *text, size_t size, size_t *outS
 }
 
 
-static char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
+char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
 {
     if (srcSize < 10) {
         return NULL;
@@ -426,7 +425,7 @@ static char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
 }
 
 
-static char *bsConcatChunks(const char *const *chunks, size_t *outSize)
+char *bsConcatChunks(const char *const *chunks, size_t *outSize)
 {
     size_t total = 0;
     for (const char *const *chunk = chunks; *chunk != NULL; chunk++) {
@@ -450,19 +449,11 @@ const char *bsIncludeSourceDecode(BSIncludeSource *source)
     if (source->decoded != NULL) {
         return source->decoded;
     }
-
-    size_t encodedSize = 0;
-    char *encoded = bsConcatChunks(source->compressed, &encodedSize);
-    size_t gzipSize = 0;
-    unsigned char *gzipBytes = bsBase64Decode(encoded, encodedSize, &gzipSize);
-    free(encoded);
-    if (gzipBytes == NULL) {
+    if (source->gzip == NULL || source->gzipSize == 0) {
         return NULL;
     }
-    char *decoded = bsGzipUncompress(gzipBytes, gzipSize);
-    free(gzipBytes);
-    source->decoded = decoded;
-    return decoded;
+    source->decoded = bsGzipUncompress(source->gzip, source->gzipSize);
+    return source->decoded;
 }
 
 

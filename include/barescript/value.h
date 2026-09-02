@@ -25,9 +25,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "export.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+BS_VISIBILITY_BEGIN
 
 
 /* The BareScript value types */
@@ -366,6 +370,8 @@ int64_t bsDatetimeToday(void);
 /* Call a function value. Returns an owned reference; check bsErrorGet(options) for runtime errors. */
 BSValue bsFunctionCall(BSValue function, const BSValue *args, size_t argCount, BSOptions *options);
 
+
+BS_VISIBILITY_END
 
 #ifdef __cplusplus
 }

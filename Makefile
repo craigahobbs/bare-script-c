@@ -50,7 +50,7 @@ CC_SUPPORTS = $(shell echo 'int main(void){return 0;}' | \
 # ELF targets, because the symbol could be interposed at load time - which also blocks inlining
 # across the library. Nothing here is meant to be interposed. Mach-O binds these calls directly
 # already, and Apple's clang rejects the flag, so the probe leaves it out there.
-SO_CFLAGS := -fPIC $(call CC_SUPPORTS,-fno-semantic-interposition)
+SO_CFLAGS := -fPIC -fvisibility=hidden $(call CC_SUPPORTS,-fno-semantic-interposition)
 
 
 # Optional libcurl support for the HTTP fetch function
@@ -71,7 +71,8 @@ INCLUDE_SOURCE_H := $(INC_DIR)/barescript/includeSource.h
 
 # Sources
 LIB_SRCS := $(sort $(wildcard $(SRC_DIR)/*.c))
-LIB_SRCS := $(filter-out $(SRC_DIR)/main.c,$(LIB_SRCS))
+LIB_SRCS := $(filter-out $(SRC_DIR)/main.c $(SRC_DIR)/bare.c,$(LIB_SRCS))
+CLI_SRCS := $(SRC_DIR)/bare.c $(SRC_DIR)/main.c
 TEST_SRCS := $(sort $(wildcard $(TEST_DIR)/*.c))
 
 
@@ -79,7 +80,9 @@ TEST_SRCS := $(sort $(wildcard $(TEST_DIR)/*.c))
 OBJ_DIR := $(BUILD_DIR)/obj
 COVER_DIR := $(BUILD_DIR)/cover
 LIB_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(LIB_SRCS))
+CLI_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(CLI_SRCS))
 COVER_OBJS := $(patsubst $(SRC_DIR)/%.c,$(COVER_DIR)/%.o,$(LIB_SRCS)) \
+    $(COVER_DIR)/bare.o \
     $(patsubst $(TEST_DIR)/%.c,$(COVER_DIR)/test-%.o,$(TEST_SRCS))
 TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test-%.o,$(TEST_SRCS))
 
@@ -180,9 +183,9 @@ $(LIB_A): $(LIB_OBJS)
 	rm -f $@
 	ar rcs $@ $^
 
-$(CLI_BIN): $(OBJ_DIR)/main.o $(LIB_SO)
+$(CLI_BIN): $(CLI_OBJS) $(LIB_SO)
 	@mkdir -p $(dir $@)
-	$(CC) $(OPT_CFLAGS) -o $@ $(OBJ_DIR)/main.o -L$(BUILD_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
+	$(CC) $(OPT_CFLAGS) -o $@ $(CLI_OBJS) -L$(BUILD_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
 
 
 #
@@ -232,12 +235,12 @@ release: $(RELEASE_CLI) $(RELEASE_LIB_A)
 # Four programs, merged by count. The performance suite is most of the counters; train.bare is
 # the source-parse complement (the suite only loads bundled JSON models). Language tests and
 # "bare -s" are a small CLI/linter slice. %p so each process writes its own profraw, then merge.
-$(PROFILE_DATA): $(LIB_SRCS) $(SRC_DIR)/main.c $(PERF_DIR)/train.bare $(PERF_DIR)/test.bare \
+$(PROFILE_DATA): $(LIB_SRCS) $(CLI_SRCS) $(PERF_DIR)/train.bare $(PERF_DIR)/test.bare \
         $(TEST_DIR)/include/runTests.bare $(TEST_DIR)/include/testLibrary.bare $(INCLUDE_LIB_SRCS)
 	@rm -rf $(PROFILE_DIR) $(BUILD_DIR)/pgo
 	@mkdir -p $(PROFILE_DIR) $(BUILD_DIR)/pgo
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_GENERATE) -o $(BUILD_DIR)/pgo/$(CLI_NAME) \
-	    $(LIB_SRCS) $(SRC_DIR)/main.c $(LIBS)
+	    $(LIB_SRCS) $(CLI_SRCS) $(LIBS)
 	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
 	    $(BUILD_DIR)/pgo/$(CLI_NAME) $(CURDIR)/$(PERF_DIR)/train.bare \
 	        -v vIncludeDir "'$(CURDIR)/$(INCLUDE_LIB_DIR)'"
@@ -257,7 +260,7 @@ $(RELEASE_LIB_SO): $(PROFILE_DATA)
 
 $(RELEASE_CLI): $(RELEASE_LIB_SO) $(PROFILE_DATA)
 	@mkdir -p $(RELEASE_DIR)
-	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -o $@ $(SRC_DIR)/main.c \
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -o $@ $(CLI_SRCS) \
 	    -L$(RELEASE_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
 
 $(RELEASE_OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(PROFILE_DATA)
@@ -273,9 +276,9 @@ $(RELEASE_LIB_A): $(RELEASE_A_OBJS)
 # Test
 #
 
-$(TEST_BIN): $(TEST_OBJS) $(LIB_A)
+$(TEST_BIN): $(TEST_OBJS) $(OBJ_DIR)/bare.o $(LIB_A)
 	@mkdir -p $(dir $@)
-	$(CC) -o $@ $(TEST_OBJS) $(LIB_A) $(LIBS)
+	$(CC) -o $@ $(TEST_OBJS) $(OBJ_DIR)/bare.o $(LIB_A) $(LIBS)
 
 .PHONY: test
 test: $(TEST_BIN)
@@ -306,13 +309,14 @@ cover: $(COVER_BIN)
 	$(COVER_BIN) $(TEST)
 	@mkdir -p $(BUILD_DIR)/coverage
 	@rm -f $(BUILD_DIR)/coverage/*.gcov
-	$(GCOV) -o $(COVER_DIR) $(LIB_SRCS) > /dev/null
+	$(GCOV) -o $(COVER_DIR) $(LIB_SRCS) $(SRC_DIR)/bare.c > /dev/null
 	@mv *.gcov $(BUILD_DIR)/coverage/
 	@$(AWK) -v verbose=$(if $(VERBOSE),1,0) -f $(TEST_DIR)/coverage.awk $(COVER_GCOV)
 
 GCOV := $(if $(filter-out 0,$(CC_IS_CLANG)),xcrun llvm-cov gcov,gcov)
 AWK := awk
-COVER_GCOV := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/coverage/%.c.gcov,$(LIB_SRCS))
+COVER_GCOV := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/coverage/%.c.gcov,$(LIB_SRCS)) \
+    $(BUILD_DIR)/coverage/bare.c.gcov
 
 
 #

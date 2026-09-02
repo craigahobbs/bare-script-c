@@ -12,12 +12,23 @@
 
 #include "barescript/barescript.h"
 
-#include "internal.h"
 
-
-const char *bsVersion(void)
+static void *bsCliAlloc(size_t size)
 {
-    return BARESCRIPT_VERSION;
+    void *ptr = malloc(size);
+    if (ptr == NULL) { /* GCOV_EXCL_START */
+        fprintf(stderr, "out of memory\n");
+        abort();
+    } /* GCOV_EXCL_STOP */
+    return ptr;
+}
+
+static char *bsCliStrdup(const char *text)
+{
+    size_t size = strlen(text) + 1;
+    char *copy = bsCliAlloc(size);
+    memcpy(copy, text, size);
+    return copy;
 }
 
 
@@ -62,10 +73,10 @@ static void bsPrintError(const char *text)
 int bsMain(int argc, char **argv)
 {
     /* Three extra slots for the MarkdownUp preamble and postamble */
-    BSScriptSource *sources = bsAlloc((size_t) (argc > 0 ? argc + 3 : 4) * sizeof(BSScriptSource));
+    BSScriptSource *sources = bsCliAlloc((size_t) (argc > 0 ? argc + 3 : 4) * sizeof(BSScriptSource));
     size_t sourceCount = 0;
-    const char **varNames = bsAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(char *));
-    const char **varExprs = bsAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(char *));
+    const char **varNames = bsCliAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(char *));
+    const char **varExprs = bsCliAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(char *));
     size_t varCount = 0;
     bool debug = false;
     bool staticAnalysis = false;
@@ -177,7 +188,7 @@ int bsMain(int argc, char **argv)
         /* Add the BARESCRIPT_INCLUDE_PATH directories to the system include search path */
         const char *includePath = getenv("BARESCRIPT_INCLUDE_PATH");
         if (includePath != NULL) {
-            char *paths = bsStrdup(includePath);
+            char *paths = bsCliStrdup(includePath);
             char *begin = paths;
             while (*begin != '\0') {
                 char *end = strchr(begin, ':');
@@ -254,7 +265,7 @@ int bsMain(int argc, char **argv)
                 }
                 scriptName = scriptNameBuffer;
                 size = strlen(sources[ix].value);
-                text = bsAlloc(size + 1);
+                text = bsCliAlloc(size + 1);
                 memcpy(text, sources[ix].value, size + 1);
             }
 
@@ -296,7 +307,7 @@ int bsMain(int argc, char **argv)
                     bsAssign(&options->globals, bsRetain(sharedGlobals));
                 }
 
-                char *scriptPath = sources[ix].isFile ? bsStrdup(sources[ix].value) : NULL;
+                char *scriptPath = sources[ix].isFile ? bsCliStrdup(sources[ix].value) : NULL;
                 if (options->urlDataFree != NULL) {
                     options->urlDataFree(options->urlData);
                 }

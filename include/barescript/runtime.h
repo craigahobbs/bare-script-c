@@ -10,10 +10,13 @@
 
 #include "parser.h"
 #include "value.h"
+#include "export.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+BS_VISIBILITY_BEGIN
 
 
 /* The default maximum number of statements executed by bsExecuteScript */
@@ -193,6 +196,8 @@ const char *bsIncludeSource(const char *name);
 /* Release the bundled include library's decoded models */
 void bsIncludeCleanup(void);
 
+
+BS_VISIBILITY_END
 
 #ifdef __cplusplus
 }

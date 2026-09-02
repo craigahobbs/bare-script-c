@@ -10,10 +10,13 @@
 
 #include "runtime.h"
 #include "value.h"
+#include "export.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+BS_VISIBILITY_BEGIN
 
 
 /*
@@ -83,6 +86,8 @@ BSValue bsLibraryScriptFunction(const char *name);
 /* Release the library's static function values - call at process exit */
 void bsLibraryCleanup(void);
 
+
+BS_VISIBILITY_END
 
 #ifdef __cplusplus
 }

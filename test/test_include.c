@@ -11,12 +11,22 @@
 
 #include "test.h"
 #include "../src/includeSourceDecode.h"
+#include "../src/internal.h"
 
 
-static const char *bsTestGzipDecode(const char *const *chunks)
+static char *bsTestGzipDecode(const char *const *chunks)
 {
-    BSIncludeSource source = {"test.bare", chunks, NULL};
-    return bsIncludeSourceDecode(&source);
+    size_t encodedSize = 0;
+    char *encoded = bsConcatChunks(chunks, &encodedSize);
+    size_t gzipSize = 0;
+    unsigned char *gzipBytes = bsBase64Decode(encoded, encodedSize, &gzipSize);
+    free(encoded);
+    if (gzipBytes == NULL) {
+        return NULL;
+    }
+    char *decoded = bsGzipUncompress(gzipBytes, gzipSize);
+    free(gzipBytes);
+    return decoded;
 }
 
 
@@ -131,55 +141,45 @@ TEST(include_gzip_decode)
     static const char *const ftext[] = {"H4sIAQAAAAAA/wMAAAAAAAAAAAA=", NULL};
     static const char *const twoBlocks[] = {"H4sIAAAAAAAA/wAAAP//AwAAAAAAAAAAAA==", NULL};
 
-    BSIncludeSource src = {"t.bare", hello, NULL};
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "hello");
-    ASSERT_TRUE(bsIncludeSourceDecode(&src) == src.decoded);
-    free(src.decoded);
+    char *decoded = bsTestGzipDecode(hello);
+    ASSERT_STR_EQ(decoded, "hello");
+    free(decoded);
 
-    src.compressed = helloChunks;
-    src.decoded = NULL;
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "hello");
-    free(src.decoded);
+    decoded = bsTestGzipDecode(helloChunks);
+    ASSERT_STR_EQ(decoded, "hello");
+    free(decoded);
 
-    src.compressed = empty;
-    src.decoded = NULL;
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
-    free(src.decoded);
+    decoded = bsTestGzipDecode(empty);
+    ASSERT_STR_EQ(decoded, "");
+    free(decoded);
 
-    src.compressed = stored;
-    src.decoded = NULL;
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "hello");
-    free(src.decoded);
+    decoded = bsTestGzipDecode(stored);
+    ASSERT_STR_EQ(decoded, "hello");
+    free(decoded);
 
-    src.compressed = fname;
-    src.decoded = NULL;
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
-    free(src.decoded);
+    decoded = bsTestGzipDecode(fname);
+    ASSERT_STR_EQ(decoded, "");
+    free(decoded);
 
-    src.compressed = fextra;
-    src.decoded = NULL;
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
-    free(src.decoded);
+    decoded = bsTestGzipDecode(fextra);
+    ASSERT_STR_EQ(decoded, "");
+    free(decoded);
 
-    src.compressed = fcomment;
-    src.decoded = NULL;
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
-    free(src.decoded);
+    decoded = bsTestGzipDecode(fcomment);
+    ASSERT_STR_EQ(decoded, "");
+    free(decoded);
 
-    src.compressed = fhcrc;
-    src.decoded = NULL;
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
-    free(src.decoded);
+    decoded = bsTestGzipDecode(fhcrc);
+    ASSERT_STR_EQ(decoded, "");
+    free(decoded);
 
-    src.compressed = ftext;
-    src.decoded = NULL;
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
-    free(src.decoded);
+    decoded = bsTestGzipDecode(ftext);
+    ASSERT_STR_EQ(decoded, "");
+    free(decoded);
 
-    src.compressed = twoBlocks;
-    src.decoded = NULL;
-    ASSERT_STR_EQ(bsIncludeSourceDecode(&src), "");
-    free(src.decoded);
+    decoded = bsTestGzipDecode(twoBlocks);
+    ASSERT_STR_EQ(decoded, "");
+    free(decoded);
 }
 
 
@@ -216,6 +216,15 @@ TEST(include_gzip_invalid)
         {NULL}
     };
     for (size_t ix = 0; invalid[ix][0] != NULL; ix++) {
-        ASSERT_NULL(bsTestGzipDecode(invalid[ix]));
+        char *decoded = bsTestGzipDecode(invalid[ix]);
+        ASSERT_NULL(decoded);
+        free(decoded);
     }
+
+    /* A missing gzip blob fails to decode */
+    BSIncludeSource emptySource = {"t.bare", NULL, 0, NULL};
+    ASSERT_NULL(bsIncludeSourceDecode(&emptySource));
+    static const unsigned char dummyGzip[1] = {0};
+    BSIncludeSource zeroSource = {"t.bare", dummyGzip, 0, NULL};
+    ASSERT_NULL(bsIncludeSourceDecode(&zeroSource));
 }

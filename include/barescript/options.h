@@ -9,10 +9,13 @@
 #define BARESCRIPT_OPTIONS_H
 
 #include "runtime.h"
+#include "export.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+BS_VISIBILITY_BEGIN
 
 
 /* A fetch function that reads and writes the local file system, and fetches HTTP(S) URLs */
@@ -42,6 +45,8 @@ char *bsUrlFileRelative(const char *url, void *data);
 /* True if the text begins with a URL scheme ("http:", "file:", ...) */
 bool bsUrlIsURL(const char *url);
 
+
+BS_VISIBILITY_END
 
 #ifdef __cplusplus
 }

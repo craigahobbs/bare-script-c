@@ -19,10 +19,13 @@
 #define BARESCRIPT_PARSER_H
 
 #include "value.h"
+#include "export.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+BS_VISIBILITY_BEGIN
 
 
 typedef struct BSExpr BSExpr;
@@ -289,6 +292,8 @@ void bsScriptRelease(BSScript *script);
 /* Free a standalone expression parsed with bsParseExpression */
 void bsExprFree(BSExpr *expr);
 
+
+BS_VISIBILITY_END
 
 #ifdef __cplusplus
 }

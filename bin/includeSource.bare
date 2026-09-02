@@ -6,8 +6,7 @@
 #
 # Each include library script is embedded as its parser-compiled JSON script model - the runtime
 # JSON-parses any system include starting with "{", skipping the parser entirely - gzip-compressed
-# at level 9 with gzip.bare and base64-encoded with base64.bare, then chunked into C string literal
-# lines.
+# at level 9 with gzip.bare and emitted as a C unsigned-char array.
 #
 # Run with the built command-line interface:
 #
@@ -15,17 +14,7 @@
 #       -v vOutputC "'src/includeSource.c'" -v vOutputH "'include/barescript/includeSource.h'"
 
 include <barescriptParser.bare>
-include <base64.bare>
 include <gzip.bare>
-
-
-# The C string literal chunk length, and the number of chunks per literal
-#
-# ISO C99 requires compilers to support string literals of only 4095 characters, and adjacent
-# literals concatenate into one, so a compressed model is emitted as an array of literals rather
-# than a single one.
-includeSourceChunkLength = 100
-includeSourceChunksPerLiteral = 38
 
 
 # Serialize a value as JSON with object keys in insertion order
@@ -58,36 +47,28 @@ function includeSourceExportName(includeName):
 endfunction
 
 
-# Escape and chunk a compressed model into C string literal array elements
-function includeSourceChunks(encoded):
-    literals = []
+# Format a byte as a C hex literal
+function includeSourceHexByte(byte):
+    digits = '0123456789abcdef'
+    return arrayJoin(['0x', stringCharAt(digits, mathFloor(byte / 16)), stringCharAt(digits, byte % 16)], '')
+endfunction
+
+
+# Emit gzip bytes as a C unsigned-char initializer
+function includeSourceGzipBytes(bytes):
     lines = []
-    ixChunk = 0
-    encodedLength = stringLength(encoded)
-    while ixChunk < encodedLength:
-        chunkEnd = mathMin(ixChunk + includeSourceChunkLength, encodedLength)
-
-        chunk = stringSlice(encoded, ixChunk, chunkEnd)
-
-        # Escape the C string literal metacharacters. The compressed model is base64, so it
-        # contains no raw control characters; "?" is escaped to rule out trigraph sequences.
-        chunk = stringReplace(chunk, '\\', '\\\\')
-        chunk = stringReplace(chunk, '"', '\\"')
-        chunk = stringReplace(chunk, '?', '\\?')
-
-        arrayPush(lines, '    "' + chunk + '"')
-        ixChunk = chunkEnd
-
-        if arrayLength(lines) == includeSourceChunksPerLiteral:
-            arrayPush(literals, arrayJoin(lines, '\n'))
-            lines = []
+    lineParts = []
+    for byte in bytes:
+        arrayPush(lineParts, includeSourceHexByte(byte))
+        if arrayLength(lineParts) == 12:
+            arrayPush(lines, '    ' + arrayJoin(lineParts, ', ') + ',')
+            lineParts = []
         endif
-    endwhile
-    if arrayLength(lines):
-        arrayPush(literals, arrayJoin(lines, '\n'))
+    endfor
+    if arrayLength(lineParts):
+        arrayPush(lines, '    ' + arrayJoin(lineParts, ', '))
     endif
-    arrayPush(literals, '    NULL')
-    return literals
+    return arrayJoin(lines, '\n')
 endfunction
 
 
@@ -109,14 +90,16 @@ async function main():
         '/*\n' + \
         ' * The bundled BareScript include library\n' + \
         ' *\n' + \
-        ' * Each include is embedded as its parser-compiled JSON script model, gzip-compressed and\n' + \
-        " * base64-encoded. An accessor decodes its include's model on first use and caches it; the\n" + \
+        ' * Each include is embedded as its parser-compiled JSON script model, gzip-compressed.\n' + \
+        " * An accessor decodes its include's model on first use and caches it; the\n" + \
         ' * decoded text is released by bsIncludeCleanup.\n' + \
         ' */\n\n' + \
         '#ifndef BARESCRIPT_INCLUDE_SOURCE_H\n' + \
         '#define BARESCRIPT_INCLUDE_SOURCE_H\n\n' + \
         '#include <stddef.h>\n\n' + \
-        '#ifdef __cplusplus\nextern "C" {\n#endif\n\n\n' + \
+        '#include "export.h"\n\n' + \
+        '#ifdef __cplusplus\nextern "C" {\n#endif\n\n' + \
+        'BS_VISIBILITY_BEGIN\n\n\n' + \
         '/* The number of bundled include library scripts */\n' + \
         '#define BS_INCLUDE_COUNT ']
 
@@ -154,22 +137,22 @@ async function main():
         modelText = includeSourceJSON(model)
         modelBytes = stringEncode(modelText)
         compressed = gzipCompress(modelBytes, 9)
-        encoded = base64Encode(compressed)
-        if gzipUncompress(base64Decode(encoded)) != modelBytes:
+        if gzipUncompress(compressed) != modelBytes:
             systemLog('error: "' + includeName + '" compressed model round-trip failure')
             return 1
         endif
         totalSource = totalSource + stringLength(text)
-        totalEncoded = totalEncoded + stringLength(encoded)
+        totalEncoded = totalEncoded + arrayLength(compressed)
 
         arrayPush(sourceParts, '\n\n/* ' + includeName + ' */\n' + \
-            'static const char *const bsIncludeSourceData' + exportName + '[] = {\n' + \
-            arrayJoin(includeSourceChunks(encoded), ',\n') + '\n};\n\n' + \
+            'static const unsigned char bsIncludeSourceData' + exportName + '[] = {\n' + \
+            includeSourceGzipBytes(compressed) + '\n};\n\n' + \
             'const char *bsIncludeSource' + exportName + '(void)\n{\n' + \
             '    return bsIncludeSourceDecode(&bsIncludeSources[' + arrayLength(names) + ']);\n}\n')
         arrayPush(accessors, '/* ' + includeName + ' - the decoded JSON script model */\n' + \
             'const char *bsIncludeSource' + exportName + '(void);')
-        arrayPush(registry, '    {"' + includeName + '", bsIncludeSourceData' + exportName + ', NULL}')
+        arrayPush(registry, '    {"' + includeName + '", bsIncludeSourceData' + exportName + \
+            ', sizeof(bsIncludeSourceData' + exportName + '), NULL}')
         arrayPush(names, includeName)
     endfor
 
@@ -188,7 +171,8 @@ async function main():
         '/* A bundled include library script */\n' + \
         'typedef struct BSIncludeSource {\n' + \
         '    const char *name;\n' + \
-        '    const char *const *compressed;\n' + \
+        '    const unsigned char *gzip;\n' + \
+        '    size_t gzipSize;\n' + \
         '    char *decoded;\n' + \
         '} BSIncludeSource;\n\n' + \
         '/* The bundled include library registry, in name order */\n' + \
@@ -199,6 +183,7 @@ async function main():
         'extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];\n\n\n' + \
         '/*\n * The bundled include library stub accessors\n */\n\n' + \
         arrayJoin(accessors, '\n\n') + '\n\n\n' + \
+        'BS_VISIBILITY_END\n\n' + \
         '#ifdef __cplusplus\n}\n#endif\n\n#endif\n')
 
     # Write the generated files

@@ -20,10 +20,13 @@
 #define BARESCRIPT_REGEX_H
 
 #include "value.h"
+#include "export.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+BS_VISIBILITY_BEGIN
 
 
 /* The regular expression flags */
@@ -101,6 +104,8 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
 /* Escape a string's regular expression metacharacters - returns an owned string value */
 BSValue bsRegexEscape(BSValue string);
 
+
+BS_VISIBILITY_END
 
 #ifdef __cplusplus
 }

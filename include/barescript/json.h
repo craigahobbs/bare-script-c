@@ -13,10 +13,13 @@
 #define BARESCRIPT_JSON_H
 
 #include "value.h"
+#include "export.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+BS_VISIBILITY_BEGIN
 
 
 /*
@@ -37,6 +40,8 @@ BSValue bsJSONDecode(const char *text, size_t size, const char **error);
 /* Decode a JSON string, additionally reporting the byte offset the error was detected at */
 BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t *errorOffset);
 
+
+BS_VISIBILITY_END
 
 #ifdef __cplusplus
 }

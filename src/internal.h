@@ -18,6 +18,11 @@ void *bsAlloc(size_t size);
 void *bsRealloc(void *ptr, size_t size);
 char *bsStrdup(const char *text);
 
+/* Include-model gzip (and the base64 helper tests still use) */
+char *bsGzipUncompress(const unsigned char *src, size_t srcSize);
+unsigned char *bsBase64Decode(const char *text, size_t size, size_t *outSize);
+char *bsConcatChunks(const char *const *chunks, size_t *outSize);
+
 
 /* The binary and unary operator text, indexed by operator - used by model conversion */
 extern const char *bsBinaryOpText[BS_BINARY_COUNT];
