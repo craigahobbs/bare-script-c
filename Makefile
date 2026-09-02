@@ -37,6 +37,11 @@ CC_IS_CLANG := $(shell $(CC) --version 2>/dev/null | grep -c -i clang)
 WARN_FLAGS := -Wall -Wextra -Werror -Wno-unused-parameter -Wshadow -Wpointer-arith \
     -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes -Wwrite-strings
 BASE_CFLAGS := -std=c11 -pedantic -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -I$(INC_DIR) $(WARN_FLAGS)
+
+# No caller reads errno after a libm call. Without this, GCC and clang on Linux wrap every sqrt,
+# floor, and fmod in an errno check that keeps them out of line; Apple's clang already assumes it,
+# so this makes the ELF build match the code generation that was measured.
+BASE_CFLAGS += -fno-math-errno
 OPT_CFLAGS ?= -O2 -g
 LIBS := -lm
 
@@ -65,6 +70,7 @@ endif
 # The bundled BareScript include library
 INCLUDE_LIB_DIR := lib/include
 INCLUDE_LIB_SRCS := $(sort $(wildcard $(INCLUDE_LIB_DIR)/*.bare))
+INCLUDE_TEST_DIR := $(INCLUDE_LIB_DIR)/test
 INCLUDE_SOURCE_C := $(SRC_DIR)/includeSource.c
 INCLUDE_SOURCE_H := $(INC_DIR)/barescript/includeSource.h
 
@@ -192,13 +198,14 @@ $(CLI_BIN): $(CLI_OBJS) $(LIB_SO)
 # Release - a profile-guided optimization build
 #
 # PGO is a three-stage build: compile instrumented, run a training workload, then recompile with
-# the profile. See perf/train.bare for what the training workload covers and why.
+# the profile. The training stage below says what the workload covers and why.
 #
 
 RELEASE_DIR := $(BUILD_DIR)/release
 RELEASE_OBJ_DIR := $(RELEASE_DIR)/obj
 PROFILE_DIR := $(BUILD_DIR)/profile
-RELEASE_CFLAGS ?= -O3 -DNDEBUG -flto
+# -O2 and -O3 are equal in speed here at every stage; under PGO and LTO, -O2 emits 10% less code
+RELEASE_CFLAGS ?= -O2 -DNDEBUG -flto
 RELEASE_LIB_SO := $(RELEASE_DIR)/lib$(LIB_NAME).$(SO_EXT)
 RELEASE_LIB_A := $(RELEASE_DIR)/lib$(LIB_NAME).a
 RELEASE_CLI := $(RELEASE_DIR)/$(CLI_NAME)
@@ -232,24 +239,22 @@ release: $(RELEASE_CLI) $(RELEASE_LIB_A)
 
 # Stage 1 and 2 - build instrumented and run the training workload
 #
-# Four programs, merged by count. The performance suite is most of the counters; train.bare is
-# the source-parse complement (the suite only loads bundled JSON models). Language tests and
-# "bare -s" are a small CLI/linter slice. %p so each process writes its own profraw, then merge.
-$(PROFILE_DATA): $(LIB_SRCS) $(CLI_SRCS) $(PERF_DIR)/train.bare $(PERF_DIR)/test.bare \
-        $(TEST_DIR)/include/runTests.bare $(TEST_DIR)/include/testLibrary.bare $(INCLUDE_LIB_SRCS)
+# Two programs, merged by count: the performance suite, which is the benchmark itself, and the
+# include library test suite, which parses about 200 KB of BareScript from source and runs every
+# include library function - the path "bare script.bare" takes, and one the performance suite
+# never does since it loads bundled models. A synthetic parse script, the language tests, and a
+# static-analysis run were measured and moved neither workload beyond build-to-build noise. %p so
+# each process writes its own profraw, then merge.
+$(PROFILE_DATA): $(LIB_SRCS) $(CLI_SRCS) $(PERF_DIR)/test.bare $(INCLUDE_LIB_SRCS) \
+        $(sort $(wildcard $(INCLUDE_TEST_DIR)/*.bare))
 	@rm -rf $(PROFILE_DIR) $(BUILD_DIR)/pgo
 	@mkdir -p $(PROFILE_DIR) $(BUILD_DIR)/pgo
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_GENERATE) -o $(BUILD_DIR)/pgo/$(CLI_NAME) \
 	    $(LIB_SRCS) $(CLI_SRCS) $(LIBS)
 	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
-	    $(BUILD_DIR)/pgo/$(CLI_NAME) $(CURDIR)/$(PERF_DIR)/train.bare \
-	        -v vIncludeDir "'$(CURDIR)/$(INCLUDE_LIB_DIR)'"
-	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
 	    $(BUILD_DIR)/pgo/$(CLI_NAME) $(PERF_DIR)/test.bare > /dev/null
 	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
-	    $(BUILD_DIR)/pgo/$(CLI_NAME) $(TEST_DIR)/include/runTests.bare > /dev/null
-	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
-	    $(BUILD_DIR)/pgo/$(CLI_NAME) -s $(TEST_DIR)/include/testLibrary.bare > /dev/null
+	    $(BUILD_DIR)/pgo/$(CLI_NAME) -d -m $(INCLUDE_TEST_DIR)/runTests.bare > /dev/null
 	$(PROFILE_MERGE)
 
 # Stage 3 - rebuild with the profile
@@ -325,8 +330,6 @@ COVER_GCOV := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/coverage/%.c.gcov,$(LIB_SRC
 # The same three runs the JavaScript and Python implementations make, over the same test scripts,
 # so the reports are directly comparable.
 #
-
-INCLUDE_TEST_DIR := $(INCLUDE_LIB_DIR)/test
 
 .PHONY: test-include test-include-lint test-include-markdownup test-include-run
 test-include: test-include-lint test-include-markdownup test-include-run

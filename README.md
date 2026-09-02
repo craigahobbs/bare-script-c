@@ -78,7 +78,8 @@ The flags were chosen by measurement, over the performance suite, relative to a 
 | `-O2 -flto`              | 0.93x |                                                     |
 | PGO, `-O3`               | 0.87x |                                                     |
 | PGO, `-Os -flto`         | 0.87x | PGO does not rescue `-Os`                           |
-| **PGO, `-O3 -flto`**     | 0.82x | **the release build**                               |
+| PGO, `-O3 -flto`         | 0.82x |                                                     |
+| **PGO, `-O2 -flto`**     | 0.82x | **the release build** - `-O3`'s speed, 10% less code |
 
 `-Os` is the interesting one, since trading code size for instruction cache residency often wins
 in an interpreter. It does not here: `-Os` costs 7% and `-Oz` 43%, and PGO does not close the gap.
@@ -90,24 +91,32 @@ of PGO - because the value system is small functions across translation unit bou
 `bsRetain`, `bsRelease`, and the object treap's comparisons are called from everywhere and can
 only be inlined across the library at link time.
 
+`-O2` and `-O3` are equal in speed at every stage, and under PGO and LTO `-O2` emits 10% less
+text (171 KB against 190 KB), so the release build uses it. Also measured on the same suite, and
+not used: `-fno-stack-protector` (3% less text, 1.6% fewer instructions, no measurable time - not
+worth a mitigation), `-fomit-frame-pointer`, `-flto=thin`, `-mcpu=native`, and disabling the
+code generator's tail merging to keep every threaded-dispatch jump distinct (8% more text, no
+gain) all land within build-to-build noise, which is about 1% between two builds of the same
+configuration. Dead stripping has nothing left to strip after LTO with hidden visibility, and
+context-sensitive PGO is not available: Apple's linker does not instrument under LTO.
+
 The release static library keeps the profile but drops link-time optimization, so it stays an
 archive of ordinary object files rather than one of compiler intermediate code, which not every
 consumer's linker can read.
 
-The training mix is four programs, merged by execution count. A PGO profile is only as good as the
+The training mix is two programs, merged by execution count. A PGO profile is only as good as the
 workload that produces it - the optimizer lays out branches and inlines call sites in the
 proportion the training run exercises them.
 
 | Program | Role |
 | ------- | ---- |
-| `perf/test.bare` | the official suite - most of the counters |
-| `perf/train.bare` | source-parse complement: the interpreted parser over include-library `.bare` files. The suite never does this; it loads bundled JSON models. This is the path `bare script.bare` takes. |
-| `test/include/runTests.bare` | a small slice of the evaluator on this project's own scripts |
-| `bare -s test/include/testLibrary.bare` | the CLI static-analysis path and the linter |
+| `perf/test.bare` | the official suite - the benchmark itself |
+| `lib/include/test/runTests.bare` | the include library test suite: parses about 200 KB of BareScript from source and runs every include library function. This is the path `bare script.bare` takes; the suite never does, since it loads bundled models. |
 
-`perf/train.bare` is parse-heavy on purpose. Its edge-count overlap with the suite is only about
-20%; doubling the suite in training made the suite slower, so that complementary parse mix is
-load-bearing even though it is the shorter run.
+An earlier mix added a synthetic source-parse script, this project's language tests, and a
+static-analysis run instead of the test suite. Measured against a rebuilt identical configuration,
+none of the three moved either workload beyond build-to-build noise, while training on the test
+suite retires 3% fewer instructions on it and costs the performance suite nothing.
 
 `make test` and `make cover` accept a `TEST` variable that filters test cases by name substring:
 

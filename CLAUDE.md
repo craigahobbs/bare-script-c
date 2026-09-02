@@ -166,7 +166,7 @@ BareScript exposes - see README's **Regular Expressions** table.
 | `test/`                   | C unit tests; `test/include/` is the BareScript language suite |
 | `lib/include/`            | **vendored** reference include library and its test suite     |
 | `bin/`                    | BareScript build tools (include source generator, perf report) |
-| `perf/`                   | the benchmark, a native C baseline, and the PGO training script |
+| `perf/`                   | the benchmark and a native C baseline                         |
 
 ## Tests and coverage
 
