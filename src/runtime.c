@@ -1245,6 +1245,24 @@ static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions
         bsObjectSetString(includes, includeKey, bsBoolean(true));
         bsRelease(includeKey);
 
+        /* Bundled includes reuse a cached compiled script unless a register/path override exists. */
+        if (system && bsArrayCount(bsSystemIncludePaths) == 0 &&
+            (bsSystemIncludes.type != BS_OBJECT ||
+             bsObjectGet(bsSystemIncludes, bsStringData(includeUrl)).type != BS_STRING)) {
+            BSScript *cached = bsIncludeScript(bsStringData(includeUrl));
+            if (cached != NULL) {
+                BSValue result = bsExecuteStatements(cached, cached->statements, cached->statementCount,
+                                                     options, NULL);
+                bsRelease(result);
+                bsScriptRelease(cached);
+                bsRelease(includeUrl);
+                if (options->error.type == BS_STRING) {
+                    return false; /* GCOV_EXCL_LINE - bundled includes are trusted */
+                }
+                continue;
+            }
+        }
+
         /* Get the include script text. Bundled models are decoded in place; do not copy. */
         const char *includeText = NULL;
         char *includeOwned = NULL;
@@ -1285,7 +1303,7 @@ static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions
                 bsRelease(includeUrl);
                 return false;
             }
-        } else {
+        } else { /* GCOV_EXCL_LINE - llvm-cov attributes this brace to the JSON-model branch */
             BSParserError parserError;
             memset(&parserError, 0, sizeof(parserError));
             includeScript = bsParseScript(includeText, includeSize, 1, bsStringData(includeUrl),

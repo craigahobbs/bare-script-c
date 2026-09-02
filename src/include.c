@@ -10,13 +10,19 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "barescript/includeSource.h"
+#include "barescript/json.h"
+#include "barescript/parser.h"
 #include "barescript/runtime.h"
 
 #include "includeSourceDecode.h"
 #include "internal.h"
+
+
+static BSScript *bsIncludeScripts[BS_INCLUDE_COUNT];
 
 
 /*
@@ -480,10 +486,43 @@ const char *bsIncludeSource(const char *name)
 }
 
 
+BSScript *bsIncludeScript(const char *name)
+{
+    for (size_t ix = 0; ix < BS_INCLUDE_COUNT; ix++) {
+        if (strcmp(bsIncludeSources[ix].name, name) != 0) {
+            continue;
+        }
+        if (bsIncludeScripts[ix] != NULL) {
+            return bsScriptRetain(bsIncludeScripts[ix]);
+        }
+        const char *text = bsIncludeSourceDecode(&bsIncludeSources[ix]);
+        if (text == NULL) {
+            return NULL; /* GCOV_EXCL_LINE - bundled models always inflate */
+        }
+        BSValue model = bsJSONDecode(text, strlen(text), NULL);
+        BSScript *script = bsScriptFromModel(model, name);
+        bsRelease(model);
+        free(bsIncludeSources[ix].decoded);
+        bsIncludeSources[ix].decoded = NULL;
+        if (script == NULL) {
+            return NULL; /* GCOV_EXCL_LINE - bundled models always convert */
+        }
+        script->system = true;
+        bsIncludeScripts[ix] = bsScriptRetain(script);
+        return script;
+    }
+    return NULL;
+}
+
+
 void bsIncludeCleanup(void)
 {
     for (size_t ix = 0; ix < BS_INCLUDE_COUNT; ix++) {
         free(bsIncludeSources[ix].decoded);
         bsIncludeSources[ix].decoded = NULL;
+        if (bsIncludeScripts[ix] != NULL) {
+            bsScriptRelease(bsIncludeScripts[ix]);
+            bsIncludeScripts[ix] = NULL;
+        }
     }
 }

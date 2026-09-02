@@ -102,6 +102,18 @@ TEST(include_stub_accessors)
 }
 
 
+TEST(include_script_cache)
+{
+    ASSERT_NULL(bsIncludeScript("no-such-include.bare"));
+    BSScript *first = bsIncludeScript("url.bare");
+    ASSERT_TRUE(first != NULL);
+    BSScript *second = bsIncludeScript("url.bare");
+    ASSERT_TRUE(first == second);
+    bsScriptRelease(first);
+    bsScriptRelease(second);
+}
+
+
 TEST(include_system_include)
 {
     /* A bundled include resolves without a file system */

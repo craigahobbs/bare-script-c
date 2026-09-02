@@ -1816,6 +1816,35 @@ static bool bsObjectIterPackedSorted(BSObject *object, BSObjectIterFn iter, void
 }
 
 
+static bool bsObjectIterListSorted(BSObject *object, BSObjectIterFn iter, void *data)
+{
+    size_t n = object->count;
+    BSObjectNode *order[32];
+    size_t ix = 0;
+    for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
+        order[ix++] = node;
+    }
+    for (size_t i = 1; i < n; i++) {
+        BSObjectNode *item = order[i];
+        size_t j = i;
+        while (j > 0) {
+            if (bsKeyCompare(order[j - 1]->key, item->key->data, item->key->size) <= 0) {
+                break;
+            }
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = item;
+    }
+    for (ix = 0; ix < n; ix++) {
+        if (!iter(bsStringTake(order[ix]->key), order[ix]->value, data)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
 bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data)
 {
     if (value.type != BS_OBJECT) {
@@ -1825,8 +1854,13 @@ bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data)
         return bsObjectIterPackedSorted(value.u.object, iter, data);
     }
     if (value.u.object->root == NULL && value.u.object->insertHead != NULL) {
+        if (value.u.object->count <= BS_OBJECT_SMALL) {
+            return bsObjectIterListSorted(value.u.object, iter, data);
+        }
+        /* GCOV_EXCL_START - insert past 32 already builds the treap */
         bsObjectBuildTreap(value.u.object);
     }
+        /* GCOV_EXCL_STOP */
     BSObjectIterContext context = {iter, data};
     return bsObjectIterNode(value.u.object->root, &context);
 }

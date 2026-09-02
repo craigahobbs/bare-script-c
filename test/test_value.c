@@ -372,6 +372,22 @@ TEST(value_object)
     ASSERT_VALUE(bsObjectKeysSorted(object), "[\"a\",\"b\",\"c\"]");
     ASSERT_VALUE_KEEP(object, "{\"a\":1,\"b\":2,\"c\":3}");
 
+    /* 5-32 key objects stringify sorted without promoting to a treap */
+    {
+        BSValue many = bsObjectNew();
+        char key[8];
+        for (int ix = 0; ix < 20; ix++) {
+            snprintf(key, sizeof(key), "k%02d", 19 - ix);
+            bsObjectSet(many, key, bsNumber(ix));
+        }
+        ASSERT_TRUE(many.u.object->root == NULL);
+        ASSERT_VALUE(bsObjectKeysSorted(many),
+                     "[\"k00\",\"k01\",\"k02\",\"k03\",\"k04\",\"k05\",\"k06\",\"k07\",\"k08\",\"k09\","
+                     "\"k10\",\"k11\",\"k12\",\"k13\",\"k14\",\"k15\",\"k16\",\"k17\",\"k18\",\"k19\"]");
+        ASSERT_TRUE(many.u.object->root == NULL);
+        bsRelease(many);
+    }
+
     /* An update keeps the key's insertion position */
     bsObjectSet(object, "b", bsNumber(9));
     ASSERT_INT_EQ(bsObjectCount(object), 3);
@@ -952,6 +968,9 @@ TEST(value_object_iterate)
     bsObjectSet(listObject, "e", bsNumber(5));
     count = 0;
     ASSERT_FALSE(bsObjectIter(listObject, bsTestIterStop, &count));
+    ASSERT_INT_EQ(count, 1);
+    count = 0;
+    ASSERT_FALSE(bsObjectIterSorted(listObject, bsTestIterStop, &count));
     ASSERT_INT_EQ(count, 1);
     bsRelease(listObject);
 

@@ -47,13 +47,12 @@ static BSValue bsBootstrapGlobals(BSBootstrap *bootstrap)
 
     /*
      * The bundled model is JSON, so it loads without a parser - which is what makes it possible
-     * for the parser itself to be a BareScript script
+     * for the parser itself to be a BareScript script. The compiled script is cached.
      */
-    const char *modelText = bsIncludeSource(bootstrap->includeName);
-    BSValue model = bsJSONDecode(modelText, strlen(modelText), NULL);
-    BSScript *script = bsScriptFromModel(model, NULL);
-    bsRelease(model);
-    script->system = true;
+    BSScript *script = bsIncludeScript(bootstrap->includeName);
+    if (script == NULL) {
+        return bsNull(); /* GCOV_EXCL_LINE - parser and linter models always load */
+    }
 
     BSOptions *options = bsOptionsNew();
     bsRelease(bsExecuteScript(script, options));
