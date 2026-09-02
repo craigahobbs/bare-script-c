@@ -337,7 +337,7 @@ static BSValue bsLookupFunction(BSExpr *expr, const BSEvalCtx *ctx)
 }
 
 
-static inline BSEval bsEvalVariable(const BSExpr *expr, const BSEvalCtx *ctx)
+static inline __attribute__((always_inline)) BSEval bsEvalVariable(const BSExpr *expr, const BSEvalCtx *ctx)
 {
     switch (expr->u.variable.special) {
     case BS_SPECIAL_NULL:
@@ -361,7 +361,7 @@ static inline BSEval bsEvalVariable(const BSExpr *expr, const BSEvalCtx *ctx)
 }
 
 
-static inline BSEval bsEvalArg(BSExpr *expr, const BSEvalCtx *ctx, int depth)
+static inline __attribute__((always_inline)) BSEval bsEvalArg(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
     switch (expr->type) {
     case BS_EXPR_NUMBER:
@@ -385,6 +385,77 @@ static bool bsArgsAfterAreEffectful(const BSExpr *expr, size_t ix)
         }
     }
     return false;
+}
+
+
+static BSValue bsInvokeResolved(BSExpr *expr, const BSEvalCtx *ctx, int depth,
+                                const BSValue *args, size_t argCount)
+{
+    BSValue function = bsLookupFunction(expr, ctx);
+    if (function.type == BS_NULL && ctx->builtins) {
+        function = bsLibraryExpressionFunction(expr->u.function.name);
+    }
+
+    BSValue result = bsNull();
+    BSOptions *options = ctx->options;
+    if (function.type == BS_FUNCTION) {
+        int savedDepth = options->depth;
+        options->depth = depth;
+        result = bsFunctionInvoke(function, args, argCount, options);
+        options->depth = savedDepth;
+
+        if (options->argsError.type == BS_STRING) {
+            if (options->debug && options->logFn != NULL) {
+                const char *scriptName = (ctx->script != NULL && ctx->script->scriptName.type == BS_STRING) ?
+                    bsStringData(ctx->script->scriptName) : "";
+                int lineNumber = ctx->statement != NULL ? ctx->statement->lineNumber : 0;
+                bsLog(options, "%s:%d: BareScript: Function \"%s\" failed with error: %s", scriptName,
+                      lineNumber, bsStringData(expr->u.function.name), bsStringData(options->argsError));
+            }
+            bsAssign(&options->argsError, bsNull());
+        }
+    } else if (function.type != BS_NULL) {
+        if (options->debug) {
+            bsLog(options, "BareScript: Function \"%s\" failed with error: not a function",
+                  bsStringData(expr->u.function.name));
+        }
+    } else {
+        bsErrorSetStatement(options, ctx->script, ctx->statement, "Undefined function \"%s\"",
+                            bsStringData(expr->u.function.name));
+    }
+    return result;
+}
+
+
+static BSEval bsEvalCall0(BSExpr *expr, const BSEvalCtx *ctx, int depth)
+{
+    return bsEvalOwned(bsInvokeResolved(expr, ctx, depth, NULL, 0));
+}
+
+
+static BSEval bsEvalCall1(BSExpr *expr, const BSEvalCtx *ctx, int depth)
+{
+    BSEval arg = bsEvalArg(expr->u.function.args[0], ctx, depth);
+    BSValue result = bsInvokeResolved(expr, ctx, depth, &arg.value, 1);
+    bsEvalDrop(arg);
+    return bsEvalOwned(result);
+}
+
+
+static BSEval bsEvalCall2(BSExpr *expr, const BSEvalCtx *ctx, int depth)
+{
+    BSExpr **callArgs = expr->u.function.args;
+    BSEval a0 = bsEvalArg(callArgs[0], ctx, depth);
+    if (!a0.owned && a0.value.type >= BS_STRING && (expr->laterEffectful & 1u) != 0) {
+        a0.value = bsRetain(a0.value);
+        a0.owned = true;
+    }
+    BSEval a1 = bsEvalArg(callArgs[1], ctx, depth);
+    BSValue argv[2] = {a0.value, a1.value};
+    BSValue result = bsInvokeResolved(expr, ctx, depth, argv, 2);
+    bsEvalDrop(a0);
+    bsEvalDrop(a1);
+    return bsEvalOwned(result);
 }
 
 
@@ -430,38 +501,7 @@ static BSEval bsEvalFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth)
         owned[ix] = eval.owned;
     }
 
-    BSValue function = bsLookupFunction(expr, ctx);
-    if (function.type == BS_NULL && ctx->builtins) {
-        function = bsLibraryExpressionFunction(expr->u.function.name);
-    }
-
-    BSValue result = bsNull();
-    BSOptions *options = ctx->options;
-    if (function.type == BS_FUNCTION) {
-        int savedDepth = options->depth;
-        options->depth = depth;
-        result = bsFunctionInvoke(function, args, argCount, options);
-        options->depth = savedDepth;
-
-        if (options->argsError.type == BS_STRING) {
-            if (options->debug && options->logFn != NULL) {
-                const char *scriptName = (ctx->script != NULL && ctx->script->scriptName.type == BS_STRING) ?
-                    bsStringData(ctx->script->scriptName) : "";
-                int lineNumber = ctx->statement != NULL ? ctx->statement->lineNumber : 0;
-                bsLog(options, "%s:%d: BareScript: Function \"%s\" failed with error: %s", scriptName,
-                      lineNumber, bsStringData(expr->u.function.name), bsStringData(options->argsError));
-            }
-            bsAssign(&options->argsError, bsNull());
-        }
-    } else if (function.type != BS_NULL) {
-        if (options->debug) {
-            bsLog(options, "BareScript: Function \"%s\" failed with error: not a function",
-                  bsStringData(expr->u.function.name));
-        }
-    } else {
-        bsErrorSetStatement(options, ctx->script, ctx->statement, "Undefined function \"%s\"",
-                            bsStringData(expr->u.function.name));
-    }
+    BSValue result = bsInvokeResolved(expr, ctx, depth, args, argCount);
 
     for (size_t ix = 0; ix < argCount; ix++) {
         if (owned[ix]) {
@@ -651,6 +691,15 @@ static BSEval bsEvalExpr(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 
         case BS_EXPR_FUNCTION:
             return bsEvalFunction(expr, ctx, depth);
+
+        case BS_EXPR_CALL0:
+            return bsEvalCall0(expr, ctx, depth);
+
+        case BS_EXPR_CALL1:
+            return bsEvalCall1(expr, ctx, depth);
+
+        case BS_EXPR_CALL2:
+            return bsEvalCall2(expr, ctx, depth);
 
         case BS_EXPR_BINARY:
             return bsEvalBinary(expr, ctx, depth);

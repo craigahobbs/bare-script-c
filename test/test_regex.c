@@ -161,6 +161,13 @@ TEST(regex_anchors)
     ASSERT_VALUE_STRING(bsTestMatch("\\bword\\b", "sword", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch("\\Bord", "sword", 0), "ord");
     ASSERT_VALUE_STRING(bsTestMatch("\\Bord", "a ord", 0), "null");
+
+    /* Unicode subjects take the code-point BOL / EOL / word-boundary path */
+    ASSERT_VALUE_STRING(bsTestMatch("^\xc3\xa9", "\xc3\xa9" "abc", 0), "\xc3\xa9");
+    ASSERT_VALUE_STRING(bsTestMatch("^b", "\xc3\xa9" "a\nb", BS_REGEX_MULTILINE), "b");
+    ASSERT_VALUE_STRING(bsTestMatch("a$", "\xc3\xa9" "a\nb", BS_REGEX_MULTILINE), "a");
+    ASSERT_VALUE_STRING(bsTestMatch("c$", "\xc3\xa9" "abc", 0), "c");
+    ASSERT_VALUE_STRING(bsTestMatch("\\bword\\b", "\xc3\xa9" " word ", 0), "word");
 }
 
 

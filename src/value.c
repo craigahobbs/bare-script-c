@@ -1150,6 +1150,10 @@ static BSObjectNode *bsObjectLookupGet(const BSObject *object, BSString *interne
 }
 
 
+/* Small objects are faster to scan in insertion order than to chase treap pointers.
+ * Insert stays on the insertion-order list until the object grows past this. */
+#define BS_OBJECT_SMALL 32
+
 static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *object)
 {
     BSObjectNode *created = bsObjectNodeAlloc();
@@ -1175,17 +1179,83 @@ static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *obj
 }
 
 
-/* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created.
- * Short keys must already be interned. */
-static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
+/* Link an existing list node into the treap. Does not touch the insertion-order list. */
+static void bsObjectTreapLink(BSObject *object, BSObjectNode *created)
 {
-    const char *keyData = bsStringData(key);
-    size_t keySize = bsStringSize(key);
+    created->left = NULL;
+    created->right = NULL;
     if (object->root == NULL) {
-        object->root = bsObjectNodeCreate(key, item, object);
+        object->root = created;
         return;
     }
 
+    const char *keyData = created->key->data;
+    size_t keySize = created->key->size;
+    BSObjectNode *path[128];
+    signed char dirs[128];
+    int depth = 0;
+    BSObjectNode *node = object->root;
+    for (;;) {
+        int compare = bsKeyCompare(node->key, keyData, keySize);
+        /* GCOV_EXCL_START */
+        if (compare == 0 || depth >= 128) {
+            abort();
+        }
+        /* GCOV_EXCL_STOP */
+        path[depth] = node;
+        if (compare > 0) {
+            dirs[depth] = -1;
+            if (node->left == NULL) {
+                node->left = created;
+                depth++;
+                break;
+            }
+            node = node->left;
+        } else {
+            dirs[depth] = 1;
+            if (node->right == NULL) {
+                node->right = created;
+                depth++;
+                break;
+            }
+            node = node->right;
+        }
+        depth++;
+    }
+
+    while (depth > 0) {
+        int d = depth - 1;
+        BSObjectNode *parent = path[d];
+        BSObjectNode *child = dirs[d] < 0 ? parent->left : parent->right;
+        if (child->priority <= parent->priority) {
+            break;
+        }
+        BSObjectNode *rotated = dirs[d] < 0 ? bsObjectRotateRight(parent) : bsObjectRotateLeft(parent);
+        if (d == 0) {
+            object->root = rotated;
+        } else if (dirs[d - 1] < 0) {
+            path[d - 1]->left = rotated;
+        } else {
+            path[d - 1]->right = rotated;
+        }
+        depth--;
+    }
+}
+
+
+static void bsObjectBuildTreap(BSObject *object)
+{
+    object->root = NULL;
+    for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
+        bsObjectTreapLink(object, node);
+    }
+}
+
+
+static void bsObjectTreapInsert(BSObject *object, BSValue key, BSValue item)
+{
+    const char *keyData = bsStringData(key);
+    size_t keySize = bsStringSize(key);
     BSObjectNode *path[128];
     signed char dirs[128];
     int depth = 0;
@@ -1244,6 +1314,40 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
 }
 
 
+/* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created.
+ * Short keys must already be interned. Objects at or under BS_OBJECT_SMALL stay a list. */
+static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
+{
+    if (object->root == NULL) {
+        BSString *interned = (key.type == BS_STRING && key.u.string->interned) ? key.u.string : NULL;
+        const char *keyData = bsStringData(key);
+        size_t keySize = bsStringSize(key);
+        for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
+            if (interned != NULL) {
+                if (node->key == interned) {
+                    bsRelease(node->value);
+                    node->value = item;
+                    object->generation++;
+                    return;
+                }
+            } else if (node->key->size == keySize &&
+                       (keySize == 0 || memcmp(node->key->data, keyData, keySize) == 0)) {
+                bsRelease(node->value);
+                node->value = item;
+                object->generation++;
+                return;
+            }
+        }
+        bsObjectNodeCreate(key, item, object);
+        if (object->count > BS_OBJECT_SMALL) {
+            bsObjectBuildTreap(object);
+        }
+        return;
+    }
+    bsObjectTreapInsert(object, key, item);
+}
+
+
 static BSObjectNode *bsObjectFind(BSObjectNode *node, const char *key, size_t size)
 {
     while (node != NULL) {
@@ -1256,9 +1360,6 @@ static BSObjectNode *bsObjectFind(BSObjectNode *node, const char *key, size_t si
     return NULL;
 }
 
-
-/* Small objects are faster to scan in insertion order than to chase treap pointers */
-#define BS_OBJECT_SMALL 32
 
 static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t size,
                                      BSString *interned)
@@ -1344,15 +1445,15 @@ static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t 
 }
 
 
-static void bsObjectNodeFree(BSObjectNode *node)
+static void bsObjectNodesFree(BSObject *object)
 {
+    BSObjectNode *node = object->insertHead;
     while (node != NULL) {
-        BSObjectNode *right = node->right;
-        bsObjectNodeFree(node->left);
+        BSObjectNode *next = node->insertNext;
         bsRelease(bsStringTake(node->key));
         bsRelease(node->value);
         bsObjectNodeRecycle(node);
-        node = right;
+        node = next;
     }
 }
 
@@ -1447,13 +1548,37 @@ bool bsObjectDelete(BSValue value, const char *key)
 {
     BSObject *object = value.u.object;
     size_t size = strlen(key);
+    BSString *interned = NULL;
     if (size <= BS_INTERN_MAX) {
-        BSString *interned = bsInternLookup(key, size);
+        interned = bsInternLookup(key, size);
         if (interned == NULL) {
             return false;
         }
         key = interned->data;
         size = interned->size;
+    }
+    if (object->root == NULL) {
+        BSObjectNode *node = bsObjectFindKey(object, key, size, interned);
+        if (node == NULL) {
+            return false;
+        }
+        if (node->insertPrev != NULL) {
+            node->insertPrev->insertNext = node->insertNext;
+        } else {
+            object->insertHead = node->insertNext;
+        }
+        if (node->insertNext != NULL) {
+            node->insertNext->insertPrev = node->insertPrev;
+        } else {
+            object->insertTail = node->insertPrev;
+        }
+        bsObjectLookupDel(object, node->key);
+        bsRelease(bsStringTake(node->key));
+        bsRelease(node->value);
+        bsObjectNodeRecycle(node);
+        object->count--;
+        object->generation++;
+        return true;
     }
     bool removed = false;
     object->root = bsObjectRemove(object->root, key, size, &removed, object);
@@ -1486,6 +1611,9 @@ bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data)
 {
     if (value.type != BS_OBJECT) {
         return true;
+    }
+    if (value.u.object->root == NULL && value.u.object->insertHead != NULL) {
+        bsObjectBuildTreap(value.u.object);
     }
     BSObjectIterContext context = {iter, data};
     return bsObjectIterNode(value.u.object->root, &context);
@@ -1612,7 +1740,7 @@ void bsReleaseDestroyed(BSValue value)
     }
     case BS_OBJECT: {
         BSObject *object = value.u.object;
-        bsObjectNodeFree(object->root);
+        bsObjectNodesFree(object);
         bsObjectRecycle(object);
         break;
     }

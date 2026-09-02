@@ -453,6 +453,22 @@ TEST(value_object_intern)
 }
 
 
+TEST(value_object_small_update)
+{
+    /* A long (non-interned) key updated on a small list-only object */
+    BSValue object = bsObjectNew();
+    char longKey[80];
+    memset(longKey, 'b', 70);
+    longKey[70] = '\0';
+    BSValue key = bsStringNew(longKey);
+    bsObjectSetString(object, key, bsNumber(1));
+    bsObjectSetString(object, key, bsNumber(2));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, longKey).u.number, 2);
+    bsRelease(key);
+    bsRelease(object);
+}
+
+
 TEST(value_object_pool)
 {
     /* Overflow the recycled-object pool so a free actually returns memory */

@@ -49,6 +49,9 @@ void bsExprFree(BSExpr *expr)
         bsRelease(expr->u.variable.name);
         break;
     case BS_EXPR_FUNCTION:
+    case BS_EXPR_CALL0:
+    case BS_EXPR_CALL1:
+    case BS_EXPR_CALL2:
         for (size_t ix = 0; ix < expr->u.function.argCount; ix++) {
             bsExprFree(expr->u.function.args[ix]);
         }
@@ -186,6 +189,9 @@ static void bsExprFinish(BSExpr *expr)
             }
         }
         expr->laterEffectful = later;
+        if (!expr->u.function.isIf && argCount <= 2) {
+            expr->type = (BSExprType) (BS_EXPR_CALL0 + argCount);
+        }
         break;
     }
     case BS_EXPR_BINARY:
@@ -223,7 +229,7 @@ BSExpr *bsExprFromModel(BSValue model)
     BSValue string = bsObjectGet(model, "string");
     if (string.type == BS_STRING) {
         BSExpr *expr = bsExprNew(BS_EXPR_STRING);
-        expr->u.string = bsRetain(string);
+        expr->u.string = bsStringIntern(bsStringData(string), bsStringSize(string));
         bsExprFinish(expr);
         return expr;
     }
@@ -611,6 +617,9 @@ static void bsResolveExprSlots(BSExpr *expr, const BSSlotMap *map)
         expr->u.variable.slot = bsSlotFind(map, expr->u.variable.name);
         break;
     case BS_EXPR_FUNCTION:
+    case BS_EXPR_CALL0:
+    case BS_EXPR_CALL1:
+    case BS_EXPR_CALL2:
         expr->u.function.slot = bsSlotFind(map, expr->u.function.name);
         for (size_t ix = 0; ix < expr->u.function.argCount; ix++) {
             bsResolveExprSlots(expr->u.function.args[ix], map);
@@ -742,7 +751,10 @@ BSValue bsExprToModel(const BSExpr *expr)
         bsObjectSet(model, "variable", bsRetain(expr->u.variable.name));
         break;
 
-    case BS_EXPR_FUNCTION: {
+    case BS_EXPR_FUNCTION:
+    case BS_EXPR_CALL0:
+    case BS_EXPR_CALL1:
+    case BS_EXPR_CALL2: {
         BSValue function = bsObjectNew();
         bsObjectSet(function, "name", bsRetain(expr->u.function.name));
         BSValue args = bsArrayNewCapacity(expr->u.function.argCount);

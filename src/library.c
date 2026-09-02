@@ -2663,7 +2663,7 @@ BSValue bsFunctionInvoke(BSValue function, const BSValue *args, size_t argCount,
     case BS_INTRIN_OBJECT_GET:
         if (argCount >= 2 && argCount <= 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
             BSValue found;
-            if (bsObjectLookup(args[0], bsStringData(args[1]), bsStringSize(args[1]), &found)) {
+            if (bsObjectLookupString(args[0], args[1], &found)) {
                 return bsRetain(found);
             }
             return bsRetain(argCount >= 3 ? args[2] : bsNull());

@@ -37,6 +37,9 @@ typedef enum {
     BS_EXPR_STRING,
     BS_EXPR_VARIABLE,
     BS_EXPR_FUNCTION,
+    BS_EXPR_CALL0,    /* a function call with 0 arguments; same union as FUNCTION */
+    BS_EXPR_CALL1,    /* a function call with 1 argument */
+    BS_EXPR_CALL2,    /* a function call with 2 arguments */
     BS_EXPR_BINARY,
     BS_EXPR_UNARY,
     BS_EXPR_GROUP
