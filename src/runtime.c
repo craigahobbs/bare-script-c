@@ -388,14 +388,9 @@ static bool bsArgsAfterAreEffectful(const BSExpr *expr, size_t ix)
 }
 
 
-static BSValue bsInvokeResolved(BSExpr *expr, const BSEvalCtx *ctx, int depth,
-                                const BSValue *args, size_t argCount)
+static BSValue bsDispatchFunction(BSExpr *expr, const BSEvalCtx *ctx, int depth,
+                                  BSValue function, const BSValue *args, size_t argCount)
 {
-    BSValue function = bsLookupFunction(expr, ctx);
-    if (function.type == BS_NULL && ctx->builtins) {
-        function = bsLibraryExpressionFunction(expr->u.function.name);
-    }
-
     BSValue result = bsNull();
     BSOptions *options = ctx->options;
     if (function.type == BS_FUNCTION) {
@@ -427,6 +422,23 @@ static BSValue bsInvokeResolved(BSExpr *expr, const BSEvalCtx *ctx, int depth,
 }
 
 
+static BSValue bsLookupCallable(BSExpr *expr, const BSEvalCtx *ctx)
+{
+    BSValue function = bsLookupFunction(expr, ctx);
+    if (function.type == BS_NULL && ctx->builtins) {
+        function = bsLibraryExpressionFunction(expr->u.function.name);
+    }
+    return function;
+}
+
+
+static BSValue bsInvokeResolved(BSExpr *expr, const BSEvalCtx *ctx, int depth,
+                                const BSValue *args, size_t argCount)
+{
+    return bsDispatchFunction(expr, ctx, depth, bsLookupCallable(expr, ctx), args, argCount);
+}
+
+
 static BSEval bsEvalCall0(BSExpr *expr, const BSEvalCtx *ctx, int depth)
 {
     return bsEvalOwned(bsInvokeResolved(expr, ctx, depth, NULL, 0));
@@ -451,8 +463,32 @@ static BSEval bsEvalCall2(BSExpr *expr, const BSEvalCtx *ctx, int depth)
         a0.owned = true;
     }
     BSEval a1 = bsEvalArg(callArgs[1], ctx, depth);
+    BSValue function = bsLookupCallable(expr, ctx);
+    BSValue result;
+    if (function.type == BS_FUNCTION) {
+        unsigned char id = function.u.function->intrinsic;
+        if (id == BS_INTRIN_OBJECT_GET && a0.value.type == BS_OBJECT && a1.value.type == BS_STRING) {
+            BSValue found;
+            result = bsObjectLookupString(a0.value, a1.value, &found) ? bsRetain(found) : bsNull();
+            bsEvalDrop(a0);
+            bsEvalDrop(a1);
+            return bsEvalOwned(result);
+        }
+        if (id == BS_INTRIN_ARRAY_GET && a0.value.type == BS_ARRAY && a1.value.type == BS_NUMBER) {
+            double number = a1.value.u.number;
+            if (isfinite(number) && trunc(number) == number && number >= 0) {
+                size_t index = (size_t) number;
+                if (index < a0.value.u.array->count) {
+                    result = bsRetain(a0.value.u.array->values[index]);
+                    bsEvalDrop(a0);
+                    bsEvalDrop(a1);
+                    return bsEvalOwned(result);
+                }
+            }
+        }
+    }
     BSValue argv[2] = {a0.value, a1.value};
-    BSValue result = bsInvokeResolved(expr, ctx, depth, argv, 2);
+    result = bsDispatchFunction(expr, ctx, depth, function, argv, 2);
     bsEvalDrop(a0);
     bsEvalDrop(a1);
     return bsEvalOwned(result);
@@ -933,10 +969,11 @@ static bool bsExecuteInclude(BSScript *script, BSStatement *statement, BSOptions
 BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t statementCount,
                             BSOptions *options, BSScope *scope)
 {
-    /* System includes never record coverage - skip the globals lookup on that hot path */
+    /* System includes never record coverage and are trusted not to need the statement budget. */
     BSValue coverage = bsNull();
     bool hasCoverage = false;
-    if (!script->system) {
+    bool countStatements = !script->system;
+    if (countStatements) {
         coverage = bsObjectGet(options->globals, BS_GLOBAL_COVERAGE);
         hasCoverage = coverage.type == BS_OBJECT && bsValueBoolean(bsObjectGet(coverage, "enabled"));
     }
@@ -953,14 +990,16 @@ BSValue bsExecuteStatements(BSScript *script, BSStatement **statements, size_t s
         BSStatement *statement = statements[ixStatement];
         ctx.statement = statement;
 
-        options->statementCount++;
-        if (options->maxStatements > 0 && options->statementCount > options->maxStatements) {
-            bsErrorSetStatement(options, script, statement, "Exceeded maximum script statements (%lld)",
-                                (long long) options->maxStatements);
-            return bsNull();
-        }
-        if (hasCoverage) {
-            bsRecordCoverage(script, statement, coverage);
+        if (countStatements) {
+            options->statementCount++;
+            if (options->maxStatements > 0 && options->statementCount > options->maxStatements) {
+                bsErrorSetStatement(options, script, statement, "Exceeded maximum script statements (%lld)",
+                                    (long long) options->maxStatements);
+                return bsNull();
+            }
+            if (hasCoverage) {
+                bsRecordCoverage(script, statement, coverage);
+            }
         }
 
         switch (statement->type) {

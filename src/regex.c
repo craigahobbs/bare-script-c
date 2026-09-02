@@ -1466,16 +1466,9 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
     if (node == NULL) {
         return rxMatchCont(state, cont, pos);
     }
-    if (++state->depth > RX_DEPTH_MAX || ++state->steps > RX_STEPS_MAX) {
-        state->depth--;
-        return false;
-    }
 
-    bool result = false;
-    switch (node->kind) {
-    case RX_CHAR:
-    case RX_ANY:
-    case RX_CLASS: {
+    /* Atom sequences already loop in one frame; do not charge depth/steps per atom. */
+    if (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS) {
         bool matched = true;
         if (state->codes == NULL) {
             while (node != NULL &&
@@ -1498,9 +1491,16 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
                 node = node->next;
             }
         }
-        result = matched && rxMatchNode(state, node, cont, pos);
-        break;
+        return matched && rxMatchNode(state, node, cont, pos);
     }
+
+    if (++state->depth > RX_DEPTH_MAX || ++state->steps > RX_STEPS_MAX) {
+        state->depth--;
+        return false;
+    }
+
+    bool result = false;
+    switch (node->kind) {
 
     case RX_BOL:
         if (pos == 0 || ((state->flags & BS_REGEX_MULTILINE) != 0 && rxCode(state, pos - 1) == '\n')) {

@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "test.h"
+#include "../src/internal.h"
 
 
 /* Duplicate a string with malloc, for option data the runtime frees */
@@ -743,6 +744,7 @@ TEST(library_direct_call)
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayCopy"), args, 1, options), "[1,2]");
     args[1] = bsNumber(1);
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayGet"), args, 2, options), "2");
+    ASSERT_VALUE(bsFunctionInvoke(bsLibraryScriptFunction("arrayGet"), args, 2, options), "2");
     ASSERT_VALUE(bsFunctionCall(bsLibraryScriptFunction("arrayLength"), args, 1, options), "2");
     args[1] = bsNumber(0);
     args[2] = bsNumber(9);

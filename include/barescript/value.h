@@ -111,17 +111,20 @@ typedef struct BSObjectNode {
 
 
 /*
- * A reference-counted object - a binary search tree of key/value pairs, ordered by key
+ * A reference-counted object of key/value pairs
  *
- * The nodes are additionally threaded on a doubly-linked list in insertion order, so an object
- * iterates in insertion order - matching the reference implementations, whose objects are
- * JavaScript objects and Python dictionaries - while the tree still provides ordered traversal for
- * JSON encoding and value comparison, both of which are defined over sorted keys.
+ * Up to four pairs live in the object itself. Past that, keys live on an insertion-order list of
+ * treap nodes; past 32 keys the list is indexed by the treap (and an interned-pointer hash table).
+ * Iteration is insertion order - matching the reference implementations, whose objects are
+ * JavaScript objects and Python dictionaries. JSON encoding and value comparison walk sorted keys.
  */
 struct BSObject {
     int32_t refcount;
+    uint8_t packed;      /* 1 = smallKeys/smallValues, 0 = insertion list + treap */
     size_t count;
     uint32_t generation; /* incremented on every insert, update, or delete */
+    BSString *smallKeys[4];
+    BSValue smallValues[4];
     BSObjectNode *root;
     BSObjectNode *insertHead;
     BSObjectNode *insertTail;

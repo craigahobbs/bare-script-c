@@ -350,6 +350,8 @@ TEST(value_object)
     ASSERT_STR_EQ(bsValueTypeString(object), "object");
     ASSERT_INT_EQ(bsObjectCount(object), 0);
     ASSERT_TRUE(bsValueBoolean(object));
+    ASSERT_VALUE(bsObjectKeys(object), "[]");
+    ASSERT_VALUE(bsObjectKeysSorted(object), "[]");
     ASSERT_FALSE(bsObjectHas(object, "z"));
     ASSERT_FALSE(bsObjectHas(object, "this-key-is-longer-than-sixty-four-bytes-so-it-is-not-interned-xx"));
 
@@ -416,6 +418,7 @@ TEST(value_object_intern)
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
     ASSERT_FALSE(bsObjectHas(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "k40"));
+    ASSERT_FALSE(bsObjectDelete(object, "a"));
     ASSERT_TRUE(bsObjectDelete(object, "k0"));
     ASSERT_FALSE(bsObjectHas(object, "k0"));
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
@@ -455,8 +458,13 @@ TEST(value_object_intern)
 
 TEST(value_object_small_update)
 {
-    /* A long (non-interned) key updated on a small list-only object */
+    /* A long (non-interned) key updated on a list-only object (past the packed limit) */
     BSValue object = bsObjectNew();
+    bsObjectSet(object, "a", bsNumber(0));
+    bsObjectSet(object, "b", bsNumber(0));
+    bsObjectSet(object, "c", bsNumber(0));
+    bsObjectSet(object, "d", bsNumber(0));
+    bsObjectSet(object, "e", bsNumber(0));
     char longKey[80];
     memset(longKey, 'b', 70);
     longKey[70] = '\0';
@@ -464,8 +472,64 @@ TEST(value_object_small_update)
     bsObjectSetString(object, key, bsNumber(1));
     bsObjectSetString(object, key, bsNumber(2));
     ASSERT_DOUBLE_EQ(bsObjectGet(object, longKey).u.number, 2);
+    bsObjectSet(object, "a", bsNumber(9));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "a").u.number, 9);
     bsRelease(key);
     bsRelease(object);
+}
+
+
+TEST(value_object_packed)
+{
+    /* Four keys stay inline; the fifth spills onto the insertion list */
+    BSValue object = bsObjectNew();
+    bsObjectSet(object, "d", bsNumber(4));
+    bsObjectSet(object, "c", bsNumber(3));
+    bsObjectSet(object, "b", bsNumber(2));
+    bsObjectSet(object, "a", bsNumber(1));
+    ASSERT_INT_EQ(bsObjectCount(object), 4);
+    ASSERT_VALUE(bsObjectKeys(object), "[\"d\",\"c\",\"b\",\"a\"]");
+    ASSERT_VALUE(bsObjectKeysSorted(object), "[\"a\",\"b\",\"c\",\"d\"]");
+    ASSERT_VALUE_KEEP(object, "{\"a\":1,\"b\":2,\"c\":3,\"d\":4}");
+    ASSERT_TRUE(bsObjectDelete(object, "c"));
+    ASSERT_FALSE(bsObjectDelete(object, "c"));
+    ASSERT_VALUE(bsObjectKeys(object), "[\"d\",\"b\",\"a\"]");
+    bsObjectSet(object, "c", bsNumber(3));
+    bsObjectSet(object, "e", bsNumber(5));
+    ASSERT_INT_EQ(bsObjectCount(object), 5);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "d").u.number, 4);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "e").u.number, 5);
+    ASSERT_VALUE(bsObjectKeys(object), "[\"d\",\"b\",\"a\",\"c\",\"e\"]");
+    ASSERT_FALSE(bsObjectHas(object, "z"));
+    ASSERT_TRUE(bsObjectDelete(object, "d"));
+    ASSERT_TRUE(bsObjectDelete(object, "e"));
+    ASSERT_TRUE(bsObjectDelete(object, "a"));
+    ASSERT_FALSE(bsObjectDelete(object, "z"));
+    ASSERT_FALSE(bsObjectDelete(object, "d"));
+    ASSERT_VALUE(bsObjectKeys(object), "[\"b\",\"c\"]");
+    bsRelease(object);
+
+    /* Long (non-interned) keys on a packed object */
+    BSValue tiny = bsObjectNew();
+    char longA[80];
+    char longB[80];
+    char longC[80];
+    memset(longA, 'x', 70);
+    longA[70] = '\0';
+    memset(longB, 'y', 70);
+    longB[70] = '\0';
+    memset(longC, 'z', 70);
+    longC[70] = '\0';
+    bsObjectSet(tiny, longA, bsNumber(1));
+    bsObjectSet(tiny, longB, bsNumber(2));
+    ASSERT_DOUBLE_EQ(bsObjectGet(tiny, longA).u.number, 1);
+    ASSERT_DOUBLE_EQ(bsObjectGet(tiny, longB).u.number, 2);
+    ASSERT_FALSE(bsObjectHas(tiny, "z"));
+    ASSERT_FALSE(bsObjectHas(tiny, longC));
+    ASSERT_TRUE(bsObjectDelete(tiny, longA));
+    ASSERT_FALSE(bsObjectHas(tiny, longA));
+    ASSERT_DOUBLE_EQ(bsObjectGet(tiny, longB).u.number, 2);
+    bsRelease(tiny);
 }
 
 
@@ -841,6 +905,18 @@ TEST(value_object_iterate)
     ASSERT_INT_EQ(count, 1);
     bsRelease(leftObject);
 
+    /* A spilled (list-only) object also stops iteration on the first pair */
+    BSValue listObject = bsObjectNew();
+    bsObjectSet(listObject, "a", bsNumber(1));
+    bsObjectSet(listObject, "b", bsNumber(2));
+    bsObjectSet(listObject, "c", bsNumber(3));
+    bsObjectSet(listObject, "d", bsNumber(4));
+    bsObjectSet(listObject, "e", bsNumber(5));
+    count = 0;
+    ASSERT_FALSE(bsObjectIter(listObject, bsTestIterStop, &count));
+    ASSERT_INT_EQ(count, 1);
+    bsRelease(listObject);
+
     /* Non-object values iterate as empty */
     count = 0;
     ASSERT_TRUE(bsObjectIter(bsNumber(1), bsTestIterStop, &count));
@@ -880,11 +956,11 @@ TEST(value_object_node_pool)
     /* Overflow the recycled-node pool so further frees go to the allocator */
     BSValue object = bsObjectNew();
     char key[16];
-    for (int ix = 0; ix < 1100; ix++) {
+    for (int ix = 0; ix < 8193; ix++) {
         snprintf(key, sizeof(key), "p%04d", ix);
         bsObjectSet(object, key, bsNumber(ix));
     }
-    ASSERT_INT_EQ(bsObjectCount(object), 1100);
+    ASSERT_INT_EQ(bsObjectCount(object), 8193);
     bsRelease(object);
 }
 
