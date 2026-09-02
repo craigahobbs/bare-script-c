@@ -7,6 +7,12 @@ interface.
 BareScript is a simple, lightweight, and portable programming language with a Pythonic syntax
 influenced by JavaScript, C, and the Unix shell.
 
+This is the fastest BareScript runtime by a wide margin, and a fast interpreter by any standard. A
+469 KB shared library with no dependency beyond libm runs the reference test suite 6x faster than
+the JavaScript implementation on V8 and 27x faster than the Python one, keeps pace with V8's own
+bytecode interpreter, and runs interpreted BareScript faster than CPython runs the equivalent
+Python. The measurements are under [Performance](#performance).
+
 ```sh
 make compile
 ./build/bare -c 'systemLog("Hello, World!")'
@@ -33,6 +39,7 @@ make compile
 - [Testing](#testing)
   - [The Include Library Test Suite](#the-include-library-test-suite)
 - [Performance](#performance)
+  - [Against Other Languages](#against-other-languages)
 - [Compatibility](#compatibility)
   - [jsonParse and regexNew messages](#jsonparse-and-regexnew-messages)
 - [License](#license)
@@ -558,7 +565,7 @@ print. `perf/test.c` is the native C baseline, the counterpart of their `test.js
 It measures the **release** build, and builds it first if needed. The implementations it is
 compared against are themselves optimized builds - Node ships as one, and CPython is built with
 profile-guided and link-time optimization - so timing the development build here would understate
-this runtime by about 1.2x against them.
+this runtime by about 1.35x against them.
 
 ```sh
 make perf
@@ -571,7 +578,7 @@ Milliseconds per 1000 runs, best of two, on one machine - lower is better:
 | ---------------- | --------------:| ---------------:| ----------------:| ---------------:|
 | mandelbrot       |     **24,000** |         303,000 |          114,000 |       3,421,000 |
 | markdownElements |        **392** |             740 |              665 |           5,227 |
-| markdownParse    |      **2,460** |           2,968 |            7,236 |          20,952 |
+| markdownParse    |      **2,696** |           2,968 |            7,236 |          20,952 |
 | qrcodeMatrix     |      **1,833** |          12,800 |            9,033 |         124,800 |
 | schemaParse      |        **152** |           1,188 |            1,256 |           9,044 |
 | schemaValidate   |        **196** |           1,920 |            1,060 |          14,428 |
@@ -584,12 +591,60 @@ baseline; `BareScript (Py)` is.) The closest race is `markdownParse`, almost ent
 expression work, against V8's JIT-compiled regex engine. That test parses each project's own
 README, so its row moves when this file changes.
 
+### Against Other Languages
+
+Beating the other BareScript runtimes is table stakes. `make perf` also times each host language
+doing the same work natively: `perf/test.c` for `mandelbrot`, and for the library tests the
+JavaScript and Python packages the include library was ported from - `schema-markdown` and
+`markdown-model` - JIT-compiled by V8 and interpreted by CPython 3.14. Milliseconds per 1000 runs
+on the same machine, columns in speed order (the Python suite has no markdown tests):
+
+| Test             | JavaScript (V8) | BareScript (C) | Python (CPython) |
+| ---------------- | ---------------:| --------------:| ----------------:|
+| mandelbrot       |           1,968 |         24,000 |           46,202 |
+| markdownElements |            32.7 |            392 |                  |
+| markdownParse    |             645 |          2,696 |                  |
+| schemaParse      |            72.8 |            152 |            171.5 |
+| schemaValidate   |            57.0 |            196 |            206.2 |
+| urlDecode        |             5.0 |            9.5 |             11.9 |
+| urlEncode        |             2.6 |            6.5 |             10.6 |
+
+Every row reads the same way: V8's JIT, then this runtime, then CPython. An interpreted BareScript
+program on this runtime runs the reference schema parser faster than CPython runs the pure-Python
+package it was ported from - and does it through a parser that is itself written in BareScript.
+Against the JIT it is 2x to 3.5x behind on the schema and URL tests and 4x behind on
+`markdownParse`, which is almost entirely regular expression work against V8's compiled regex
+engine. The exception is `markdownElements`, which builds nested objects and arrays as fast as
+V8's hidden classes and inline caches can allocate them; there V8 is 12x ahead.
+
+`mandelbrot` is the one test every language can run as the same code, so it can widen the field.
+Milliseconds per run on the same machine - the Ruby and Perl rows are one-off ports of
+`perf/test.c`'s function, the rest come from the perf suites:
+
+| Runtime                                          | ms per run |
+| ------------------------------------------------ | ----------:|
+| C, clang `-O2` with LTO                          |       0.79 |
+| JavaScript, Node 24 (V8 JIT)                     |       1.97 |
+| **BareScript (C)**                               |     **24** |
+| JavaScript, Node 24 `--jitless` (V8 interpreter) |         27 |
+| Python 3.14 (CPython, PGO and LTO)               |         46 |
+| Ruby 2.6 (no JIT)                                |         49 |
+| Perl 5.34                                        |         85 |
+| BareScript (PyC)                                 |        114 |
+| BareScript (JS)                                  |        303 |
+| BareScript (Py)                                  |      3,421 |
+
+That is the neighborhood: 12x behind V8's JIT and 30x behind native C, level with V8's own
+bytecode interpreter, twice as fast as CPython, and 5x to 140x ahead of the other BareScript
+runtimes. It gets there as a plain bytecode interpreter - no JIT, no assembly, no dependencies -
+in 186 KB of code.
+
 The release build is about 1.35x the default build, milliseconds per test run:
 
 | Test                        | C (`-O2`) | C (release) |
 | --------------------------- | ---------:| -----------:|
 | mandelbrot, 1 run           |        37 |          24 |
-| markdownParse, 250 runs     |       821 |         615 |
+| markdownParse, 250 runs     |       899 |         674 |
 | qrcodeMatrix, 30 runs       |        76 |          55 |
 | schemaValidate, 250 runs    |        72 |          49 |
 | urlDecode, 2000 runs        |        27 |          19 |
