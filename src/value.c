@@ -885,6 +885,7 @@ BSValue bsObjectNew(void)
     BSObject *object = bsObjectAlloc();
     object->refcount = 1;
     object->packed = 1;
+    object->uninterned = 0;
     object->count = 0;
     object->generation = 0;
     object->root = NULL;
@@ -956,9 +957,9 @@ static uint32_t bsObjectPriority(void)
  * Interned object keys
  *
  * Short C-string keys (script names, bsObjectSet) are interned so lookup can compare pointers.
- * JSON keys reuse an interned string when the name is already interned and otherwise stay ordinary
- * strings, so untrusted unique keys cannot grow the table without bound. The table holds one
- * reference; interned strings live until process exit. New intern entries stop at COUNT_MAX.
+ * JSON and computed objectSet keys reuse an interned string when the name is already interned
+ * and otherwise stay ordinary, so untrusted unique keys cannot grow the table. The table holds
+ * one reference; interned strings live until process exit. New intern entries stop at COUNT_MAX.
  */
 #define BS_INTERN_MAX 64
 #define BS_INTERN_INITIAL 32
@@ -1080,6 +1081,18 @@ BSValue bsStringIntern(const char *data, size_t size)
             return value;
         }
     }
+}
+
+BSValue bsStringInternExisting(const char *data, size_t size)
+{
+    if (size <= BS_INTERN_MAX) {
+        BSString *found = bsInternLookup(data, size);
+        if (found != NULL) {
+            found->refcount++;
+            return bsStringTake(found);
+        }
+    }
+    return bsStringNewSize(data, size);
 }
 
 static int bsKeyCompare(const BSString *key1, const char *key2, size_t size2)
@@ -1221,16 +1234,19 @@ static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *obj
 static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t size,
                                      BSString *interned);
 
+static int bsObjectKeyEqual(const BSString *stored, const char *key, size_t size, BSString *interned)
+{
+    if (interned != NULL && stored == interned) {
+        return 1;
+    }
+    return stored->size == size && (size == 0 || memcmp(stored->data, key, size) == 0);
+}
+
 static int bsObjectPackedFind(const BSObject *object, const char *key, size_t size,
                               BSString *interned)
 {
     for (size_t ix = 0; ix < object->count; ix++) {
-        if (interned != NULL) {
-            if (object->smallKeys[ix] == interned) {
-                return (int) ix;
-            }
-        } else if (object->smallKeys[ix]->size == size &&
-                   (size == 0 || memcmp(object->smallKeys[ix]->data, key, size) == 0)) {
+        if (bsObjectKeyEqual(object->smallKeys[ix], key, size, interned)) {
             return (int) ix;
         }
     }
@@ -1283,6 +1299,9 @@ static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *obj
     created->priority = bsObjectPriority();
     created->key = bsRetain(key).u.string;
     created->value = item;
+    if (key.type != BS_STRING || (key.u.string->flags & BS_STR_INTERNED) == 0) {
+        object->uninterned = 1;
+    }
 
     created->insertPrev = object->insertTail;
     created->insertNext = NULL;
@@ -1454,6 +1473,9 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
             return;
         }
         if (object->count < BS_OBJECT_PACKED) {
+            if (key.type != BS_STRING || (key.u.string->flags & BS_STR_INTERNED) == 0) {
+                object->uninterned = 1;
+            }
             object->smallKeys[object->count] = bsRetain(key).u.string;
             object->smallValues[object->count] = item;
             object->count++;
@@ -1467,15 +1489,7 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
         const char *keyData = bsStringData(key);
         size_t keySize = bsStringSize(key);
         for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
-            if (interned != NULL) {
-                if (node->key == interned) {
-                    bsRelease(node->value);
-                    node->value = item;
-                    object->generation++;
-                    return;
-                }
-            } else if (node->key->size == keySize &&
-                       (keySize == 0 || memcmp(node->key->data, keyData, keySize) == 0)) {
+            if (bsObjectKeyEqual(node->key, keyData, keySize, interned)) {
                 bsRelease(node->value);
                 node->value = item;
                 object->generation++;
@@ -1519,16 +1533,14 @@ static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t s
         size = interned->size;
     }
     if (interned != NULL && object->count > BS_OBJECT_SMALL && object->lookup != NULL) {
-        return bsObjectLookupGet(object, interned);
+        BSObjectNode *node = bsObjectLookupGet(object, interned);
+        if (node != NULL || !object->uninterned) {
+            return node;
+        }
     }
     if (object->count <= BS_OBJECT_SMALL) {
         for (BSObjectNode *node = object->insertHead; node != NULL; node = node->insertNext) {
-            if (interned != NULL) {
-                if (node->key == interned) {
-                    return node;
-                }
-            } else if (node->key->size == size &&
-                       (size == 0 || memcmp(node->key->data, key, size) == 0)) {
+            if (bsObjectKeyEqual(node->key, key, size, interned)) {
                 return node;
             }
         }
@@ -1611,11 +1623,13 @@ void bsObjectSetString(BSValue value, BSValue key, BSValue item)
     BSObject *object = value.u.object;
     if (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) == 0 &&
         key.u.string->size <= BS_INTERN_MAX) {
-        /* Intern short keys so interned lookup stays pointer-only. New intern entries stop at cap. */
-        BSValue interned = bsStringIntern(key.u.string->data, key.u.string->size);
-        bsObjectInsert(object, interned, item);
-        bsRelease(interned);
-        return;
+        /* Reuse an interned name when one exists; do not intern untrusted unique keys. */
+        BSString *found = bsInternLookup(key.u.string->data, key.u.string->size);
+        if (found != NULL) {
+            found->refcount++;
+            bsObjectInsert(object, bsStringTake(found), item);
+            return;
+        }
     }
     bsObjectInsert(object, key, item);
 }

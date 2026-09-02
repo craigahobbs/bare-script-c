@@ -406,15 +406,21 @@ TEST(value_object)
 
 TEST(value_object_json_keys)
 {
-    /* JSON short keys that are not already interned still round-trip */
-    const char *json = "{\"zzUniqueKey\":1,\"zzOtherKey\":2}";
+    /* JSON short keys that are not already interned still round-trip and stay ordinary */
+    const char *json = "{\"zzUniqueKey\":1,\"name\":2,\"zz\\tEsc\":3}";
     BSValue object = bsJSONDecode(json, strlen(json), NULL);
-    ASSERT_INT_EQ(bsObjectCount(object), 2);
+    ASSERT_INT_EQ(bsObjectCount(object), 3);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "zzUniqueKey").u.number, 1);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "zzOtherKey").u.number, 2);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "name").u.number, 2);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "zz\tEsc").u.number, 3);
+    BSValue keys = bsObjectKeys(object);
+    ASSERT_TRUE((bsArrayGet(keys, 0).u.string->flags & BS_STR_INTERNED) == 0);
+    ASSERT_TRUE((bsArrayGet(keys, 1).u.string->flags & BS_STR_INTERNED) != 0);
+    ASSERT_TRUE((bsArrayGet(keys, 2).u.string->flags & BS_STR_INTERNED) == 0);
+    bsRelease(keys);
     ASSERT_TRUE(bsObjectDelete(object, "zzUniqueKey"));
     ASSERT_FALSE(bsObjectHas(object, "zzUniqueKey"));
-    ASSERT_TRUE(bsObjectHas(object, "zzOtherKey"));
+    ASSERT_TRUE(bsObjectHas(object, "name"));
     bsRelease(object);
 }
 

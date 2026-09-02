@@ -121,6 +121,9 @@ BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size);
 /* Intern a short string. Strings longer than 64 bytes are not interned. Returns an owned value. */
 BSValue bsStringIntern(const char *data, size_t size);
 
+/* Reuse an interned string if present; otherwise a new ordinary string. Does not grow the table. */
+BSValue bsStringInternExisting(const char *data, size_t size);
+
 /* Allocate a string whose bytes are already known to be ASCII (length == size). */
 BSValue bsStringNewAscii(const char *text, size_t size);
 

@@ -125,6 +125,7 @@ typedef struct BSObjectNode {
 struct BSObject {
     int32_t refcount;
     uint8_t packed;      /* 1 = smallKeys/smallValues, 0 = insertion list + treap */
+    uint8_t uninterned;  /* 1 if any key is not interned; interned hash miss then walks the treap */
     size_t count;
     uint32_t generation; /* incremented on every insert, update, or delete */
     BSString *smallKeys[4];

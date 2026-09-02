@@ -291,7 +291,7 @@ static bool bsJSONHex4(BSJSONParser *parser, uint32_t *result)
 }
 
 
-static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result)
+static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, int asKey)
 {
     size_t begin = parser->offset;
     if (begin >= parser->size || parser->text[begin] != '"') {
@@ -304,7 +304,9 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result)
     while (ix < parser->size) {
         unsigned char ch = (unsigned char) parser->text[ix];
         if (ch == '"') {
-            *result = bsStringNewSize(parser->text + parser->offset, ix - parser->offset);
+            const char *data = parser->text + parser->offset;
+            size_t size = ix - parser->offset;
+            *result = asKey ? bsStringInternExisting(data, size) : bsStringNewSize(data, size);
             parser->offset = ix + 1;
             return true;
         }
@@ -402,7 +404,12 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result)
         }
     }
 
-    *result = bsSBToValue(&sb);
+    if (asKey) {
+        *result = bsStringInternExisting(sb.data != NULL ? sb.data : "", sb.size);
+        bsSBFree(&sb);
+    } else {
+        *result = bsSBToValue(&sb);
+    }
     return true;
 }
 
@@ -463,7 +470,7 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
     while (true) {
         bsJSONSkipSpace(parser);
         BSValue key;
-        if (!bsJSONDecodeString(parser, &key)) {
+        if (!bsJSONDecodeString(parser, &key, 1)) {
             bsRelease(object);
             return false;
         }
@@ -594,7 +601,7 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
         return bsJSONDecodeArray(parser, depth, result);
     }
     if (ch == '"') {
-        return bsJSONDecodeString(parser, result);
+        return bsJSONDecodeString(parser, result, 0);
     }
     if (ch == 't' && bsJSONLiteral(parser, "true")) {
         *result = bsBoolean(true);
@@ -618,7 +625,7 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
 /*
  * Intern the closed set of script-model object keys before decoding JSON. JSON insert reuses
  * interned names so later interned lookup stays pointer-only. Unique payload keys stay ordinary
- * strings.
+ * strings and do not grow the intern table.
  */
 static void bsJSONInternModelKeys(void)
 {

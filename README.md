@@ -285,10 +285,13 @@ matters because BareScript code routinely inserts keys in sorted order - the wor
 plain binary search tree. Nodes are additionally threaded on a doubly-linked list in insertion
 order, so objects iterate in insertion order (matching the reference implementations, whose
 objects are JavaScript objects and Python dictionaries) while the tree still provides the sorted
-traversal that JSON encoding and value comparison are defined over. Short keys of at most 64 bytes are interned, so a hit can compare interned `BSString` pointers
-instead of `memcmp`. The intern table is capped so untrusted unique keys cannot grow it without
-bound. Interned names on the compiled script skip hashing entirely. Objects of
-more than 32 keys keep an interned-pointer hash table for lookup. The intern table holds one
+traversal that JSON encoding and value comparison are defined over. C-string keys and compiled
+names of at most 64 bytes are interned, so a hit can compare interned `BSString` pointers
+instead of `memcmp`. JSON and computed keys reuse an interned name when it is already in the
+table and otherwise stay ordinary strings, so untrusted unique keys cannot grow the table.
+The intern table is also capped. Interned names on the compiled script skip hashing entirely.
+Objects of more than 32 keys keep an interned-pointer hash table for lookup; a miss there is
+definitive unless the object also has uninterned keys. The intern table holds one
 reference; interned strings live until process exit.
 
 Allocation failure is fatal: there is no useful way for a script runtime to continue without
