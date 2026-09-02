@@ -1431,14 +1431,20 @@ static void bsObjectTreapLink(BSObject *object, BSObjectNode *created)
 }
 
 
+/*
+ * Link every list node into the treap
+ *
+ * Past BS_OBJECT_SMALL keys the interned-pointer table answers lookups, so the treap - which
+ * orders keys by content - is only built when something needs that order: a sorted walk, or a key
+ * that is not interned and so can only be found by content. An object whose keys are all interned
+ * (a regex match's groups, most script-built objects) never pays for it unless it is encoded or
+ * compared.
+ */
 static void bsObjectBuildTreap(BSObject *object)
 {
     object->u.tree.root = NULL;
     for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
         bsObjectTreapLink(object, node);
-    }
-    if (object->u.tree.lookup == NULL) {
-        bsObjectLookupGrow(object);
     }
 }
 
@@ -1530,24 +1536,43 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
         }
         bsObjectSpill(object);
     }
-    if (object->u.tree.root == NULL) {
-        BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
-        const char *keyData = bsStringData(key);
-        size_t keySize = bsStringSize(key);
-        for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
-            if (bsObjectKeyEqual(node->key, keyData, keySize, interned)) {
-                bsRelease(node->value);
-                node->value = item;
-                return;
-            }
-        }
-        bsObjectNodeCreate(key, item, object);
-        if (object->count > BS_OBJECT_SMALL) {
-            bsObjectBuildTreap(object);
-        }
+    BSString *interned = (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
+    if (object->count > BS_OBJECT_SMALL && object->u.tree.root == NULL &&
+        (interned == NULL || object->uninterned)) {
+        /* The key can only be matched by content */
+        bsObjectBuildTreap(object);
+    }
+    if (object->u.tree.root != NULL) {
+        bsObjectTreapInsert(object, key, item);
         return;
     }
-    bsObjectTreapInsert(object, key, item);
+    if (object->count > BS_OBJECT_SMALL) {
+        /* Every key is interned, so the table is definitive */
+        BSObjectNode *node = bsObjectLookupGet(object, interned);
+        if (node != NULL) {
+            bsRelease(node->value);
+            node->value = item;
+            return;
+        }
+        bsObjectNodeCreate(key, item, object);
+        return;
+    }
+    const char *keyData = bsStringData(key);
+    size_t keySize = bsStringSize(key);
+    for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
+        if (bsObjectKeyEqual(node->key, keyData, keySize, interned)) {
+            bsRelease(node->value);
+            node->value = item;
+            return;
+        }
+    }
+    bsObjectNodeCreate(key, item, object);
+    if (object->count > BS_OBJECT_SMALL) {
+        bsObjectLookupGrow(object);
+        if (object->uninterned) {
+            bsObjectBuildTreap(object);
+        }
+    }
 }
 
 
@@ -1577,30 +1602,32 @@ static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t s
         key = interned->data;
         size = interned->size;
     }
-    if (interned != NULL && object->count > BS_OBJECT_SMALL && object->u.tree.lookup != NULL) {
-        BSObjectNode *node = bsObjectLookupGet(object, interned);
-        if (node != NULL || !object->uninterned) {
+    if (object->count > BS_OBJECT_SMALL) {
+        if (interned != NULL) {
+            BSObjectNode *node = bsObjectLookupGet(object, interned);
+            if (node != NULL || !object->uninterned) {
+                return node;
+            }
+        } else if (!object->uninterned) {
+            /* Every stored key is interned and this key has no interned form */
+            return NULL;
+        }
+        /* An object with an uninterned key past the threshold always has its treap */
+        return bsObjectFind(object->u.tree.root, key, size);
+    }
+    for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
+        if (bsObjectKeyEqual(node->key, key, size, interned)) {
             return node;
         }
     }
-    if (object->count <= BS_OBJECT_SMALL) {
-        for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
-            if (bsObjectKeyEqual(node->key, key, size, interned)) {
-                return node;
-            }
-        }
-        return NULL;
-    }
-    return bsObjectFind(object->u.tree.root, key, size);
+    return NULL;
 }
 
 
+/* Remove a key known to be in the treap */
 static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t size, bool *removed,
                                     BSObject *object)
 {
-    if (node == NULL) {
-        return NULL;
-    }
     int compare = bsKeyCompare(node->key, key, size);
     if (compare > 0) {
         node->left = bsObjectRemove(node->left, key, size, removed, object);
@@ -1787,32 +1814,33 @@ bool bsObjectDelete(BSValue value, const char *key)
         object->generation++;
         return true;
     }
-    if (object->u.tree.root == NULL) {
-        BSObjectNode *node = bsObjectFindKey(object, key, size, interned);
-        if (node == NULL) {
-            return false;
-        }
-        if (node->insertPrev != NULL) {
-            node->insertPrev->insertNext = node->insertNext;
-        } else {
-            object->u.tree.insertHead = node->insertNext;
-        }
-        if (node->insertNext != NULL) {
-            node->insertNext->insertPrev = node->insertPrev;
-        } else {
-            object->u.tree.insertTail = node->insertPrev;
-        }
-        bsObjectLookupDel(object, node->key);
-        bsRelease(bsStringTake(node->key));
-        bsRelease(node->value);
-        bsObjectNodeRecycle(node);
-        object->count--;
-        object->generation++;
-        return true;
+    BSObjectNode *node = bsObjectFindKey(object, key, size, interned);
+    if (node == NULL) {
+        return false;
     }
-    bool removed = false;
-    object->u.tree.root = bsObjectRemove(object->u.tree.root, key, size, &removed, object);
-    return removed;
+    if (object->u.tree.root != NULL) {
+        bool removed = false;
+        object->u.tree.root = bsObjectRemove(object->u.tree.root, node->key->data, node->key->size,
+                                             &removed, object);
+        return removed;
+    }
+    if (node->insertPrev != NULL) {
+        node->insertPrev->insertNext = node->insertNext;
+    } else {
+        object->u.tree.insertHead = node->insertNext;
+    }
+    if (node->insertNext != NULL) {
+        node->insertNext->insertPrev = node->insertPrev;
+    } else {
+        object->u.tree.insertTail = node->insertPrev;
+    }
+    bsObjectLookupDel(object, node->key);
+    bsRelease(bsStringTake(node->key));
+    bsRelease(node->value);
+    bsObjectNodeRecycle(node);
+    object->count--;
+    object->generation++;
+    return true;
 }
 
 
@@ -1909,10 +1937,8 @@ bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data)
         if (value.u.object->count <= BS_OBJECT_SMALL) {
             return bsObjectIterListSorted(value.u.object, iter, data);
         }
-        /* GCOV_EXCL_START - insert past 32 already builds the treap */
         bsObjectBuildTreap(value.u.object);
     }
-        /* GCOV_EXCL_STOP */
     BSObjectIterContext context = {iter, data};
     return bsObjectIterNode(value.u.object->u.tree.root, &context);
 }

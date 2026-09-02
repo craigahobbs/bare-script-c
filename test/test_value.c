@@ -935,6 +935,60 @@ static bool bsTestIterStop(BSValue key, BSValue item, void *data)
 }
 
 
+TEST(value_object_lazy_treap)
+{
+    /* Past 32 keys, an all-interned object answers lookups from its hash table without a treap */
+    BSValue object = bsObjectNew();
+    char key[8];
+    for (int ix = 0; ix < 40; ix++) {
+        snprintf(key, sizeof(key), "k%d", ix);
+        bsObjectSet(object, key, bsNumber(ix));
+    }
+    ASSERT_TRUE(object.u.object->u.tree.root == NULL);
+    ASSERT_TRUE(object.u.object->u.tree.lookup != NULL);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k7").u.number, 7);
+
+    /* A key with no interned form cannot be present */
+    BSValue absent = bsStringNew("k7-with-no-interned-form");
+    ASSERT_FALSE(bsObjectHasString(object, absent));
+    ASSERT_TRUE(object.u.object->u.tree.root == NULL);
+    bsRelease(absent);
+
+    /* A sorted walk builds the treap */
+    BSValue sorted = bsObjectKeysSorted(object);
+    ASSERT_INT_EQ(bsArrayCount(sorted), 40);
+    ASSERT_VALUE_KEEP(bsArrayGet(sorted, 0), "\"k0\"");
+    ASSERT_VALUE_KEEP(bsArrayGet(sorted, 39), "\"k9\"");
+    ASSERT_TRUE(object.u.object->u.tree.root != NULL);
+    bsRelease(sorted);
+
+    /* Updates, lookups, and deletes go through the treap once it exists */
+    bsObjectSet(object, "k7", bsNumber(70));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k7").u.number, 70);
+    ASSERT_INT_EQ(bsObjectCount(object), 40);
+    ASSERT_TRUE(bsObjectDelete(object, "k7"));
+    ASSERT_FALSE(bsObjectHas(object, "k7"));
+    ASSERT_INT_EQ(bsObjectCount(object), 39);
+    bsRelease(object);
+
+    /* An uninterned key inserted past 32 keys builds the treap, since it is matched by content */
+    object = bsObjectNew();
+    for (int ix = 0; ix < 40; ix++) {
+        snprintf(key, sizeof(key), "k%d", ix);
+        bsObjectSet(object, key, bsNumber(ix));
+    }
+    ASSERT_TRUE(object.u.object->u.tree.root == NULL);
+    BSValue longKey = bsStringNew("a key longer than the sixty-four byte limit of the intern table is never interned");
+    bsObjectSetString(object, longKey, bsNumber(1));
+    ASSERT_TRUE(object.u.object->u.tree.root != NULL);
+    ASSERT_INT_EQ(bsObjectCount(object), 41);
+    ASSERT_DOUBLE_EQ(bsObjectGetString(object, longKey).u.number, 1);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k3").u.number, 3);
+    bsRelease(longKey);
+    bsRelease(object);
+}
+
+
 TEST(value_object_iterate)
 {
     BSValue object = bsObjectNew();
