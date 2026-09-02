@@ -255,7 +255,7 @@ size_t bsUTF8Length(const char *data, size_t size)
  * knows where the block goes. The free-list link reuses the offsets pointer.
  */
 #define BS_STRING_POOL_CLASSES 4
-#define BS_STRING_POOL_MAX 256
+#define BS_STRING_POOL_MAX 4096
 #define BS_STR_POOL_SHIFT 4
 static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128};
 static BSString *bsStringPool[BS_STRING_POOL_CLASSES];
@@ -682,7 +682,7 @@ BSValue bsSBToValue(BSStringBuilder *sb)
 
 static BSArray *bsArrayPool;
 static unsigned bsArrayPoolCount;
-#define BS_ARRAY_POOL_MAX 256
+#define BS_ARRAY_POOL_MAX 16384
 
 /* Recycle common array value buffers so JSON arrays are not two mallocs every time */
 #define BS_ARRAY_BUF_CLASS_COUNT 4
@@ -899,7 +899,7 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
 
 static BSObject *bsObjectPool;
 static unsigned bsObjectPoolCount;
-#define BS_OBJECT_POOL_MAX 1024
+#define BS_OBJECT_POOL_MAX 16384
 
 static BSObject *bsObjectAlloc(void)
 {
@@ -960,7 +960,7 @@ static uint32_t bsObjectPriorityState = 0x9E3779B9u;
 /* Recycled treap nodes - BareScript allocates and frees objects constantly */
 static BSObjectNode *bsObjectNodePool;
 static unsigned bsObjectNodePoolCount;
-#define BS_OBJECT_NODE_POOL_MAX 1024
+#define BS_OBJECT_NODE_POOL_MAX 16384
 
 static BSObjectNode *bsObjectNodeAlloc(void)
 {

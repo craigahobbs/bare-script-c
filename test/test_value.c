@@ -1079,14 +1079,14 @@ TEST(value_object_node_pool)
 TEST(value_header_pools)
 {
     /* Overflow the recycled array and object header pools */
-    BSValue arrays = bsArrayNewCapacity(1100);
-    BSValue objects = bsArrayNewCapacity(1100);
-    for (int ix = 0; ix < 1100; ix++) {
+    BSValue arrays = bsArrayNewCapacity(17000);
+    BSValue objects = bsArrayNewCapacity(17000);
+    for (int ix = 0; ix < 17000; ix++) {
         bsArrayPush(arrays, bsArrayNew());
         bsArrayPush(objects, bsObjectNew());
     }
-    ASSERT_INT_EQ(bsArrayCount(arrays), 1100);
-    ASSERT_INT_EQ(bsArrayCount(objects), 1100);
+    ASSERT_INT_EQ(bsArrayCount(arrays), 17000);
+    ASSERT_INT_EQ(bsArrayCount(objects), 17000);
     bsRelease(arrays);
     bsRelease(objects);
 }
