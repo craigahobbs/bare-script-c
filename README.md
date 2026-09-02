@@ -460,7 +460,7 @@ const char *bsIncludeSourceMarkdownUp(void);    /* markdownUp.bare */
 extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];   /* all of them, in order */
 ```
 
-plus `bsIncludeCount`, `bsIncludeName`, and `bsIncludeSource` for lookup by name. A model decodes
+`runtime.h` adds `bsIncludeCount`, `bsIncludeName`, and `bsIncludeSource` for lookup by name. A model decodes
 on first use and is cached, so a program that includes two of the thirty-two pays for two.
 
 

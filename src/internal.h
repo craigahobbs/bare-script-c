@@ -248,6 +248,12 @@ BSValue bsRegexMatchImpl(BSValue regex, BSValue string);
 /* A value's interned type name string - "array", "boolean", ... - as an owned value */
 BSValue bsSystemTypeName(BSValue value);
 
+/*
+ * The line of the statement containing the instruction at "pc" - the last of "count" statements
+ * whose first instruction, in "pcs", is at or before it - or zero before the first
+ */
+int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc);
+
 /* The value type names, indexed by BSType */
 extern const char *const bsTypeNames[BS_REGEX + 1];
 

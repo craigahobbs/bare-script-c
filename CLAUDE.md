@@ -159,7 +159,7 @@ BareScript exposes - see README's **Regular Expressions** table.
 | `src/library.c`           | the built-in library and `bsArgsValidate`                     |
 | `src/model.c`             | BareScript model -> bytecode; saved model for lint/coverage   |
 | `src/parser.c`            | thin wrapper running the BareScript parser and linter         |
-| `src/include.c`           | system include resolution and model decompression             |
+| `src/include.c`           | the bundled include registry and model decompression          |
 | `src/includeSource.c`     | **generated** - compressed include library models             |
 | `src/bare.c`, `src/main.c`| the CLI (`bsMain`) and its entry point                        |
 | `src/internal.h`          | declarations shared across implementation files               |

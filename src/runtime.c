@@ -263,46 +263,13 @@ static BSValue bsAddSlow(BSValue left, BSValue right)
 }
 
 
-static BSValue bsBitwise(uint8_t op, BSValue left, BSValue right)
-{
-    if (!bsIsInteger(left) || !bsIsInteger(right)) {
-        return bsNull();
-    }
-    int32_t leftInt = bsToInt32(left.u.number);
-    int32_t rightInt = bsToInt32(right.u.number);
-    uint32_t shift = ((uint32_t) rightInt) & 31u;
-    switch (op) {
-    case BS_OP_BAND:
-        return bsNumber((double) (leftInt & rightInt));
-    case BS_OP_BOR:
-        return bsNumber((double) (leftInt | rightInt));
-    case BS_OP_BXOR:
-        return bsNumber((double) (leftInt ^ rightInt));
-    case BS_OP_SHL:
-        return bsNumber((double) (int32_t) ((uint32_t) leftInt << shift));
-    default:
-        return bsNumber((double) (leftInt >> shift));
-    }
-}
-
-
 /*
  * The line number of the statement containing the instruction at "pc" - the last statement that
  * begins at or before it. Only error paths need a line, so the interpreter loop does not track one.
  */
 static int bsCodeLine(const BSCode *code, size_t pc)
 {
-    size_t low = 0;
-    size_t high = code->coverCount;
-    while (low < high) {
-        size_t middle = low + (high - low) / 2;
-        if (code->coverPcs[middle] <= pc) {
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-    return low != 0 ? code->coverLines[low - 1] : 0;
+    return bsCoverLine(code->coverPcs, code->coverLines, code->coverCount, pc);
 }
 
 
@@ -421,10 +388,6 @@ static void bsScriptFunctionFree(void *data)
     bsScriptRelease(scriptFunction->script);
     free(scriptFunction);
 }
-
-
-static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lineNumber,
-                             BSOptions *options);
 
 
 /* The script function implementation */
@@ -707,29 +670,29 @@ static inline BSValue bsGlobalLookup(BSCallCache *cache, BSValue name, BSOptions
  * index, for error line numbers. Returns the owned result.
  */
 static BSValue bsCall(const BSCode *code, size_t pc, uint8_t op, uint32_t arg, const BSValue *args,
-                      size_t argCount, BSScript *script, BSOptions *options, BSScope *scope,
-                      bool builtins)
+                      size_t argCount, BSScript *script, BSOptions *options, const BSValue *slots,
+                      BSValue locals, bool builtins)
 {
     BSValue name;
     BSValue function = bsNull();
     if (op == BS_OP_CALL_SLOT) {
         name = code->slotNames[arg];
-        if (scope != NULL && scope->slots != NULL) {
-            BSValue value = scope->slots[arg];
+        if (slots != NULL) {
+            BSValue value = slots[arg];
             if (!BS_IS_UNSET(value)) {
                 function = value;
             }
         }
         if (function.type == BS_NULL) {
-            /* An unassigned local falls through to the globals, as does an unset slot below */
+            /* An unset or null slot falls through to the globals */
             function = bsObjectGetString(options->globals, name);
         }
     } else {
         BSCallCache *cache = &code->caches[arg];
         name = code->constants[cache->nameIndex];
-        if (scope != NULL && scope->slots == NULL && scope->object.type == BS_OBJECT) {
+        if (locals.type == BS_OBJECT) {
             BSValue found;
-            if (bsObjectLookupString(scope->object, name, &found)) {
+            if (bsObjectLookupString(locals, name, &found)) {
                 function = found;
             }
         }
@@ -840,10 +803,7 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
         includeText = includeOwned;
     }
     if (includeText == NULL) {
-        bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed",
-                            bsStringData(includeUrl));
-        bsRelease(includeUrl);
-        return false;
+        goto includeFailed;
     }
 
     BSScript *includeScript;
@@ -853,10 +813,7 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
         bsRelease(model);
         free(includeOwned);
         if (includeScript == NULL) {
-            bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed",
-                                bsStringData(includeUrl));
-            bsRelease(includeUrl);
-            return false;
+            goto includeFailed;
         }
     } else { /* GCOV_EXCL_LINE - llvm-cov attributes this brace to the JSON-model branch */
         BSParserError parserError;
@@ -906,6 +863,11 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
     bsRelease(includeUrl);
 
     return options->error.type != BS_STRING;
+
+includeFailed:
+    bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed", bsStringData(includeUrl));
+    bsRelease(includeUrl);
+    return false;
 }
 
 
@@ -933,6 +895,55 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
+/*
+ * The binary operator handlers that differ only by their operator. Each opcode keeps its own
+ * handler - and, when dispatch is threaded, its own dispatch - so no operator is chosen at run time.
+ */
+#define BS_ARITHMETIC(name, expr) \
+    BS_CASE(name) { \
+        BSValue right = stack[--sp]; \
+        BSValue left = stack[--sp]; \
+        stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ? bsArithmetic(expr) : bsNull(); \
+        bsRelease(left); \
+        bsRelease(right); \
+    } \
+    BS_NEXT()
+
+#define BS_COMPARE(name, test) \
+    BS_CASE(name) { \
+        BSValue right = stack[--sp]; \
+        BSValue left = stack[--sp]; \
+        int cmp; \
+        if (left.type == BS_NUMBER && right.type == BS_NUMBER) { \
+            double ln = left.u.number, rn = right.u.number; \
+            cmp = ln < rn ? -1 : (ln > rn ? 1 : 0); \
+        } else { \
+            cmp = bsValueCompare(left, right); \
+            bsRelease(left); \
+            bsRelease(right); \
+        } \
+        stack[sp++] = bsBoolean(test); \
+    } \
+    BS_NEXT()
+
+/* JavaScript semantics: operands are 32-bit integers, and a shift count is masked to five bits */
+#define BS_BITWISE(name, expr) \
+    BS_CASE(name) { \
+        BSValue right = stack[--sp]; \
+        BSValue left = stack[--sp]; \
+        if (bsIsInteger(left) && bsIsInteger(right)) { \
+            int32_t leftInt = bsToInt32(left.u.number); \
+            int32_t rightInt = bsToInt32(right.u.number); \
+            stack[sp++] = bsNumber((double) (expr)); \
+        } else { \
+            stack[sp++] = bsNull(); \
+        } \
+        bsRelease(left); \
+        bsRelease(right); \
+    } \
+    BS_NEXT()
+
+
 BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
                   bool builtins)
 {
@@ -945,6 +956,7 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
         bsAlloc(code->stackMax * sizeof(BSValue));
     size_t sp = 0;
     BSValue *slots = scope != NULL ? scope->slots : NULL;
+    BSValue locals = (scope != NULL && slots == NULL) ? scope->object : bsNull();
 
     bool countStatements = script != NULL && !script->system;
     BSValue coverage = bsNull();
@@ -1027,8 +1039,7 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
             BSCallCache *cache = &code->caches[arg];
             BSValue name = code->constants[cache->nameIndex];
             BSValue value;
-            if (scope == NULL || scope->slots != NULL || scope->object.type != BS_OBJECT ||
-                !bsObjectLookupString(scope->object, name, &value)) {
+            if (locals.type != BS_OBJECT || !bsObjectLookupString(locals, name, &value)) {
                 value = bsGlobalLookup(cache, name, options);
             }
             stack[sp++] = bsRetain(value);
@@ -1106,8 +1117,8 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
             size_t callPc = pc - 1;
             size_t argCount = BS_ARG(insts[pc++]);
             BSValue *callArgs = stack + (sp - argCount);
-            BSValue result = bsCall(code, callPc, op, arg, callArgs, argCount, script, options, scope,
-                                    builtins);
+            BSValue result = bsCall(code, callPc, op, arg, callArgs, argCount, script, options, slots,
+                                    locals, builtins);
             for (size_t ix = 0; ix < argCount; ix++) {
                 bsRelease(callArgs[ix]);
             }
@@ -1147,100 +1158,23 @@ BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSSc
         }
         BS_NEXT();
 
-        BS_CASE(MUL) {
-            BSValue right = stack[--sp];
-            BSValue left = stack[--sp];
-            stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
-                bsArithmetic(left.u.number * right.u.number) : bsNull();
-            bsRelease(left);
-            bsRelease(right);
-        }
-        BS_NEXT();
+        BS_ARITHMETIC(MUL, left.u.number * right.u.number);
+        BS_ARITHMETIC(DIV, left.u.number / right.u.number);
+        BS_ARITHMETIC(MOD, fmod(left.u.number, right.u.number));
+        BS_ARITHMETIC(POW, pow(left.u.number, right.u.number));
 
-        BS_CASE(DIV) {
-            BSValue right = stack[--sp];
-            BSValue left = stack[--sp];
-            stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
-                bsArithmetic(left.u.number / right.u.number) : bsNull();
-            bsRelease(left);
-            bsRelease(right);
-        }
-        BS_NEXT();
+        BS_COMPARE(EQ, cmp == 0);
+        BS_COMPARE(NE, cmp != 0);
+        BS_COMPARE(LT, cmp < 0);
+        BS_COMPARE(LE, cmp <= 0);
+        BS_COMPARE(GT, cmp > 0);
+        BS_COMPARE(GE, cmp >= 0);
 
-        BS_CASE(MOD) {
-            BSValue right = stack[--sp];
-            BSValue left = stack[--sp];
-            stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
-                bsArithmetic(fmod(left.u.number, right.u.number)) : bsNull();
-            bsRelease(left);
-            bsRelease(right);
-        }
-        BS_NEXT();
-
-        BS_CASE(POW) {
-            BSValue right = stack[--sp];
-            BSValue left = stack[--sp];
-            stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
-                bsArithmetic(pow(left.u.number, right.u.number)) : bsNull();
-            bsRelease(left);
-            bsRelease(right);
-        }
-        BS_NEXT();
-
-        BS_CASE(EQ)
-        BS_CASE(NE)
-        BS_CASE(LT)
-        BS_CASE(LE)
-        BS_CASE(GT)
-        BS_CASE(GE) {
-            BSValue right = stack[--sp];
-            BSValue left = stack[--sp];
-            int cmp;
-            if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
-                double ln = left.u.number, rn = right.u.number;
-                cmp = ln < rn ? -1 : (ln > rn ? 1 : 0);
-            } else {
-                cmp = bsValueCompare(left, right);
-                bsRelease(left);
-                bsRelease(right);
-            }
-            bool result = false;
-            switch (op) {
-            case BS_OP_EQ:
-                result = cmp == 0;
-                break;
-            case BS_OP_NE:
-                result = cmp != 0;
-                break;
-            case BS_OP_LT:
-                result = cmp < 0;
-                break;
-            case BS_OP_LE:
-                result = cmp <= 0;
-                break;
-            case BS_OP_GT:
-                result = cmp > 0;
-                break;
-            default:
-                result = cmp >= 0;
-                break;
-            }
-            stack[sp++] = bsBoolean(result);
-        }
-        BS_NEXT();
-
-        BS_CASE(BAND)
-        BS_CASE(BOR)
-        BS_CASE(BXOR)
-        BS_CASE(SHL)
-        BS_CASE(SHR) {
-            BSValue right = stack[--sp];
-            BSValue left = stack[--sp];
-            stack[sp++] = bsBitwise(op, left, right);
-            bsRelease(left);
-            bsRelease(right);
-        }
-        BS_NEXT();
+        BS_BITWISE(BAND, leftInt & rightInt);
+        BS_BITWISE(BOR, leftInt | rightInt);
+        BS_BITWISE(BXOR, leftInt ^ rightInt);
+        BS_BITWISE(SHL, (int32_t) ((uint32_t) leftInt << ((uint32_t) rightInt & 31u)));
+        BS_BITWISE(SHR, leftInt >> ((uint32_t) rightInt & 31u));
 
         BS_CASE(NEG) {
             BSValue value = stack[--sp];

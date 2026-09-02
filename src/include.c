@@ -67,78 +67,40 @@ static int bsGetBits(BsBits *bits, int n)
 
 
 /*
- * Canonical Huffman decode tables
+ * The fixed Huffman code (RFC 1951, 3.2.6) - the only one the bundled models use, since gzip.bare
+ * writes a single fixed-code block. A code's bits arrive most-significant first.
  */
 
-typedef struct {
-    unsigned short count[16];
-    unsigned short first[16];
-    unsigned short index[16];
-    unsigned short symbol[288];
-} BsHuff;
-
-
-static int bsHuffBuild(BsHuff *huff, const unsigned char *lengths, int n)
+/* Read "n" more bits of a code onto "code"; -1 at the end of the input */
+static int bsGetCodeBits(BsBits *bits, int code, int n)
 {
-    memset(huff, 0, sizeof(*huff));
     for (int ix = 0; ix < n; ix++) {
-        unsigned char length = lengths[ix];
-        if (length > 15) {
-            return -1; /* GCOV_EXCL_LINE */
-        }
-        if (length != 0) {
-            huff->count[length]++;
-        }
-    }
-
-    int left = 1;
-    for (int bits = 1; bits <= 15; bits++) {
-        left = left * 2 - huff->count[bits];
-        if (left < 0) {
-            return -1; /* GCOV_EXCL_LINE */
-        }
-    }
-
-    unsigned short nextIndex = 0;
-    unsigned code = 0;
-    for (int bits = 1; bits <= 15; bits++) {
-        code = (code + huff->count[bits - 1]) * 2;
-        huff->first[bits] = (unsigned short) code;
-        huff->index[bits] = nextIndex;
-        nextIndex = (unsigned short) (nextIndex + huff->count[bits]);
-    }
-
-    unsigned short filled[16];
-    memset(filled, 0, sizeof(filled));
-    for (int symbol = 0; symbol < n; symbol++) {
-        unsigned char length = lengths[symbol];
-        if (length == 0) {
-            continue; /* GCOV_EXCL_LINE - the static tables have no zero lengths */
-        }
-        unsigned short slot = (unsigned short) (huff->index[length] + filled[length]);
-        huff->symbol[slot] = (unsigned short) symbol;
-        filled[length]++;
-    }
-    return 0;
-}
-
-
-static int bsHuffDecode(BsBits *bits, const BsHuff *huff)
-{
-    unsigned code = 0;
-    for (int length = 1; length <= 15; length++) {
         int bit = bsGetBits(bits, 1);
         if (bit < 0) {
             return -1;
         }
-        code = (code << 1) | (unsigned) bit;
-        unsigned short count = huff->count[length];
-        unsigned first = huff->first[length];
-        if (count != 0 && code >= first && code < first + count) {
-            return huff->symbol[huff->index[length] + (code - first)];
-        }
+        code = (code << 1) | bit;
     }
-    return -1; /* GCOV_EXCL_LINE - the static tables are complete */
+    return code;
+}
+
+
+/* Decode a literal/length symbol: 7 bits code 256-279, 8 bits 0-143 and 280-287, 9 bits 144-255 */
+static int bsFixedLiteral(BsBits *bits)
+{
+    int code = bsGetCodeBits(bits, 0, 7);
+    if (code >= 0 && code < 24) {
+        return 256 + code;
+    }
+    code = bsGetCodeBits(bits, code, 1);
+    if (code >= 0 && code < 192) {
+        return code - 48;
+    }
+    if (code >= 0 && code < 200) {
+        return 280 + code - 192;
+    }
+    code = bsGetCodeBits(bits, code, 1);
+    return code < 0 ? -1 : 144 + code - 400;
 }
 
 
@@ -158,41 +120,10 @@ static const unsigned short bsDistBase[30] = {
 };
 
 
-static BsHuff bsStaticLit;
-static BsHuff bsStaticDist;
-static bool bsStaticReady;
-
-
-static void bsStaticInit(void)
-{
-    unsigned char litLen[288];
-    unsigned char distLen[32];
-    for (int ix = 0; ix < 144; ix++) {
-        litLen[ix] = 8;
-    }
-    for (int ix = 144; ix < 256; ix++) {
-        litLen[ix] = 9;
-    }
-    for (int ix = 256; ix < 280; ix++) {
-        litLen[ix] = 7;
-    }
-    for (int ix = 280; ix < 288; ix++) {
-        litLen[ix] = 8;
-    }
-    for (int ix = 0; ix < 32; ix++) {
-        distLen[ix] = 5;
-    }
-    bsHuffBuild(&bsStaticLit, litLen, 288);
-    bsHuffBuild(&bsStaticDist, distLen, 32);
-    bsStaticReady = true;
-}
-
-
-static int bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap, size_t *outLen,
-                          const BsHuff *lit, const BsHuff *dist)
+static int bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap, size_t *outLen)
 {
     for (;;) {
-        int symbol = bsHuffDecode(bits, lit);
+        int symbol = bsFixedLiteral(bits);
         if (symbol < 0) {
             return -1;
         }
@@ -214,7 +145,7 @@ static int bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap, size_
             return -1; /* GCOV_EXCL_LINE */
         }
         unsigned length = (unsigned) (bsLengthBase[symbol - 257] + extra);
-        int distSymbol = bsHuffDecode(bits, dist);
+        int distSymbol = bsGetCodeBits(bits, 0, 5);
         if (distSymbol < 0 || distSymbol > 29) {
             return -1; /* GCOV_EXCL_LINE */
         }
@@ -255,9 +186,6 @@ static int bsInflateStored(BsBits *bits, unsigned char *out, size_t outCap, size
 
 static int bsInflate(BsBits *bits, unsigned char *out, size_t outCap, size_t *outLen)
 {
-    if (!bsStaticReady) {
-        bsStaticInit();
-    }
     for (;;) {
         int final = bsGetBits(bits, 1);
         int type = bsGetBits(bits, 2);
@@ -268,7 +196,7 @@ static int bsInflate(BsBits *bits, unsigned char *out, size_t outCap, size_t *ou
         if (type == 0) {
             status = bsInflateStored(bits, out, outCap, outLen);
         } else if (type == 1) {
-            status = bsInflateCodes(bits, out, outCap, outLen, &bsStaticLit, &bsStaticDist);
+            status = bsInflateCodes(bits, out, outCap, outLen);
         } else {
             return -1;
         }

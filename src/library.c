@@ -606,7 +606,7 @@ BS_DATETIME_PART(bsFnDatetimeYear, year)
 
 static const BSArgModel datetimeISOFormatArgs[] = {
     {"datetime", BS_ARG_DATETIME, 0, 0, 0, 0, 0},
-    {"isDate", BS_ARG_BOOLEAN, BS_ARG_HAS_DEFAULT, 0, 0, 0, 0}
+    {"isDate", BS_ARG_BOOLEAN, 0, 0, 0, 0, 0}
 };
 
 static BSValue bsFnDatetimeISOFormat(const BSValue *args, size_t argCount, BSOptions *options, void *data)
@@ -880,7 +880,7 @@ static BSValue bsFnNumberParseInt(const BSValue *args, size_t argCount, BSOption
 static const BSArgModel numberToFixedArgs[] = {
     {"x", BS_ARG_NUMBER, 0, 0, 0, 0, 0},
     {"digits", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 2, 0, 0, 0},
-    {"trim", BS_ARG_BOOLEAN, BS_ARG_HAS_DEFAULT, 0, 0, 0, 0}
+    {"trim", BS_ARG_BOOLEAN, 0, 0, 0, 0, 0}
 };
 
 static BSValue bsFnNumberToFixed(const BSValue *args, size_t argCount, BSOptions *options, void *data)

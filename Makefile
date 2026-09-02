@@ -87,8 +87,8 @@ OBJ_DIR := $(BUILD_DIR)/obj
 COVER_DIR := $(BUILD_DIR)/cover
 LIB_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(LIB_SRCS))
 CLI_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(CLI_SRCS))
-COVER_OBJS := $(patsubst $(SRC_DIR)/%.c,$(COVER_DIR)/%.o,$(LIB_SRCS)) \
-    $(COVER_DIR)/bare.o \
+COVER_SRCS := $(LIB_SRCS) $(SRC_DIR)/bare.c
+COVER_OBJS := $(patsubst $(SRC_DIR)/%.c,$(COVER_DIR)/%.o,$(COVER_SRCS)) \
     $(patsubst $(TEST_DIR)/%.c,$(COVER_DIR)/test-%.o,$(TEST_SRCS))
 TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test-%.o,$(TEST_SRCS))
 
@@ -153,8 +153,7 @@ EMPTY :=
 SPACE := $(EMPTY) $(EMPTY)
 
 .PHONY: includes
-includes:
-	$(MAKE) $(CLI_BIN)
+includes: $(CLI_BIN)
 	BARESCRIPT_INCLUDE_PATH=$(CURDIR)/$(INCLUDE_LIB_DIR) $(CLI_BIN) $(CURDIR)/bin/includeSource.bare \
 	    -v vFiles "'[$(subst $(SPACE),$(COMMA),$(patsubst %,\"$(CURDIR)/%\",$(INCLUDE_LIB_SRCS)))]'" \
 	    -v vOutputC "'$(CURDIR)/$(INCLUDE_SOURCE_C)'" \
@@ -236,7 +235,7 @@ release: $(RELEASE_CLI) $(RELEASE_LIB_A)
 # Stage 1 and 2 - build instrumented and run the training workload
 #
 # Two programs, merged by count: the performance suite, which is the benchmark itself, and the
-# include library test suite, which parses about 200 KB of BareScript from source and runs every
+# include library test suite, which parses about 2 MB of BareScript from source and runs every
 # include library function - the path "bare script.bare" takes, and one the performance suite
 # never does since it loads bundled models. A synthetic parse script, the language tests, and a
 # static-analysis run were measured and moved neither workload beyond build-to-build noise. %p so
@@ -259,7 +258,7 @@ $(RELEASE_LIB_SO): $(PROFILE_DATA)
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) $(SO_CFLAGS) $(SO_LDFLAGS) \
 	    -o $@ $(LIB_SRCS) $(LIBS)
 
-$(RELEASE_CLI): $(RELEASE_LIB_SO) $(PROFILE_DATA)
+$(RELEASE_CLI): $(RELEASE_LIB_SO)
 	@mkdir -p $(RELEASE_DIR)
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -o $@ $(CLI_SRCS) \
 	    -L$(RELEASE_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
@@ -304,20 +303,17 @@ $(COVER_BIN): $(COVER_OBJS)
 	@mkdir -p $(dir $@)
 	$(CC) --coverage -o $@ $^ $(LIBS)
 
+GCOV := $(if $(filter-out 0,$(CC_IS_CLANG)),xcrun llvm-cov gcov,gcov)
+COVER_GCOV := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/coverage/%.c.gcov,$(COVER_SRCS))
+
 .PHONY: cover
 cover: $(COVER_BIN)
 	rm -f $(COVER_DIR)/*.gcda $(BUILD_DIR)/coverage/*.gcov
 	$(COVER_BIN) $(TEST)
 	@mkdir -p $(BUILD_DIR)/coverage
-	@rm -f $(BUILD_DIR)/coverage/*.gcov
-	$(GCOV) -o $(COVER_DIR) $(LIB_SRCS) $(SRC_DIR)/bare.c > /dev/null
+	$(GCOV) -o $(COVER_DIR) $(COVER_SRCS) > /dev/null
 	@mv *.gcov $(BUILD_DIR)/coverage/
-	@$(AWK) -v verbose=$(if $(VERBOSE),1,0) -f $(TEST_DIR)/coverage.awk $(COVER_GCOV)
-
-GCOV := $(if $(filter-out 0,$(CC_IS_CLANG)),xcrun llvm-cov gcov,gcov)
-AWK := awk
-COVER_GCOV := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/coverage/%.c.gcov,$(LIB_SRCS)) \
-    $(BUILD_DIR)/coverage/bare.c.gcov
+	@awk -v verbose=$(if $(VERBOSE),1,0) -f $(TEST_DIR)/coverage.awk $(COVER_GCOV)
 
 
 #

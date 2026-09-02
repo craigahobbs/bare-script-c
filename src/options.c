@@ -106,26 +106,19 @@ char *bsUrlFileRelative(const char *url, void *data)
         return bsStrdup(url);
     }
 
-    /* The file is a URL - replace its last path segment */
-    if (file != NULL && bsUrlIsURL(file)) {
-        const char *lastSlash = strrchr(file, '/');
-        size_t prefixSize = lastSlash != NULL ? (size_t) (lastSlash - file) + 1 : strlen(file);
-        size_t urlSize = strlen(url);
-        char *result = bsAlloc(prefixSize + urlSize + 1);
-        memcpy(result, file, prefixSize);
-        memcpy(result + prefixSize, url, urlSize + 1);
-        return result;
-    }
-
-    /* The file is a file system path - resolve relative to its directory */
+    /* Replace the file's last path segment. A URL result stands; a file system path is normalized. */
+    bool fileIsURL = file != NULL && bsUrlIsURL(file);
     const char *lastSlash = file != NULL ? strrchr(file, '/') : NULL;
-    size_t dirSize = lastSlash != NULL ? (size_t) (lastSlash - file) + 1 : 0;
+    size_t prefixSize = lastSlash != NULL ? (size_t) (lastSlash - file) + 1 : (fileIsURL ? strlen(file) : 0);
     size_t urlSize = strlen(url);
-    char *joined = bsAlloc(dirSize + urlSize + 1);
-    if (dirSize != 0) {
-        memcpy(joined, file, dirSize);
+    char *joined = bsAlloc(prefixSize + urlSize + 1);
+    if (prefixSize != 0) {
+        memcpy(joined, file, prefixSize);
     }
-    memcpy(joined + dirSize, url, urlSize + 1);
+    memcpy(joined + prefixSize, url, urlSize + 1);
+    if (fileIsURL) {
+        return joined;
+    }
     char *result = bsPathNormalize(joined);
     free(joined);
     return result;

@@ -33,7 +33,7 @@ static void bsCodeFinishSystem(BSCode *code)
     code->cover = NULL;
 
     size_t count = code->count;
-    uint32_t *map = bsAlloc((count + 1) * sizeof(uint32_t));
+    uint32_t *map = bsAlloc(count * sizeof(uint32_t));
     uint32_t *inst = bsAlloc(count * sizeof(uint32_t));
     size_t stripped = 0;
     for (size_t pc = 0; pc < count; pc++) {
@@ -45,7 +45,6 @@ static void bsCodeFinishSystem(BSCode *code)
             inst[stripped++] = word;
         }
     }
-    map[count] = (uint32_t) stripped;
     for (size_t pc = 0; pc < stripped; pc++) {
         uint8_t op = BS_OP(inst[pc]);
         if (op == BS_OP_JUMP || op == BS_OP_JUMP_FALSE || op == BS_OP_JUMP_TRUE) {
@@ -72,9 +71,6 @@ void bsScriptDropModel(BSScript *script)
 
 void bsCodeFree(BSCode *code)
 {
-    if (code == NULL) {
-        return; /* GCOV_EXCL_LINE */
-    }
     free(code->inst);
     for (size_t ix = 0; ix < code->constantCount; ix++) {
         bsRelease(code->constants[ix]);
@@ -193,13 +189,6 @@ static void bsKeysInit(void)
 }
 
 
-static BSValue bsModelGet(BSValue model, BSValue key)
-{
-    BSValue found;
-    return bsObjectLookupString(model, key, &found) ? found : bsNull();
-}
-
-
 
 
 typedef struct {
@@ -228,7 +217,7 @@ typedef struct {
     size_t callCap;
     int depth;            /* the value stack depth after the last emitted instruction */
     int maxDepth;
-    size_t targetAt;      /* the instruction index a jump was most recently patched to target */
+    size_t targetAt;      /* the instruction index a jump was most recently patched to target; zero before any */
     BSValue *slotNames;
     size_t slotCount;
     size_t slotCap;
@@ -425,7 +414,6 @@ static void bsEmitLabel(BSEmit *e, BSValue name)
 
 
 static bool bsEmitExpr(BSEmit *e, BSValue model);
-static bool bsEmitStatements(BSEmit *e, BSValue statementModels);
 
 
 static uint8_t bsBinaryOpcode(const char *op)
@@ -490,13 +478,13 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
         return false;
     }
 
-    BSValue number = bsModelGet(model, bsKeys.number);
+    BSValue number = bsObjectGetString(model, bsKeys.number);
     if (number.type == BS_NUMBER) {
         bsEmitInst(e, BS_OP_LOAD_CONST, bsEmitConst(e, number));
         return true;
     }
 
-    BSValue string = bsModelGet(model, bsKeys.string);
+    BSValue string = bsObjectGetString(model, bsKeys.string);
     if (string.type == BS_STRING) {
         BSValue interned = bsStringIntern(bsStringData(string), bsStringSize(string));
         bsEmitInst(e, BS_OP_LOAD_CONST, bsEmitConst(e, interned));
@@ -504,7 +492,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
         return true;
     }
 
-    BSValue variable = bsModelGet(model, bsKeys.variable);
+    BSValue variable = bsObjectGetString(model, bsKeys.variable);
     if (variable.type == BS_STRING) {
         const char *name = bsStringData(variable);
         if (strcmp(name, "null") == 0) {
@@ -521,13 +509,13 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
         return true;
     }
 
-    BSValue function = bsModelGet(model, bsKeys.function);
+    BSValue function = bsObjectGetString(model, bsKeys.function);
     if (function.type == BS_OBJECT) {
-        BSValue name = bsModelGet(function, bsKeys.name);
+        BSValue name = bsObjectGetString(function, bsKeys.name);
         if (name.type != BS_STRING) {
             return false;
         }
-        BSValue args = bsModelGet(function, bsKeys.args);
+        BSValue args = bsObjectGetString(function, bsKeys.args);
         if (strcmp(bsStringData(name), "if") == 0) {
             return bsEmitIf(e, args);
         }
@@ -545,21 +533,21 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
         return true;
     }
 
-    BSValue binary = bsModelGet(model, bsKeys.binary);
+    BSValue binary = bsObjectGetString(model, bsKeys.binary);
     if (binary.type == BS_OBJECT) {
-        BSValue op = bsModelGet(binary, bsKeys.op);
+        BSValue op = bsObjectGetString(binary, bsKeys.op);
         if (op.type != BS_STRING) {
             return false;
         }
         const char *opText = bsStringData(op);
         if (strcmp(opText, "&&") == 0) {
-            if (!bsEmitExpr(e, bsModelGet(binary, bsKeys.left))) {
+            if (!bsEmitExpr(e, bsObjectGetString(binary, bsKeys.left))) {
                 return false;
             }
             bsEmitInst(e, BS_OP_DUP, 0);
             uint32_t jump = bsEmitInst(e, BS_OP_JUMP_FALSE, 0xffffffu);
             bsEmitInst(e, BS_OP_POP, 0);
-            if (!bsEmitExpr(e, bsModelGet(binary, bsKeys.right))) {
+            if (!bsEmitExpr(e, bsObjectGetString(binary, bsKeys.right))) {
                 return false;
             }
             e->inst[jump] = BS_INST(BS_OP_JUMP_FALSE, (uint32_t) e->count);
@@ -567,13 +555,13 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
             return true;
         }
         if (strcmp(opText, "||") == 0) {
-            if (!bsEmitExpr(e, bsModelGet(binary, bsKeys.left))) {
+            if (!bsEmitExpr(e, bsObjectGetString(binary, bsKeys.left))) {
                 return false;
             }
             bsEmitInst(e, BS_OP_DUP, 0);
             uint32_t jump = bsEmitInst(e, BS_OP_JUMP_TRUE, 0xffffffu);
             bsEmitInst(e, BS_OP_POP, 0);
-            if (!bsEmitExpr(e, bsModelGet(binary, bsKeys.right))) {
+            if (!bsEmitExpr(e, bsObjectGetString(binary, bsKeys.right))) {
                 return false;
             }
             e->inst[jump] = BS_INST(BS_OP_JUMP_TRUE, (uint32_t) e->count);
@@ -584,16 +572,16 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
         if (opcode == 0) {
             return false;
         }
-        if (!bsEmitExpr(e, bsModelGet(binary, bsKeys.left)) || !bsEmitExpr(e, bsModelGet(binary, bsKeys.right))) {
+        if (!bsEmitExpr(e, bsObjectGetString(binary, bsKeys.left)) || !bsEmitExpr(e, bsObjectGetString(binary, bsKeys.right))) {
             return false;
         }
         bsEmitInst(e, opcode, 0);
         return true;
     }
 
-    BSValue unary = bsModelGet(model, bsKeys.unary);
+    BSValue unary = bsObjectGetString(model, bsKeys.unary);
     if (unary.type == BS_OBJECT) {
-        BSValue op = bsModelGet(unary, bsKeys.op);
+        BSValue op = bsObjectGetString(unary, bsKeys.op);
         if (op.type != BS_STRING) {
             return false;
         }
@@ -608,7 +596,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
         } else {
             return false;
         }
-        if (!bsEmitExpr(e, bsModelGet(unary, bsKeys.expr))) {
+        if (!bsEmitExpr(e, bsObjectGetString(unary, bsKeys.expr))) {
             return false;
         }
         bsEmitInst(e, opcode, 0);
@@ -616,7 +604,7 @@ static bool bsEmitExpr(BSEmit *e, BSValue model)
     }
 
     if (bsObjectHasString(model, bsKeys.group)) {
-        return bsEmitExpr(e, bsModelGet(model, bsKeys.group));
+        return bsEmitExpr(e, bsObjectGetString(model, bsKeys.group));
     }
 
     return false;
@@ -629,9 +617,9 @@ static int bsStatementModelLine(BSValue model)
         &bsKeys.expr, &bsKeys.jump, &bsKeys.return_, &bsKeys.label, &bsKeys.function, &bsKeys.include
     };
     for (size_t ix = 0; ix < sizeof(keys) / sizeof(keys[0]); ix++) {
-        BSValue inner = bsModelGet(model, *keys[ix]);
+        BSValue inner = bsObjectGetString(model, *keys[ix]);
         if (inner.type == BS_OBJECT) {
-            BSValue line = bsModelGet(inner, bsKeys.lineNumber);
+            BSValue line = bsObjectGetString(inner, bsKeys.lineNumber);
             return line.type == BS_NUMBER ? (int) line.u.number : 0;
         }
     }
@@ -639,7 +627,7 @@ static int bsStatementModelLine(BSValue model)
 }
 
 
-static uint32_t bsEmitCover(BSEmit *e, BSValue statementModel)
+static void bsEmitCover(BSEmit *e, BSValue statementModel)
 {
     if (e->coverCount == e->coverCap) {
         e->coverCap = e->coverCap != 0 ? e->coverCap * 2 : 8;
@@ -650,9 +638,7 @@ static uint32_t bsEmitCover(BSEmit *e, BSValue statementModel)
     e->cover[e->coverCount] = statementModel;
     e->coverLines[e->coverCount] = bsStatementModelLine(statementModel);
     e->coverPcs[e->coverCount] = (uint32_t) e->count;
-    uint32_t index = (uint32_t) e->coverCount++;
-    bsEmitInst(e, BS_OP_STMT, index);
-    return index;
+    bsEmitInst(e, BS_OP_STMT, (uint32_t) e->coverCount++);
 }
 
 
@@ -668,13 +654,13 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
             return false;
         }
 
-        BSValue value = bsModelGet(model, bsKeys.expr);
+        BSValue value = bsObjectGetString(model, bsKeys.expr);
         if (value.type == BS_OBJECT) {
             bsEmitCover(e, model);
-            if (!bsEmitExpr(e, bsModelGet(value, bsKeys.expr))) {
+            if (!bsEmitExpr(e, bsObjectGetString(value, bsKeys.expr))) {
                 return false;
             }
-            BSValue name = bsModelGet(value, bsKeys.name);
+            BSValue name = bsObjectGetString(value, bsKeys.name);
             if (name.type == BS_STRING) {
                 BSValue interned = bsStringIntern(bsStringData(name), bsStringSize(name));
                 int slot = bsSlotFind(e, interned);
@@ -690,15 +676,15 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
             continue;
         }
 
-        value = bsModelGet(model, bsKeys.jump);
+        value = bsObjectGetString(model, bsKeys.jump);
         if (value.type == BS_OBJECT) {
-            BSValue label = bsModelGet(value, bsKeys.label);
+            BSValue label = bsObjectGetString(value, bsKeys.label);
             if (label.type != BS_STRING) {
                 return false;
             }
             bsEmitCover(e, model);
             if (bsObjectHasString(value, bsKeys.expr)) {
-                if (!bsEmitExpr(e, bsModelGet(value, bsKeys.expr))) {
+                if (!bsEmitExpr(e, bsObjectGetString(value, bsKeys.expr))) {
                     return false;
                 }
                 bsEmitJump(e, BS_OP_JUMP_TRUE, label);
@@ -708,11 +694,11 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
             continue;
         }
 
-        value = bsModelGet(model, bsKeys.return_);
+        value = bsObjectGetString(model, bsKeys.return_);
         if (value.type == BS_OBJECT) {
             bsEmitCover(e, model);
             if (bsObjectHasString(value, bsKeys.expr)) {
-                if (!bsEmitExpr(e, bsModelGet(value, bsKeys.expr))) {
+                if (!bsEmitExpr(e, bsObjectGetString(value, bsKeys.expr))) {
                     return false;
                 }
             } else {
@@ -722,9 +708,9 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
             continue;
         }
 
-        value = bsModelGet(model, bsKeys.label);
+        value = bsObjectGetString(model, bsKeys.label);
         if (value.type == BS_OBJECT) {
-            BSValue name = bsModelGet(value, bsKeys.name);
+            BSValue name = bsObjectGetString(value, bsKeys.name);
             if (name.type != BS_STRING) {
                 return false;
             }
@@ -733,7 +719,7 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
             continue;
         }
 
-        value = bsModelGet(model, bsKeys.function);
+        value = bsObjectGetString(model, bsKeys.function);
         if (value.type == BS_OBJECT) {
             bsEmitCover(e, model);
             if (!bsEmitFunction(e, value)) {
@@ -742,9 +728,9 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
             continue;
         }
 
-        value = bsModelGet(model, bsKeys.include);
+        value = bsObjectGetString(model, bsKeys.include);
         if (value.type == BS_OBJECT) {
-            BSValue includes = bsModelGet(value, bsKeys.includes);
+            BSValue includes = bsObjectGetString(value, bsKeys.includes);
             size_t includeCount = bsArrayCount(includes);
             if (includeCount == 0) {
                 return false;
@@ -752,7 +738,7 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
             bsEmitCover(e, model);
             for (size_t inc = 0; inc < includeCount; inc++) {
                 BSValue include = bsArrayGet(includes, inc);
-                BSValue url = bsModelGet(include, bsKeys.url);
+                BSValue url = bsObjectGetString(include, bsKeys.url);
                 if (include.type != BS_OBJECT || url.type != BS_STRING) {
                     return false;
                 }
@@ -762,7 +748,7 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
                 }
                 e->includes[e->includeCount].url =
                     bsStringIntern(bsStringData(url), bsStringSize(url));
-                e->includes[e->includeCount].system = bsValueBoolean(bsModelGet(include, bsKeys.system));
+                e->includes[e->includeCount].system = bsValueBoolean(bsObjectGetString(include, bsKeys.system));
                 bsEmitInst(e, BS_OP_INCLUDE, (uint32_t) e->includeCount);
                 e->includeCount++;
             }
@@ -775,16 +761,19 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
 }
 
 
-/* The line number of the statement containing an instruction - the nearest preceding STMT */
-static int bsEmitLine(const BSEmit *e, size_t pc)
+int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc)
 {
-    while (pc > 0) {
-        uint32_t inst = e->inst[--pc];
-        if (BS_OP(inst) == BS_OP_STMT) {
-            return e->coverLines[BS_ARG(inst)];
+    size_t low = 0;
+    size_t high = count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if (pcs[middle] <= pc) {
+            low = middle + 1;
+        } else {
+            high = middle;
         }
     }
-    return 0; /* GCOV_EXCL_LINE - a jump statement always follows its STMT */
+    return low != 0 ? lines[low - 1] : 0;
 }
 
 
@@ -806,7 +795,7 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
                  * A jumpif to a missing label only errors if the jump is taken. The trap sits past
                  * the chunk's return, so it carries the jump statement's line in a data word.
                  */
-                int line = bsEmitLine(e, e->patches[ix].pc);
+                int line = bsCoverLine(e->coverPcs, e->coverLines, e->coverCount, e->patches[ix].pc);
                 uint32_t trap = bsEmitInst(e, BS_OP_JUMP_UNDEF, name);
                 bsEmitWord(e, BS_OP_ARGC, (uint32_t) line);
                 e->inst[e->patches[ix].pc] = BS_INST(op, trap);
@@ -844,39 +833,45 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
 }
 
 
+/* Abandon a failed emit: the buffers built so far form a chunk that bsCodeFree releases */
 static void bsEmitDiscard(BSEmit *e)
 {
-    for (size_t ix = 0; ix < e->constCount; ix++) {
-        bsRelease(e->constants[ix]);
-    }
-    free(e->constants);
-    free(e->inst);
-    for (size_t ix = 0; ix < e->includeCount; ix++) {
-        bsRelease(e->includes[ix].url);
-    }
-    free(e->includes);
-    free(e->cover);
-    free(e->coverLines);
-    free(e->coverPcs);
-    free(e->callNames);
-    for (size_t ix = 0; ix < e->slotCount; ix++) {
-        bsRelease(e->slotNames[ix]);
-    }
-    free(e->slotNames);
     for (size_t ix = 0; ix < e->patchCount; ix++) {
         bsRelease(e->patches[ix].label);
     }
     free(e->patches);
+    free(e->callNames);
     bsRelease(e->labels);
     bsRelease(e->slotMap);
     bsRelease(e->constMap);
+    BSCode code = {
+        .inst = e->inst, .constants = e->constants, .constantCount = e->constCount,
+        .includes = e->includes, .includeCount = e->includeCount, .cover = e->cover,
+        .coverLines = e->coverLines, .coverPcs = e->coverPcs, .slotNames = e->slotNames,
+        .slotCount = e->slotCount
+    };
+    bsCodeFree(&code);
+}
+
+
+/* Emit a statement list as a chunk that returns null, into "code". On failure the emit is discarded. */
+static bool bsEmitBody(BSEmit *e, BSValue statements, BSCode *code)
+{
+    if (!bsEmitStatements(e, statements)) {
+        bsEmitDiscard(e);
+        return false;
+    }
+    bsEmitInst(e, BS_OP_LOAD_NULL, 0);
+    bsEmitInst(e, BS_OP_RETURN, 0);
+    bsEmitFinish(e, code);
+    return true;
 }
 
 
 static bool bsEmitFunction(BSEmit *e, BSValue model)
 {
-    BSValue name = bsModelGet(model, bsKeys.name);
-    BSValue statements = bsModelGet(model, bsKeys.statements);
+    BSValue name = bsObjectGetString(model, bsKeys.name);
+    BSValue statements = bsObjectGetString(model, bsKeys.statements);
     if (name.type != BS_STRING || statements.type != BS_ARRAY) {
         return false;
     }
@@ -884,9 +879,9 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
     BSFunctionDef *def = bsAlloc(sizeof(BSFunctionDef));
     memset(def, 0, sizeof(*def));
     def->name = bsStringIntern(bsStringData(name), bsStringSize(name));
-    def->lastArgArray = bsValueBoolean(bsModelGet(model, bsKeys.lastArgArray));
+    def->lastArgArray = bsValueBoolean(bsObjectGetString(model, bsKeys.lastArgArray));
 
-    BSValue args = bsModelGet(model, bsKeys.args);
+    BSValue args = bsObjectGetString(model, bsKeys.args);
     size_t argCount = bsArrayCount(args);
     if (argCount != 0) {
         def->argNames = bsAlloc(argCount * sizeof(BSValue));
@@ -911,29 +906,23 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
     memset(&body, 0, sizeof(body));
     body.script = e->script;
     body.functionCap = e->functionCap;
-    body.targetAt = SIZE_MAX;
     for (size_t ix = 0; ix < def->argCount; ix++) {
         bsSlotAdd(&body, def->argNames[ix]);
     }
     size_t stmtCount = bsArrayCount(statements);
     for (size_t ix = 0; ix < stmtCount; ix++) {
         BSValue stmt = bsArrayGet(statements, ix);
-        BSValue exprStmt = bsModelGet(stmt, bsKeys.expr);
+        BSValue exprStmt = bsObjectGetString(stmt, bsKeys.expr);
         if (exprStmt.type == BS_OBJECT) {
-            BSValue assign = bsModelGet(exprStmt, bsKeys.name);
+            BSValue assign = bsObjectGetString(exprStmt, bsKeys.name);
             if (assign.type == BS_STRING) {
                 bsSlotAdd(&body, assign);
             }
         }
     }
-    if (!bsEmitStatements(&body, statements)) {
-        bsEmitDiscard(&body);
+    if (!bsEmitBody(&body, statements, &def->code)) {
         return false;
     }
-    bsEmitInst(&body, BS_OP_LOAD_NULL, 0);
-    bsEmitInst(&body, BS_OP_RETURN, 0);
-    bsEmitFinish(&body, &def->code);
-
     bsEmitInst(e, BS_OP_FUNCTION, index);
     return true;
 }
@@ -947,7 +936,6 @@ BSExpr *bsExprFromModel(BSValue model)
     bsKeysInit();
     BSEmit e;
     memset(&e, 0, sizeof(e));
-    e.targetAt = SIZE_MAX;
     if (!bsEmitExpr(&e, model)) {
         bsEmitDiscard(&e);
         return NULL;
@@ -963,25 +951,28 @@ BSExpr *bsExprFromModel(BSValue model)
 
 BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
 {
+    if (model.type != BS_OBJECT) {
+        return NULL;
+    }
     bsKeysInit();
-    BSValue statements = bsModelGet(model, bsKeys.statements);
-    if (model.type != BS_OBJECT || statements.type != BS_ARRAY) {
+    BSValue statements = bsObjectGetString(model, bsKeys.statements);
+    if (statements.type != BS_ARRAY) {
         return NULL;
     }
 
     BSScript *script = bsAlloc(sizeof(BSScript));
     memset(script, 0, sizeof(*script));
     script->refcount = 1;
-    script->system = bsValueBoolean(bsModelGet(model, bsKeys.system));
+    script->system = bsValueBoolean(bsObjectGetString(model, bsKeys.system));
     script->model = bsRetain(model);
 
-    BSValue modelName = bsModelGet(model, bsKeys.scriptName);
+    BSValue modelName = bsObjectGetString(model, bsKeys.scriptName);
     if (scriptName != NULL) {
         script->scriptName = bsStringNew(scriptName);
     } else {
         script->scriptName = modelName.type == BS_STRING ? bsRetain(modelName) : bsNull();
     }
-    BSValue scriptLines = bsModelGet(model, bsKeys.scriptLines);
+    BSValue scriptLines = bsObjectGetString(model, bsKeys.scriptLines);
     script->scriptLines = scriptLines.type == BS_ARRAY ? bsRetain(scriptLines) : bsArrayNew();
 
     size_t functionCap = 0;
@@ -989,15 +980,10 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
     memset(&e, 0, sizeof(e));
     e.script = script;
     e.functionCap = &functionCap;
-    e.targetAt = SIZE_MAX;
-    if (!bsEmitStatements(&e, statements)) {
-        bsEmitDiscard(&e);
+    if (!bsEmitBody(&e, statements, &script->code)) {
         bsScriptRelease(script);
         return NULL;
     }
-    bsEmitInst(&e, BS_OP_LOAD_NULL, 0);
-    bsEmitInst(&e, BS_OP_RETURN, 0);
-    bsEmitFinish(&e, &script->code);
     return script;
 }
 
