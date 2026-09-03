@@ -554,6 +554,26 @@ TEST(regex_final_coverage)
 }
 
 
+TEST(regex_alternation_index)
+{
+    /* A wide alternation tries only the alternatives that can begin with the code point at hand */
+    static const char *wide = "(?:aa|bb|cc|dd|ee|ff|gg|hh|ii)";
+    ASSERT_VALUE_STRING(bsTestMatch(wide, "xxhhxx", 0), "hh");
+    ASSERT_VALUE_STRING(bsTestMatch(wide, "xxhixx", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch(wide, "", 0), "null");
+
+    /* An alternative that can match the empty string or begin with anything is always tried, and
+     * one beginning with a code point past the table matches by its "high" set */
+    static const char *mixed = "(?:aa|bb|cc|dd|ee|ff|gg|\xe6\xbc\xa2x|z*)";
+    ASSERT_VALUE_STRING(bsTestMatch(mixed, "qq", 0), "");
+    ASSERT_VALUE_STRING(bsTestMatch(mixed, "zzz", 0), "zzz");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:aa|bb|cc|dd|ee|ff|gg|\xe6\xbc\xa2x|q)", "..\xe6\xbc\xa2x", 0),
+                        "\xe6\xbc\xa2x");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:aa|bb|cc|dd|ee|ff|gg|\xc3\xa9x|q)", "..\xc3\xa9x", 0), "\xc3\xa9x");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:aa|bb|cc|dd|ee|ff|gg|\xe6\xbc\xa2x|q)", "..\xe6\xbc\xa3x", 0), "null");
+}
+
+
 TEST(regex_first_set)
 {
     /* The search skips positions whose code point cannot begin a match */

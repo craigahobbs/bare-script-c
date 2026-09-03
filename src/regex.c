@@ -81,6 +81,7 @@ struct RxNode {
             RxNode **branches;
             size_t count;
             struct RxBranchFirst *firsts; /* per-branch first-code-point sets, or NULL if none is usable */
+            struct RxAltIndex *index;     /* the alternatives indexed by first code point, for wide alternations */
         } alt;
         struct {
             RxNode *sub;
@@ -149,6 +150,38 @@ typedef struct RxBranchFirst {
 static inline bool rxBranchFirstHas(const RxBranchFirst *first, uint32_t code)
 {
     return code >= 256 ? first->high : (first->bits[code >> 6] >> (code & 63)) & 1u;
+}
+
+
+/*
+ * A wide alternation's alternatives indexed by first code point: "codes" holds, per code point,
+ * the set of alternatives that can begin with it as a bit per alternative, so the alternation
+ * tries just those, in order, instead of testing every alternative's set. "always" holds the
+ * alternatives whose sets are not usable. Built for alternations of eight to thirty-two
+ * alternatives - the markdown span alternation has sixteen.
+ */
+#define RX_ALT_INDEX_MIN 8
+#define RX_ALT_INDEX_MAX 32
+
+typedef struct RxAltIndex {
+    uint32_t codes[256];
+    uint32_t high;   /* the alternatives that can begin with a code point of 256 or more */
+    uint32_t always;
+} RxAltIndex;
+
+
+static inline unsigned rxLowestBit(uint32_t mask)
+{
+#if defined(__GNUC__)
+    return (unsigned) __builtin_ctz(mask);
+#else
+    unsigned bit = 0;
+    while ((mask & 1u) == 0) {
+        mask >>= 1;
+        bit++;
+    }
+    return bit;
+#endif
 }
 
 
@@ -896,6 +929,7 @@ static RxNode *rxParseAlternation(RxCompiler *compiler)
     RxNode *alt = rxNodeNew(compiler, RX_ALT);
     alt->u.alt.branches = branches;
     alt->u.alt.firsts = NULL;
+    alt->u.alt.index = NULL;
     alt->u.alt.count = count;
     return alt;
 }
@@ -1079,6 +1113,7 @@ static void bsRegexFree(BSRegex *regex)
             } else if (node->kind == RX_ALT) {
                 free(node->u.alt.branches);
                 free(node->u.alt.firsts);
+                free(node->u.alt.index);
             }
         }
         RxNodeChunk *next = chunk->next;
@@ -1167,11 +1202,33 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
                     }
                     usable = usable || first->usable;
                 }
-                if (usable) {
-                    node->u.alt.firsts = firsts;
-                } else {
+                if (!usable) {
                     free(firsts);
+                    continue;
                 }
+                node->u.alt.firsts = firsts;
+                if (count < RX_ALT_INDEX_MIN || count > RX_ALT_INDEX_MAX) {
+                    continue;
+                }
+                RxAltIndex *index = bsAlloc(sizeof(RxAltIndex));
+                memset(index, 0, sizeof(*index));
+                for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
+                    const RxBranchFirst *first = &firsts[ixBranch];
+                    uint32_t bit = (uint32_t) 1 << ixBranch;
+                    if (!first->usable) {
+                        index->always |= bit;
+                        continue;
+                    }
+                    if (first->high) {
+                        index->high |= bit;
+                    }
+                    for (uint32_t code = 0; code < 256; code++) {
+                        if (rxBranchFirstHas(first, code)) {
+                            index->codes[code] |= bit;
+                        }
+                    }
+                }
+                node->u.alt.index = index;
             }
         }
 
@@ -1705,6 +1762,19 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         }
         bool atEnd = pos >= state->length;
         uint32_t code = atEnd ? 0 : rxCode(state, pos);
+        const RxAltIndex *index = node->u.alt.index;
+        if (index != NULL) {
+            uint32_t mask = index->always;
+            if (!atEnd) {
+                mask |= code < 256 ? index->codes[code] : index->high;
+            }
+            while (mask != 0 && !result) {
+                unsigned ix = rxLowestBit(mask);
+                mask &= mask - 1;
+                result = rxMatchNode(state, node->u.alt.branches[ix], &after, pos);
+            }
+            break;
+        }
         for (size_t ix = 0; ix < node->u.alt.count && !result; ix++) {
             const RxBranchFirst *first = &firsts[ix];
             if (first->usable && (atEnd || !rxBranchFirstHas(first, code))) {
