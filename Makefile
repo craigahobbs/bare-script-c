@@ -34,9 +34,16 @@ endif
 # Toolchain
 CC ?= cc
 CC_IS_CLANG := $(shell $(CC) --version 2>/dev/null | grep -c -i clang)
+
+# Use a flag only where the toolchain accepts it - the argument must not contain a comma
+CC_SUPPORTS = $(shell echo 'int main(void){return 0;}' | \
+    $(CC) -Werror $(1) -x c - -o /dev/null > /dev/null 2>&1 && echo $(1))
+
+# GCC 14 warns that the test runner's setjmp/longjmp pattern clobbers a local, which -Werror makes
+# an error; clang has no such option and rejects it as unknown, so the probe leaves it out there.
 WARN_FLAGS := -Wall -Wextra -Werror -Wno-unused-parameter -Wshadow -Wpointer-arith \
     -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes -Wwrite-strings \
-    -Wno-clobbered
+    $(call CC_SUPPORTS,-Wno-clobbered)
 BASE_CFLAGS := -std=c11 -pedantic -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -I$(INC_DIR) $(WARN_FLAGS)
 
 # No caller reads errno after a libm call. Without this, GCC and clang on Linux wrap every sqrt,
@@ -45,10 +52,6 @@ BASE_CFLAGS := -std=c11 -pedantic -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -I
 BASE_CFLAGS += -fno-math-errno
 OPT_CFLAGS ?= -O2 -g
 LIBS := -lm
-
-# Use a flag only where the toolchain accepts it - the argument must not contain a comma
-CC_SUPPORTS = $(shell echo 'int main(void){return 0;}' | \
-    $(CC) -Werror $(1) -x c - -o /dev/null > /dev/null 2>&1 && echo $(1))
 
 # Shared library code generation
 #
