@@ -80,6 +80,7 @@ struct RxNode {
         struct {
             RxNode **branches;
             size_t count;
+            struct RxBranchFirst *firsts; /* per-branch first-code-point sets, or NULL if none is usable */
         } alt;
         struct {
             RxNode *sub;
@@ -129,6 +130,26 @@ typedef struct RxFirstSet {
     bool high;   /* a match can begin with a code point of 256 or more */
     bool any;    /* a match can begin with anything, so the set is not usable */
 } RxFirstSet;
+
+
+/*
+ * An alternative's first-code-point set, packed
+ *
+ * The markdown span alternation has sixteen alternatives, and a candidate position - one the
+ * pattern's first set admits - used to try every one of them. Each alternative's own first set
+ * lets the alternation skip the ones that cannot begin with the code point at hand.
+ */
+typedef struct RxBranchFirst {
+    uint64_t bits[4]; /* membership of the code points 0 - 255 */
+    bool high;
+    bool usable;      /* false if the alternative can match the empty string or begin with anything */
+} RxBranchFirst;
+
+
+static inline bool rxBranchFirstHas(const RxBranchFirst *first, uint32_t code)
+{
+    return code >= 256 ? first->high : (first->bits[code >> 6] >> (code & 63)) & 1u;
+}
 
 
 struct BSRegex {
@@ -874,6 +895,7 @@ static RxNode *rxParseAlternation(RxCompiler *compiler)
 
     RxNode *alt = rxNodeNew(compiler, RX_ALT);
     alt->u.alt.branches = branches;
+    alt->u.alt.firsts = NULL;
     alt->u.alt.count = count;
     return alt;
 }
@@ -1056,6 +1078,7 @@ static void bsRegexFree(BSRegex *regex)
                 free(node->u.cls.ranges);
             } else if (node->kind == RX_ALT) {
                 free(node->u.alt.branches);
+                free(node->u.alt.firsts);
             }
         }
         RxNodeChunk *next = chunk->next;
@@ -1115,6 +1138,39 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
                     node->u.group.close->next = node->next;
                 } else if (node->kind == RX_LOOKBEHIND) {
                     rxNodeLength(node->u.look.sub, &node->u.look.minLength, &node->u.look.maxLength);
+                }
+            }
+        }
+
+        /* Each alternative's first set, so an alternation tries only the alternatives that can start here */
+        for (RxNodeChunk *chunk = regex->chunks; chunk != NULL; chunk = chunk->next) {
+            for (size_t ix = 0; ix < chunk->used; ix++) {
+                RxNode *node = &chunk->nodes[ix];
+                if (node->kind != RX_ALT || node->u.alt.count < 2) {
+                    continue;
+                }
+                size_t count = node->u.alt.count;
+                RxBranchFirst *firsts = bsAlloc(count * sizeof(RxBranchFirst));
+                bool usable = false;
+                for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
+                    RxFirstSet set;
+                    memset(&set, 0, sizeof(set));
+                    bool nullable = rxFirstSet(node->u.alt.branches[ixBranch], flags, &set);
+                    RxBranchFirst *first = &firsts[ixBranch];
+                    memset(first, 0, sizeof(*first));
+                    first->usable = !nullable && !set.any;
+                    first->high = set.high;
+                    for (uint32_t code = 0; code < 256; code++) {
+                        if (set.codes[code]) {
+                            first->bits[code >> 6] |= (uint64_t) 1 << (code & 63);
+                        }
+                    }
+                    usable = usable || first->usable;
+                }
+                if (usable) {
+                    node->u.alt.firsts = firsts;
+                } else {
+                    free(firsts);
                 }
             }
         }
@@ -1640,7 +1696,20 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
 
     case RX_ALT: {
         RxCont after = {RX_CONT_NODE, node->next, 0, 0, cont};
+        const RxBranchFirst *firsts = node->u.alt.firsts;
+        if (firsts == NULL) {
+            for (size_t ix = 0; ix < node->u.alt.count && !result; ix++) {
+                result = rxMatchNode(state, node->u.alt.branches[ix], &after, pos);
+            }
+            break;
+        }
+        bool atEnd = pos >= state->length;
+        uint32_t code = atEnd ? 0 : rxCode(state, pos);
         for (size_t ix = 0; ix < node->u.alt.count && !result; ix++) {
+            const RxBranchFirst *first = &firsts[ix];
+            if (first->usable && (atEnd || !rxBranchFirstHas(first, code))) {
+                continue;
+            }
             result = rxMatchNode(state, node->u.alt.branches[ix], &after, pos);
         }
         break;
