@@ -219,29 +219,10 @@ static const BSCurl *bsCurlLoad(void)
 }
 
 
-typedef struct BSCurlBuffer {
-    char *data;
-    size_t size;
-    size_t capacity;
-} BSCurlBuffer;
-
-
 static size_t bsCurlWrite(char *data, size_t size, size_t count, void *userData)
 {
-    BSCurlBuffer *buffer = userData;
-    size_t total = size * count;
-    if (buffer->size + total + 1 > buffer->capacity) {
-        size_t capacity = buffer->capacity != 0 ? buffer->capacity : 4096;
-        while (capacity < buffer->size + total + 1) {
-            capacity *= 2;
-        }
-        buffer->data = bsRealloc(buffer->data, capacity);
-        buffer->capacity = capacity;
-    }
-    memcpy(buffer->data + buffer->size, data, total);
-    buffer->size += total;
-    buffer->data[buffer->size] = '\0';
-    return total;
+    bsSBAppend(userData, data, size * count);
+    return size * count;
 }
 
 
@@ -269,7 +250,8 @@ char *bsFetchHTTP(const BSFetchRequest *request, size_t *responseSize, void *dat
     }
     /* GCOV_EXCL_STOP */
 
-    BSCurlBuffer buffer = {NULL, 0, 0};
+    BSStringBuilder buffer;
+    bsSBInit(&buffer);
     struct curl_slist *headers = NULL;
     bsObjectIter(request->headers, bsCurlHeaderIter, &headers);
 
@@ -293,7 +275,7 @@ char *bsFetchHTTP(const BSFetchRequest *request, size_t *responseSize, void *dat
     lib->easyCleanup(curl);
 
     if (status != CURLE_OK || (responseCode != 0 && responseCode != 200)) {
-        free(buffer.data);
+        bsSBFree(&buffer);
         return NULL;
     }
     if (buffer.data == NULL) {
