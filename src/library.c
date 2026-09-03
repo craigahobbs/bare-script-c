@@ -84,6 +84,16 @@ static bool bsArgLimit(double value, unsigned flags, double limit)
 }
 
 
+/* Report an invalid argument and release the values validated so far. Always returns false. */
+static bool bsArgsInvalid(const BSArgModel *argModel, size_t argModelCount, BSValue *values,
+                          BSOptions *options, const char *argName, BSValue argValue)
+{
+    bsArgsError(options, argName, argValue);
+    bsArgsFree(argModel, argModelCount, values);
+    return false;
+}
+
+
 bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSValue *args, size_t argCount,
                     BSValue *values, BSOptions *options)
 {
@@ -96,8 +106,7 @@ bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSVa
 
         /* The last-argument array collects every remaining argument */
         if ((model->flags & BS_ARG_LAST_ARRAY) != 0) {
-            size_t restCount = argCount > ix ? argCount - ix : 0;
-            values[ix] = restCount != 0 ? bsArrayFromArgs(args + ix, restCount) : bsArrayNew();
+            values[ix] = bsArrayFromArgs(args + ix, argCount > ix ? argCount - ix : 0);
             argCount = ix + 1;
             continue;
         }
@@ -116,9 +125,7 @@ bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSVa
             if (model->type == BS_ARG_ANY || (model->flags & BS_ARG_NULLABLE) != 0) {
                 continue;
             }
-            bsArgsError(options, model->name, bsNull());
-            bsArgsFree(argModel, argModelCount, values);
-            return false;
+            return bsArgsInvalid(argModel, argModelCount, values, options, model->name, bsNull());
         }
 
         BSValue value = args[ix];
@@ -138,26 +145,20 @@ bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSVa
         /* A null value */
         if (value.type == BS_NULL) {
             if ((model->flags & BS_ARG_NULLABLE) == 0) {
-                bsArgsError(options, model->name, value);
-                bsArgsFree(argModel, argModelCount, values);
-                return false;
+                return bsArgsInvalid(argModel, argModelCount, values, options, model->name, value);
             }
             continue;
         }
 
         if (!bsArgTypeMatch(model->type, value)) {
-            bsArgsError(options, model->name, value);
-            bsArgsFree(argModel, argModelCount, values);
-            return false;
+            return bsArgsInvalid(argModel, argModelCount, values, options, model->name, value);
         }
         if (model->type == BS_ARG_NUMBER) {
             double number = value.u.number;
             if (((model->flags & BS_ARG_INTEGER) != 0 && (!isfinite(number) || trunc(number) != number)) ||
                 !bsArgLimit(number, model->flags, model->limit) ||
                 !bsArgLimit(number, model->flags2, model->limit2)) {
-                bsArgsError(options, model->name, value);
-                bsArgsFree(argModel, argModelCount, values);
-                return false;
+                return bsArgsInvalid(argModel, argModelCount, values, options, model->name, value);
             }
         }
         values[ix] = value;
@@ -165,9 +166,7 @@ bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSVa
 
     /* Extra arguments */
     if (argCount > argModelCount) {
-        bsArgsError(options, NULL, bsNumber((double) argCount));
-        bsArgsFree(argModel, argModelCount, values);
-        return false;
+        return bsArgsInvalid(argModel, argModelCount, values, options, NULL, bsNumber((double) argCount));
     }
     return true;
 }
