@@ -262,7 +262,27 @@ else
     PROFILE_DATA := $(PROFILE_DIR)
     PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR) -fprofile-update=single
     PROFILE_USE = -fprofile-use=$(PROFILE_DIR) -fprofile-correction -Wno-missing-profile -Wno-clobbered
-    PROFILE_MERGE = :
+    #
+    # GCC names each .gcda for the compilation that will read it back: the output path with "/"
+    # mangled to "#", then the translation unit. Training produces one program, build/pgo/bare, so
+    # not one of those names matches what stage 3 compiles - the shared library, the CLI, and the
+    # static library's objects each ask for a different one, and a single-object compile drops the
+    # trailing unit name. A profile GCC cannot find is not an error, it just silently builds
+    # without one, and -Wno-missing-profile above hides the warning that would say so. So copy each
+    # trained profile to every name stage 3 looks for.
+    # "#" would start a make comment even inside a recipe, so the separator comes from the shell
+    PROFILE_HASH := $(shell printf '\043')
+    PROFILE_MERGE = set -e; cd $(PROFILE_DIR) && \
+        mangle() { echo "$$1" | tr / '$(PROFILE_HASH)'; } && \
+        src="$$(mangle '$(CURDIR)/$(BUILD_DIR)/pgo/$(CLI_NAME)')" && \
+        so="$$(mangle '$(CURDIR)/$(RELEASE_LIB_SO)')" && \
+        cli="$$(mangle '$(CURDIR)/$(RELEASE_CLI)')" && \
+        obj="$$(mangle '$(CURDIR)/$(RELEASE_OBJ_DIR)')" && \
+        for f in "$$src"-*.gcda; do \
+            tu="$${f$(PROFILE_HASH)$$src-}" && \
+            cp -f "$$f" "$$so-$$tu" && cp -f "$$f" "$$cli-$$tu" && \
+            cp -f "$$f" "$$obj$(PROFILE_HASH)$$tu"; \
+        done
 endif
 
 .PHONY: release
