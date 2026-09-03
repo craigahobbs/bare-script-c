@@ -682,6 +682,35 @@ static inline BSValue bsGlobalLookup(BSCallCache *cache, BSValue name, BSOptions
 
 
 /* Call the function named by a CALL_NAME or CALL_SLOT instruction. Returns the owned result. */
+/*
+ * The intrinsic express lane
+ *
+ * Most calls are a cached global naming a library function whose intrinsic takes the arguments as
+ * they are - 87% of them across the performance suite, and the interpreter reaches them through
+ * bsCall, which resolves every other shape too. So bsCall carries a frame and a callee-saved
+ * register set sized for the re-entrant call it might have to make, and takes "locals" and
+ * "builtins" on the stack; the common shape needs none of that. Anything else - a slot call, an
+ * object of locals, a script function, an intrinsic that declines its arguments - falls through
+ * to bsCall unchanged, which re-resolves the name. Handing the resolution down instead was
+ * measured and is slower: the argument costs more than the lookup it saves.
+ */
+static inline bool bsCallIntrinsic(const BSCode *code, const BSInst *inst, const BSValue *args,
+                                   size_t argCount, BSOptions *options, BSValue locals,
+                                   BSValue *result)
+{
+    if (inst->op != BS_OP_CALL_NAME || locals.type == BS_OBJECT) {
+        return false;
+    }
+    BSCallCache *cache = &code->caches[inst->b];
+    BSValue function = bsGlobalLookup(cache, code->constants[cache->nameIndex], options);
+    if (function.type != BS_FUNCTION) {
+        return false;
+    }
+    BSFunction *fn = function.u.function;
+    return fn->intrinsic != 0 && bsIntrinsicCall(fn->intrinsic, args, argCount, result);
+}
+
+
 static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *args, size_t argCount,
                       BSScript *script, BSOptions *options, const BSValue *regs, BSValue locals,
                       bool builtins)
@@ -1167,7 +1196,10 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
                 data++;
             }
             pc = (size_t) (data - insts);
-            BSValue value = bsCall(code, inst, args, argCount, script, options, regs, locals, builtins);
+            BSValue value;
+            if (!bsCallIntrinsic(code, inst, args, argCount, options, locals, &value)) {
+                value = bsCall(code, inst, args, argCount, script, options, regs, locals, builtins);
+            }
             if (args != argsInline) {
                 free(args);
             }
