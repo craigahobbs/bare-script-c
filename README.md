@@ -114,7 +114,7 @@ built on the same profile as the baseline where the flag allows it, and measured
 retired and cycles over the performance suite, the include library test suite, a held-out
 word-count script that no training program resembles, and an empty script for startup - against
 two identical baseline builds, which differ from each other by 0.5% in cycles. Text is the
-`__text` section of the shared library, 196 KB in the release build.
+`__text` section of the shared library, 207 KB in the release build.
 
 | Variant                                                        | Text      | Speed                    |
 | -------------------------------------------------------------- | --------: | ------------------------ |
@@ -700,19 +700,20 @@ Milliseconds per 1000 runs, best of two, on one machine - lower is better:
 | Test             | BareScript (C) | BareScript (JS) | BareScript (PyC) | BareScript (Py) |
 | ---------------- | --------------:| ---------------:| ----------------:| ---------------:|
 | mandelbrot       |     **24,000** |         301,000 |          114,000 |       3,496,000 |
-| markdownElements |        **282** |             754 |              679 |           5,327 |
-| markdownParse    |      **1,440** |           3,060 |            7,340 |          21,140 |
-| qrcodeMatrix     |      **1,733** |          13,000 |            9,100 |         126,033 |
-| schemaParse      |        **152** |           1,220 |            1,248 |           9,272 |
+| markdownElements |        **290** |             754 |              679 |           5,327 |
+| markdownParse    |      **1,524** |           3,060 |            7,340 |          21,140 |
+| qrcodeMatrix     |      **1,633** |          13,000 |            9,100 |         126,033 |
+| schemaParse      |        **148** |           1,220 |            1,248 |           9,272 |
 | schemaValidate   |        **200** |           1,972 |            1,060 |          14,596 |
 | urlDecode        |        **9.5** |              92 |            133.5 |           691.5 |
-| urlEncode        |        **6.5** |            51.5 |             57.5 |           397.5 |
+| urlEncode        |        **6.0** |            51.5 |             57.5 |           397.5 |
 
 The C runtime is the fastest BareScript runtime on all eight tests. (`BareScript (PyC)` is the
 Python implementation running its C extension for the runtime core, so it is not a pure-Python
 baseline; `BareScript (Py)` is.) The closest race is `markdownParse`, almost entirely regular
 expression work, against V8's JIT-compiled regex engine - and it is 2x now, from 1.1x before the
-regular expression engine learned to skip the alternatives that cannot start at a position. That
+regular expression engine learned to skip the alternatives that cannot start at a position and
+to run a compiled program instead of recursing. That
 test parses each project's own README, so its row moves when this file changes.
 
 ### Against Other Languages
@@ -726,9 +727,9 @@ on the same machine, columns in speed order (the Python suite has no markdown te
 | Test             | JavaScript (V8) | BareScript (C) | Python (CPython) |
 | ---------------- | ---------------:| --------------:| ----------------:|
 | mandelbrot       |           1,968 |         24,000 |           46,202 |
-| markdownElements |            32.7 |            282 |                  |
-| markdownParse    |             645 |          1,440 |                  |
-| schemaParse      |            72.8 |            152 |            171.5 |
+| markdownElements |            32.7 |            290 |                  |
+| markdownParse    |             645 |          1,524 |                  |
+| schemaParse      |            72.8 |            148 |            171.5 |
 | schemaValidate   |            57.0 |            200 |            206.2 |
 | urlDecode        |             5.0 |            9.5 |             11.9 |
 | urlEncode        |             2.6 |            6.5 |             10.6 |
@@ -736,10 +737,10 @@ on the same machine, columns in speed order (the Python suite has no markdown te
 Every row reads the same way: V8's JIT, then this runtime, then CPython. An interpreted BareScript
 program on this runtime runs the reference schema parser faster than CPython runs the pure-Python
 package it was ported from - and does it through a parser that is itself written in BareScript.
-Against the JIT it is 2x to 3.5x behind on the schema and URL tests and 2.2x behind on
+Against the JIT it is 2x to 3.5x behind on the schema and URL tests and 2.4x behind on
 `markdownParse`, which is almost entirely regular expression work against V8's compiled regex
 engine. The exception is `markdownElements`, which builds nested objects and arrays as fast as
-V8's hidden classes and inline caches can allocate them; there V8 is 8.5x ahead.
+V8's hidden classes and inline caches can allocate them; there V8 is 8.9x ahead.
 
 `mandelbrot` is the one test every language can run as the same code, so it can widen the field.
 Milliseconds per run on the same machine - the Ruby and Perl rows are one-off ports of
@@ -761,17 +762,17 @@ Milliseconds per run on the same machine - the Ruby and Perl rows are one-off po
 That is the neighborhood: 12x behind V8's JIT and 30x behind native C, level with V8's own
 bytecode interpreter, twice as fast as CPython, and 5x to 140x ahead of the other BareScript
 runtimes. It gets there as a plain bytecode interpreter - no JIT, no assembly, no dependencies -
-in 196 KB of code.
+in 207 KB of code.
 
 The release build is about 1.35x the default build, milliseconds per test run:
 
 | Test                        | C (`-O2`) | C (release) |
 | --------------------------- | ---------:| -----------:|
-| mandelbrot, 1 run           |        38 |          24 |
-| markdownParse, 250 runs     |       528 |         360 |
-| qrcodeMatrix, 30 runs       |        76 |          52 |
-| schemaValidate, 250 runs    |        73 |          50 |
-| urlDecode, 2000 runs        |        27 |          19 |
+| mandelbrot, 1 run           |        35 |          24 |
+| markdownParse, 250 runs     |       502 |         381 |
+| qrcodeMatrix, 30 runs       |        67 |          49 |
+| schemaValidate, 250 runs    |        69 |          50 |
+| urlDecode, 2000 runs        |        26 |          19 |
 
 And parsing is its own story, because the parser is an interpreted BareScript script in every
 implementation. Running the include library's full test suite, which parses about 2 MB of
@@ -804,7 +805,7 @@ the release build:
 | urlDecode, ms per 2000 runs                   |     28 |     20 |
 | urlEncode, ms per 2000 runs                   |     21 |     15 |
 
-The shared library is 486 KB, of which 204 KB is the compressed include library and 197 KB is
+The shared library is 486 KB, of which 205 KB is the compressed include library and 207 KB is
 code.
 
 Memory is measured the same way, with `/usr/bin/time -l`. A script that does nothing runs in a
