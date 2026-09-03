@@ -179,7 +179,8 @@ static inline unsigned rxLowestBit(uint32_t mask)
 
 typedef struct RxInst RxInst;
 struct BSRegex;
-static void rxEmitProgram(struct BSRegex *regex);
+typedef struct RxCompiler RxCompiler;
+static void rxEmitProgram(RxCompiler *compiler);
 static void rxProgramFree(struct BSRegex *regex);
 
 struct BSRegex {
@@ -187,11 +188,9 @@ struct BSRegex {
     unsigned flags;
     bool anchored; /* every alternative begins with "^", so only the start position can match */
     RxFirstSet first;
-    RxNode *root;
     size_t groupCount;
     BSValue *groupNames;  /* groupCount entries, or NULL if no group is named */
     bool uniqueNames;     /* no two groups share a name, so a match model can append each */
-    RxNodeChunk *chunks;
     RxInst *prog;         /* the compiled program, and the tables its instructions refer to */
     struct RxClass *classes;
     size_t classCount;
@@ -231,6 +230,8 @@ typedef struct RxCompiler {
     size_t offset;
     unsigned flags;
     BSRegex *regex;
+    RxNode *root;
+    RxNodeChunk *chunks; /* the parse tree; freed once the program is compiled */
     char *error;      /* the caller's message buffer, empty until a failure */
     size_t errorSize;
     bool failed;
@@ -336,13 +337,12 @@ static uint32_t rxSwapCase(uint32_t ch)
 
 static RxNode *rxNodeNew(RxCompiler *compiler, RxKind kind)
 {
-    BSRegex *regex = compiler->regex;
-    RxNodeChunk *chunk = regex->chunks;
+    RxNodeChunk *chunk = compiler->chunks;
     if (chunk == NULL || chunk->used == RX_CHUNK_NODES) {
         chunk = bsAlloc(sizeof(RxNodeChunk));
-        chunk->next = regex->chunks;
+        chunk->next = compiler->chunks;
         chunk->used = 0;
-        regex->chunks = chunk;
+        compiler->chunks = chunk;
     }
     RxNode *node = &chunk->nodes[chunk->used++];
     memset(node, 0, sizeof(RxNode));
@@ -1108,9 +1108,9 @@ static void rxFirstCompute(const RxNode *node, unsigned flags, RxFirstSet *set)
 
 
 /* Free the node tree - once the program is compiled it is not needed, and on a failed compile */
-static void rxChunksFree(BSRegex *regex)
+static void rxChunksFree(RxCompiler *compiler)
 {
-    RxNodeChunk *chunk = regex->chunks;
+    RxNodeChunk *chunk = compiler->chunks;
     while (chunk != NULL) {
         for (size_t ix = 0; ix < chunk->used; ix++) {
             RxNode *node = &chunk->nodes[ix];
@@ -1124,14 +1124,13 @@ static void rxChunksFree(BSRegex *regex)
         free(chunk);
         chunk = next;
     }
-    regex->chunks = NULL;
-    regex->root = NULL;
+    compiler->chunks = NULL;
+    compiler->root = NULL;
 }
 
 
 static void bsRegexFree(BSRegex *regex)
 {
-    rxChunksFree(regex);
     rxProgramFree(regex);
     if (regex->groupNames != NULL) {
         for (size_t ix = 0; ix < regex->groupCount; ix++) {
@@ -1164,7 +1163,7 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
     compiler.regex = regex;
     compiler.error = error;
     compiler.errorSize = errorSize;
-    regex->root = rxParseAlternation(&compiler);
+    compiler.root = rxParseAlternation(&compiler);
     if (!compiler.failed && compiler.offset != patternSize) {
         rxError(&compiler, compiler.offset, "unbalanced parenthesis");
     }
@@ -1177,8 +1176,8 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
          */
         if ((flags & BS_REGEX_MULTILINE) == 0) {
             regex->anchored = true;
-            for (size_t ix = 0; ix < regex->root->u.alt.count; ix++) {
-                const RxNode *branch = regex->root->u.alt.branches[ix];
+            for (size_t ix = 0; ix < compiler.root->u.alt.count; ix++) {
+                const RxNode *branch = compiler.root->u.alt.branches[ix];
                 if (branch == NULL || branch->kind != RX_BOL) {
                     regex->anchored = false;
                     break;
@@ -1187,10 +1186,10 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         }
 
         /* The set of code points a match can begin with, for the search scan */
-        rxFirstCompute(regex->root, flags, &regex->first);
+        rxFirstCompute(compiler.root, flags, &regex->first);
 
-        rxEmitProgram(regex);
-        rxChunksFree(regex);
+        rxEmitProgram(&compiler);
+        rxChunksFree(&compiler);
 
         /* Keep named-group strings only; unnamed patterns store no name array */
         bool named = false;
@@ -1218,6 +1217,7 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         for (size_t ix = 0; ix < regex->groupCount; ix++) {
             bsRelease(compiler.groupNames[ix]);
         }
+        rxChunksFree(&compiler);
         bsRegexFree(regex);
         return bsNull();
     }
@@ -1793,12 +1793,13 @@ static void rxProgramFree(BSRegex *regex)
 }
 
 
-static void rxEmitProgram(BSRegex *regex)
+static void rxEmitProgram(RxCompiler *compiler)
 {
+    BSRegex *regex = compiler->regex;
     RxEmit e;
     memset(&e, 0, sizeof(e));
     e.flags = regex->flags;
-    rxEmitChain(&e, regex->root);
+    rxEmitChain(&e, compiler->root);
     rxEmit(&e, RXI_MATCH, 0, 0, 0, 0, 0);
     regex->prog = bsRealloc(e.inst, e.count * sizeof(RxInst));
     regex->classes = e.classes;
