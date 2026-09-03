@@ -452,7 +452,10 @@ a script that merely includes the library holds bytecode and source lines alone.
 The thirty-two scripts of the BareScript include library - `args.bare`, `markdown.bare`,
 `schema.bare`, `unittest.bare`, `gzip.bare`, and the rest - are compiled to JSON
 script models and embedded in the library. Including one costs a JSON decode rather than a run of
-the parser.
+the parser - and a streaming one: `bsScriptFromModelJSON` decodes the model a statement at a
+time, compiling and releasing each before the next, so the model - about seven times the size of
+its JSON, most of it 112-byte objects - is never whole in memory. Loading the parser peaks at a
+few hundred kilobytes rather than a megabyte and a half.
 
 The models are gzip-compressed at level 9 by `gzip.bare` (`gzipCompress` / `gzipUncompress`, byte
 arrays in and out) and embedded as `unsigned char` arrays. That compresses about 601 KB of include
@@ -476,8 +479,8 @@ const char *bsIncludeSourceMarkdownUp(void);    /* markdownUp.bare */
 extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];   /* all of them, in order */
 ```
 
-`runtime.h` adds `bsIncludeCount`, `bsIncludeName`, and `bsIncludeSource` for lookup by name. A model decodes
-on first use and is cached, so a program that includes two of the thirty-two pays for two.
+`runtime.h` adds `bsIncludeCount`, `bsIncludeName`, and `bsIncludeSource` for lookup by name. A model
+compiles on first use and is cached, so a program that includes two of the thirty-two pays for two.
 
 
 ### JSON

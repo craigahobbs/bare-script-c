@@ -111,6 +111,65 @@ TEST(model_script_lines)
 }
 
 
+/* Assert a streamed model's JSON is rejected with an error */
+static void bsTestInvalidModelJSON(const char *json, const char *expectedError)
+{
+    const char *error = NULL;
+    BSScript *script = bsScriptFromModelJSON(json, strlen(json), NULL, &error);
+    ASSERT_NULL(script);
+    ASSERT_STR_EQ(error, expectedError);
+}
+
+
+TEST(model_script_from_json)
+{
+    /* A streamed model compiles to the same script as the decoded model, without keeping it */
+    static const char *json = "{\"statements\":[{\"function\":{\"name\":\"f\",\"args\":[\"x\"],\"statements\":["
+        "{\"return\":{\"expr\":{\"binary\":{\"op\":\"+\",\"left\":{\"variable\":\"x\"},"
+        "\"right\":{\"number\":1}}}}}]}},{\"return\":{\"expr\":{\"function\":{\"name\":\"f\","
+        "\"args\":[{\"number\":2}]}}}}],\"scriptName\":\"stream.bare\",\"scriptLines\":[\"a\"],"
+        "\"system\":true}";
+    const char *error = "unset";
+    BSScript *script = bsScriptFromModelJSON(json, strlen(json), NULL, &error);
+    ASSERT_NOT_NULL(script);
+    ASSERT_NULL(error);
+    ASSERT_INT_EQ(script->model.type, BS_NULL);
+    ASSERT_NULL(script->code.cover);
+    ASSERT_TRUE(script->system);
+    ASSERT_VALUE_STRING(bsRetain(script->scriptName), "stream.bare");
+    ASSERT_INT_EQ(bsArrayCount(script->scriptLines), 1);
+    ASSERT_INT_EQ(script->functionCount, 1);
+    BSOptions *options = bsOptionsNew();
+    ASSERT_VALUE(bsExecuteScript(script, options), "3");
+    bsOptionsFree(options);
+    bsScriptRelease(script);
+
+    /* The caller's name wins, and an empty statements array is a valid script */
+    static const char *named = "{\"statements\": [], \"scriptName\": \"model\"}";
+    script = bsScriptFromModelJSON(named, strlen(named), "caller.bare", NULL);
+    ASSERT_NOT_NULL(script);
+    ASSERT_VALUE_STRING(bsRetain(script->scriptName), "caller.bare");
+    ASSERT_FALSE(script->system);
+    bsScriptRelease(script);
+
+    /* Malformed JSON and malformed models */
+    bsTestInvalidModelJSON("", "Expecting value");
+    bsTestInvalidModelJSON("[]", "Expecting value");
+    bsTestInvalidModelJSON("{", "Expecting property name enclosed in double quotes");
+    bsTestInvalidModelJSON("{\"statements\" []}", "Expecting ':' delimiter");
+    bsTestInvalidModelJSON("{\"statements\": 5}", "Invalid BareScript model");
+    bsTestInvalidModelJSON("{\"scriptName\": }", "Expecting value");
+    bsTestInvalidModelJSON("{}", "Invalid BareScript model");
+    bsTestInvalidModelJSON("{\"statements\": [1]}", "Invalid BareScript model");
+    bsTestInvalidModelJSON("{\"statements\": [{\"bogus\": 1}]}", "Invalid BareScript model");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {}}", "Expecting ',' delimiter");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {}},]}", "Illegal trailing comma before end of array");
+    bsTestInvalidModelJSON("{\"statements\": [}", "Expecting value");
+    bsTestInvalidModelJSON("{\"statements\": [],}", "Illegal trailing comma before end of object");
+    bsTestInvalidModelJSON("{\"statements\": []} x", "Extra data");
+}
+
+
 TEST(model_invalid)
 {
     /* The script itself */

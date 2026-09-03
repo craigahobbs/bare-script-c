@@ -365,9 +365,7 @@ BSScript *bsIncludeScript(const char *name)
     if (text == NULL) {
         return NULL; /* GCOV_EXCL_LINE - bundled models always inflate */
     }
-    BSValue model = bsJSONDecode(text, strlen(text), NULL);
-    BSScript *script = bsScriptFromModel(model, name);
-    bsRelease(model);
+    BSScript *script = bsScriptFromModelJSON(text, strlen(text), name, NULL);
     free(bsIncludeSources[ix].decoded);
     bsIncludeSources[ix].decoded = NULL;
     if (script == NULL) {

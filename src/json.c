@@ -616,3 +616,111 @@ BSValue bsJSONDecode(const char *text, size_t size, const char **error)
 {
     return bsJSONDecodeEx(text, size, error, NULL);
 }
+
+
+static bool bsJSONDecodeStatementArray(BSJSONParser *parser, bool (*emit)(BSValue, void *), void *data)
+{
+    parser->offset++;
+    bsJSONSkipSpace(parser);
+    if (parser->offset < parser->size && parser->text[parser->offset] == ']') {
+        parser->offset++;
+        return true;
+    }
+    while (true) {
+        BSValue statement;
+        if (!bsJSONDecodeValue(parser, 2, &statement)) {
+            return false;
+        }
+        bool emitted = emit(statement, data);
+        bsRelease(statement);
+        if (!emitted) {
+            return bsJSONError(parser, "Invalid BareScript model", parser->offset);
+        }
+        int separator = bsJSONSeparator(parser, ']', "Illegal trailing comma before end of array");
+        if (separator < 0) {
+            return false;
+        }
+        if (separator > 0) {
+            return true;
+        }
+    }
+}
+
+
+static bool bsJSONDecodeModel(BSJSONParser *parser, bool (*emit)(BSValue, void *), void *data, BSValue rest)
+{
+    bsJSONSkipSpace(parser);
+    if (parser->offset >= parser->size || parser->text[parser->offset] != '{') {
+        return bsJSONError(parser, "Expecting value", parser->offset);
+    }
+    parser->offset++;
+    bsJSONSkipSpace(parser);
+    bool statements = false;
+    if (parser->offset < parser->size && parser->text[parser->offset] == '}') {
+        parser->offset++;
+    } else {
+        while (true) {
+            bsJSONSkipSpace(parser);
+            BSValue key;
+            if (!bsJSONDecodeString(parser, &key, 1)) {
+                return false;
+            }
+            bsJSONSkipSpace(parser);
+            if (parser->offset >= parser->size || parser->text[parser->offset] != ':') {
+                bsRelease(key);
+                return bsJSONError(parser, "Expecting ':' delimiter", parser->offset);
+            }
+            parser->offset++;
+            bsJSONSkipSpace(parser);
+            bool isStatements = bsStringSize(key) == 10 && memcmp(bsStringData(key), "statements", 10) == 0;
+            if (isStatements && parser->offset < parser->size && parser->text[parser->offset] == '[') {
+                bsRelease(key);
+                if (!bsJSONDecodeStatementArray(parser, emit, data)) {
+                    return false;
+                }
+                statements = true;
+            } else {
+                BSValue item;
+                if (!bsJSONDecodeValue(parser, 1, &item)) {
+                    bsRelease(key);
+                    return false;
+                }
+                bsObjectSetString(rest, key, item);
+                bsRelease(key);
+            }
+            int separator = bsJSONSeparator(parser, '}', "Illegal trailing comma before end of object");
+            if (separator < 0) {
+                return false;
+            }
+            if (separator > 0) {
+                break;
+            }
+        }
+    }
+    if (!statements) {
+        return bsJSONError(parser, "Invalid BareScript model", parser->offset);
+    }
+    bsJSONSkipSpace(parser);
+    if (parser->offset != parser->size) {
+        return bsJSONError(parser, "Extra data", parser->offset);
+    }
+    return true;
+}
+
+
+bool bsJSONDecodeStatements(const char *text, size_t size, bool (*emit)(BSValue statement, void *data),
+                            void *data, BSValue *rest, const char **error)
+{
+    bsModelKeysInit();
+    BSJSONParser parser = {text, size, 0, NULL, 0};
+    *rest = bsObjectNew();
+    bool decoded = bsJSONDecodeModel(&parser, emit, data, *rest);
+    if (!decoded) {
+        bsRelease(*rest);
+        *rest = bsNull();
+    }
+    if (error != NULL) {
+        *error = decoded ? NULL : parser.error;
+    }
+    return decoded;
+}

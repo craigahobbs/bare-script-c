@@ -69,7 +69,9 @@ inherited rather than reimplemented, so **parser bugs are usually runtime, regex
 bugs**.
 
 The bootstrap: the bundled parser is stored as its own parser-compiled JSON model, so loading it
-needs only a JSON decode (README's **The Parser and Linter** draws it).
+needs only a JSON decode - a streaming one, `bsScriptFromModelJSON`, which compiles each statement
+as it is decoded so the model is never whole in memory (README's **The Parser and Linter** draws
+it).
 
 `src/model.c` compiles the model to bytecode. A script keeps its model only where something will
 read it - the CLI under static analysis, an include while coverage is recording; otherwise

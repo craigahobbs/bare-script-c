@@ -99,6 +99,15 @@ BSValue bsScriptReparse(const BSScript *script);
 /* Bring back a forgotten model and the chunks' borrowed statement models, for coverage recording */
 bool bsScriptRestoreCover(BSScript *script);
 
+/*
+ * Decode a script model's JSON - {"statements": [...], ...} - a statement at a time: each element
+ * of "statements" is decoded, passed to "emit", and released before the next is decoded. The
+ * model's other members are returned in "rest", owned. Returns false - with "error" set, "rest"
+ * null - on a JSON error, a model without a statements array, or when "emit" returns false.
+ */
+bool bsJSONDecodeStatements(const char *text, size_t size, bool (*emit)(BSValue statement, void *data),
+                            void *data, BSValue *rest, const char **error);
+
 
 
 
