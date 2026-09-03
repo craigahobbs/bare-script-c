@@ -955,19 +955,14 @@ static BSValue bsFnNumberToString(const BSValue *args, size_t argCount, BSOption
         return bsStringNew("0");
     }
     char buffer[80];
-    size_t size = 0;
-    while (x >= 1 && size < sizeof(buffer)) {
+    size_t end = sizeof(buffer);
+    while (x >= 1 && end != 0) {
         double quotient = floor(x / radix);
         int digit = (int) (x - quotient * radix);
-        buffer[size++] = digitChars[digit];
+        buffer[--end] = digitChars[digit];
         x = quotient;
     }
-    for (size_t ix = 0; ix < size / 2; ix++) {
-        char swap = buffer[ix];
-        buffer[ix] = buffer[size - 1 - ix];
-        buffer[size - 1 - ix] = swap;
-    }
-    return bsStringNewSize(buffer, size);
+    return bsStringNewSize(buffer + end, sizeof(buffer) - end);
 }
 
 
