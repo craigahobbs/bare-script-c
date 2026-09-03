@@ -62,10 +62,12 @@ typedef struct BSCallCache {
  * CALL_NAME and LOAD_NAME operands index caches[], one per site. stackMax is the deepest value
  * stack the chunk can reach, computed at emit time, so the interpreter allocates the stack once.
  */
+typedef struct BSInst BSInst;
+
 typedef struct BSCode {
-    uint32_t *inst;
+    BSInst *inst;
     size_t count;
-    size_t stackMax;
+    size_t tempCount;    /* the temporary registers past the slots */
     BSValue *constants;
     size_t constantCount;
     BSCallCache *caches;

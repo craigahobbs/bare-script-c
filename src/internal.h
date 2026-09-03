@@ -111,30 +111,41 @@ bool bsJSONDecodeStatements(const char *text, size_t size, bool (*emit)(BSValue 
 
 
 
-/* Bytecode: instruction is (opcode << 24) | 24-bit argument */
-#define BS_OP(inst) ((uint8_t) ((inst) >> 24))
-#define BS_ARG(inst) ((uint32_t) ((inst) & 0xffffffu))
-#define BS_INST(op, arg) (((uint32_t) (op) << 24) | ((uint32_t) (arg) & 0xffffffu))
+/*
+ * Bytecode: fixed eight-byte register instructions. "a" is the destination register or an index;
+ * "b" and "c" are operands, each a register or - with the high bit set - a constant. A jump's
+ * target is the 32-bit word "w" that overlays b and c.
+ */
+struct BSInst {
+    uint8_t op;
+    uint8_t x;
+    uint16_t a;
+    union {
+        struct {
+            uint16_t b;
+            uint16_t c;
+        };
+        uint32_t w;
+    };
+};
+
+#define BS_OPERAND_CONST 0x8000u           /* an operand naming a constant rather than a register */
+#define BS_OPERAND_INDEX(o) ((o) & 0x7fffu)
+#define BS_REG_DISCARD 0xffffu              /* a call destination that drops the result */
+#define BS_OPERANDS_PER_DATA 3              /* call argument operands per DATA word */
 
 enum {
-    BS_OP_LOAD_NULL = 0,
-    BS_OP_LOAD_TRUE,
-    BS_OP_LOAD_FALSE,
-    BS_OP_LOAD_CONST,
-    BS_OP_LOAD_SLOT,
-    BS_OP_LOAD_NAME,
-    BS_OP_STORE_SLOT,
-    BS_OP_STORE_NAME,
-    BS_OP_POP,
-    BS_OP_DUP,
-    BS_OP_JUMP,
-    BS_OP_JUMP_FALSE,
-    BS_OP_JUMP_TRUE,
-    BS_OP_JUMP_UNDEF,
-    BS_OP_RETURN,
-    BS_OP_CALL_NAME,
-    BS_OP_CALL_SLOT,
-    BS_OP_ADD,
+    BS_OP_MOVE = 0,    /* a = b */
+    BS_OP_LOAD_NAME,   /* a = the name at cache site b: the locals object's, else the global */
+    BS_OP_STORE_NAME,  /* the global at cache site a = b */
+    BS_OP_JUMP,        /* pc = w */
+    BS_OP_JUMP_FALSE,  /* if !a: pc = w */
+    BS_OP_JUMP_TRUE,   /* if a: pc = w */
+    BS_OP_JUMP_UNDEF,  /* the unknown-label error for the name in constant a */
+    BS_OP_RETURN,      /* return a */
+    BS_OP_CALL_NAME,   /* a = the global at site b called with the c arguments in the DATA words that follow */
+    BS_OP_CALL_SLOT,   /* the same, calling the function in register b */
+    BS_OP_ADD,         /* a = b op c ... */
     BS_OP_SUB,
     BS_OP_MUL,
     BS_OP_DIV,
@@ -151,23 +162,13 @@ enum {
     BS_OP_BXOR,
     BS_OP_SHL,
     BS_OP_SHR,
-    BS_OP_NEG,
+    BS_OP_NEG,         /* a = op b ... */
     BS_OP_NOT,
     BS_OP_BNOT,
-    BS_OP_FUNCTION,
-    BS_OP_INCLUDE,
-    BS_OP_STMT,
-    /*
-     * Fused pairs, each followed by a data word carrying the second operand: two slot loads, a slot
-     * load and a constant, a slot store and a slot load, and a slot load feeding a conditional jump
-     * (the jump target in the instruction, the slot in the data word)
-     */
-    BS_OP_LOAD_SLOT2,
-    BS_OP_LOAD_SLOT_CONST,
-    BS_OP_STORE_LOAD_SLOT,
-    BS_OP_JUMP_FALSE_SLOT,
-    BS_OP_JUMP_TRUE_SLOT,
-    BS_OP_ARGC = 0xFF  /* follows CALL_* and the fused pairs; an operand word, never dispatched */
+    BS_OP_FUNCTION,    /* define script function a as a global */
+    BS_OP_INCLUDE,     /* run include a */
+    BS_OP_STMT,        /* statement a begins */
+    BS_OP_DATA = 0xFF  /* call operands, or a trap's line; never dispatched */
 };
 
 

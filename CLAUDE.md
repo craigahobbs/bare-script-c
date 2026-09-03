@@ -78,15 +78,19 @@ it).
 `src/model.c` compiles the model to bytecode. A script keeps its model only where something will
 read it - the CLI under static analysis, an include while coverage is recording; otherwise
 `bsScriptForgetModel` drops it and `bsScriptToModel` re-parses the retained source lines on
-demand. Jump labels become instruction indexes and function-local names become slot indexes during
-emit. A slot holding the internal unset marker falls through to the globals object. Group nodes
-stay in the model and flatten only in the code stream. The interpreter is `bsRunCode` in
-`src/runtime.c`.
+demand. Instructions are eight-byte register instructions - a destination register and two
+operands, each a register or a constant. A chunk's registers are its slots (a function's arguments
+and assigned names) followed by the temporaries the emitter allocates stack-fashion while
+compiling an expression, so a local or a literal feeds an operator or a call with no instruction
+of its own. Jump labels become instruction indexes during emit. A slot holding the internal unset
+marker falls through to the globals object. Group nodes stay in the model and flatten only in the
+code stream. The interpreter is `bsRunCode` in `src/runtime.c`.
 
-Invariants the interpreter trusts rather than checks: the emitter computes each chunk's maximum
-stack depth (`stackMax`), so pushes have no bounds checks; `LOAD_SLOT`/`STORE_SLOT` are only
-emitted in function bodies, which always run with a slot array; `CALL_NAME` and `LOAD_NAME`
-operands index the chunk's per-site caches (`caches[]`), which hold a pointer to the globals
+Invariants the interpreter trusts rather than checks: the emitter counts each chunk's temporaries
+(`tempCount`) and a function call arrives with its registers filled, so register operands are never
+bounds-checked; a call's argument operands sit in the `DATA` words that follow it and are read
+into a borrowed argument array; `CALL_NAME`, `LOAD_NAME`, and `STORE_NAME` operands index the
+chunk's per-site caches (`caches[]`), which hold a pointer to the globals
 object's value slot validated by the object's *structural* `generation` (bumped only when a key is
 added or removed - an in-place update does not move slots). Runtime errors are checked after each
 call, not per statement; line numbers come from `coverPcs` on demand. Bundled (system) includes
@@ -127,7 +131,7 @@ are per thread, `bsValueCleanup` last; `test/test_thread.c` runs eight runtimes 
 ### Library functions
 
 The function format is README's **The Function Format**: `args` is a borrowed slice of the
-interpreter's value stack, the return is owned. Two distinct error paths:
+interpreter's borrowed reads of the call's operands, the return is owned. Two distinct error paths:
 
 - **Runtime error** (halts the script): `bsErrorSet` / `bsErrorSetStatement`.
 - **Argument error** (does not halt): reported by `bsArgsValidate` from a static `BSArgModel[]`,

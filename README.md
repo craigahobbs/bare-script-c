@@ -387,8 +387,9 @@ for a case that cannot be tested.
 typedef BSValue (*BSFunctionFn)(const BSValue *args, size_t argCount, BSOptions *options, void *data);
 ```
 
-- `args` is a **borrowed** array of `argCount` values - a slice of the interpreter's value stack,
-  never an allocated array object, so a call costs nothing beyond the argument evaluation itself.
+- `args` is a **borrowed** array of `argCount` values - the interpreter's reads of the call's
+  operand registers and constants, never an allocated array object, so a call costs nothing beyond
+  the argument evaluation itself.
 - The return value is an **owned** reference.
 - `data` is the function's closure data, which script functions use to carry their definition and
   `systemPartial` uses to carry its bound arguments.
@@ -479,12 +480,14 @@ falls through to the globals object, matching the reference behavior where an un
 simply is not a key of the locals dictionary. Group nodes stay in the model (the parser and linter
 observe them) and flatten only in the code stream.
 
-The emitter tracks the value stack depth, so the interpreter allocates each chunk's stack once and
-pushes without bounds checks, and it folds `jumpif (!expr)` into a jump-if-false. A finished chunk
-then fuses its commonest adjacent pairs in place - two slot loads, a slot load and a constant, a
-slot store and a slot load, and a slot load feeding a conditional jump, which tests the slot
-without a push - each into one instruction with an operand word; a bundled include's chunk fuses
-again once its statement markers are stripped. Every global
+The code is register code: an eight-byte instruction names a destination register and two
+operands, each a register or a constant. A chunk's registers are its slots followed by
+temporaries, which the emitter allocates stack-fashion as it compiles an expression - a
+subexpression's result lands in the lowest free temporary, freed again once consumed - so `x = a +
+1` is one instruction that reads the local and the literal in place, and a call's arguments are
+operands in the words that follow it, read into a borrowed argument array without a push or a
+reference count. The emitter counts each chunk's temporaries, so the interpreter allocates a
+frame's registers once, and it folds `jumpif (!expr)` into a jump-if-false. Every global
 function call, global variable read, and global variable write compiles to a per-site cache that
 points at the globals object's value slot for the name; the cache is re-resolved only when a key is added to or removed
 from the globals object (its *structural generation*), so an assignment to a global never

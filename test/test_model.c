@@ -121,6 +121,43 @@ static void bsTestInvalidModelJSON(const char *json, const char *expectedError)
 }
 
 
+TEST(model_operand_limits)
+{
+    /* A chunk holds at most 32768 constants, and a call at most 32767 arguments */
+    BSStringBuilder sb;
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "{\"statements\":[");
+    for (int ix = 0; ix < 32800; ix++) {
+        char statement[64];
+        snprintf(statement, sizeof(statement), "%s{\"expr\":{\"name\":\"x\",\"expr\":{\"number\":%d.5}}}",
+                 ix == 0 ? "" : ",", ix);
+        bsSBAppendString(&sb, statement);
+    }
+    bsSBAppendString(&sb, "]}");
+    BSValue json = bsSBToValue(&sb);
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
+
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[");
+    for (int ix = 0; ix < 32768; ix++) {
+        bsSBAppendString(&sb, ix == 0 ? "{\"variable\":\"x\"}" : ",{\"variable\":\"x\"}");
+    }
+    bsSBAppendString(&sb, "]}}}}]}");
+    json = bsSBToValue(&sb);
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
+
+    /* Malformed expression statements, operands, and a conditional's branch assigned to a local */
+    bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":5}}}}]}");
+    bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"bogus\":1}}}]}");
+    bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"unary\":{\"op\":\"-\",\"expr\":{\"bogus\":1}}}}}]}");
+    bsTestInvalidModel("{\"statements\":[{\"function\":{\"name\":\"f\",\"args\":[],\"statements\":["
+                       "{\"expr\":{\"name\":\"x\",\"expr\":{\"function\":{\"name\":\"if\","
+                       "\"args\":[{\"number\":1},{\"bogus\":1}]}}}}]}}]}");
+}
+
+
 TEST(model_script_from_json)
 {
     /* A streamed model compiles to the same script as the decoded model, without keeping it */

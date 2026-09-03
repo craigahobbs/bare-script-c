@@ -236,8 +236,8 @@ void bsSystemIncludeClear(void)
  */
 
 
-#define BS_STACK_INLINE 16
-#define BS_SLOTS_INLINE 32
+/* The registers a chunk gets on the C stack before it needs the heap */
+#define BS_REGS_INLINE 48
 
 
 static int32_t bsToInt32(double value)
@@ -388,11 +388,11 @@ static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, b
     if (!hasCoverage || target == 0) {
         return;
     }
-    uint32_t prev = code->inst[target - 1];
-    if (BS_OP(prev) != BS_OP_STMT) {
+    const BSInst *prev = &code->inst[target - 1];
+    if (prev->op != BS_OP_STMT) {
         return;
     }
-    bsRecordCoverage(script, code, BS_ARG(prev), coverage);
+    bsRecordCoverage(script, code, prev->a, coverage);
 }
 
 
@@ -415,35 +415,38 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     BSScriptFunction *scriptFunction = data;
     BSFunctionDef *def = scriptFunction->def;
     size_t slotCount = def->code.slotCount;
+    size_t regCount = slotCount + def->code.tempCount;
 
+    /* The registers: the slots, filled from the arguments, then the temporaries, nulled */
     BSScope scope;
     bsScopeInit(&scope);
-    BSValue slotsInline[BS_SLOTS_INLINE];
-    BSValue *slots = slotCount <= BS_SLOTS_INLINE ? slotsInline : bsAlloc(slotCount * sizeof(BSValue));
-    scope.slots = slots;
+    BSValue regsInline[BS_REGS_INLINE];
+    BSValue *regs = regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue));
+    scope.slots = regs;
     scope.slotCount = slotCount;
 
     size_t ixArgLast = def->argCount != 0 ? def->argCount - 1 : 0;
     for (size_t ix = 0; ix < def->argCount; ix++) {
         if (def->lastArgArray && ix == ixArgLast) {
             size_t restCount = argCount > ix ? argCount - ix : 0;
-            slots[ix] = restCount != 0 ? bsArrayFromArgs(args + ix, restCount) : bsArrayNew();
+            regs[ix] = restCount != 0 ? bsArrayFromArgs(args + ix, restCount) : bsArrayNew();
         } else {
-            slots[ix] = ix < argCount ? bsRetain(args[ix]) : bsNull();
+            regs[ix] = ix < argCount ? bsRetain(args[ix]) : bsNull();
         }
     }
     for (size_t ix = def->argCount; ix < slotCount; ix++) {
-        slots[ix] = bsUnset();
+        regs[ix] = bsUnset();
+    }
+    for (size_t ix = slotCount; ix < regCount; ix++) {
+        regs[ix] = bsNull();
     }
 
     BSValue result = bsRunCode(&def->code, scriptFunction->script, options, &scope, false);
-    for (size_t ix = 0; ix < slotCount; ix++) {
-        if (!BS_IS_UNSET(slots[ix])) {
-            bsRelease(slots[ix]);
-        }
+    for (size_t ix = 0; ix < regCount; ix++) {
+        bsReleaseInline(regs[ix]); /* an unset slot is not a reference, so it releases as a no-op */
     }
-    if (slots != slotsInline) {
-        free(slots);
+    if (regs != regsInline) {
+        free(regs);
     }
     return result;
 }
@@ -915,10 +918,6 @@ includeFailed:
 #endif
 
 /*
- * The binary operator handlers that differ only by their operator. Each opcode keeps its own
- * handler - and, when dispatch is threaded, its own dispatch - so no operator is chosen at run time.
- */
-/*
  * The modulo operator - integer operands, the common case by far, take the integer remainder,
  * which agrees with fmod (the sign of the dividend, and a signed zero when the remainder is zero)
  */
@@ -934,75 +933,83 @@ static inline double bsModulo(double left, double right)
 }
 
 
+/* An operand's value, borrowed: a constant, or a register - an unset local reads the global of its name */
+static inline BSValue bsOperandRead(const BSCode *code, const BSValue *regs, BSOptions *options,
+                                    uint16_t operand)
+{
+    if ((operand & BS_OPERAND_CONST) != 0) {
+        return code->constants[BS_OPERAND_INDEX(operand)];
+    }
+    BSValue value = regs[operand];
+    if (BS_IS_UNSET(value)) {
+        value = bsObjectGetString(options->globals, code->slotNames[operand]);
+    }
+    return value;
+}
+
+
+/* Store an owned value in a register, releasing what it held (an unset marker releases as a no-op) */
+static inline void bsRegisterSet(BSValue *regs, uint16_t reg, BSValue value)
+{
+    BSValue previous = regs[reg];
+    regs[reg] = value;
+    bsReleaseInline(previous);
+}
+
+
+/*
+ * The binary operator handlers that differ only by their operator. Each opcode keeps its own
+ * handler - and, when dispatch is threaded, its own dispatch - so no operator is chosen at run time.
+ * Operands are borrowed reads; only the result is owned, and storing it releases what the
+ * destination register held.
+ */
+#define BS_READ(operand) bsOperandRead(code, regs, options, (operand))
+
 #define BS_ARITHMETIC(name, expr) \
     BS_CASE(name) { \
-        BSValue right = stack[--sp]; \
-        BSValue left = stack[--sp]; \
-        stack[sp++] = (left.type == BS_NUMBER && right.type == BS_NUMBER) ? bsArithmetic(expr) : bsNull(); \
-        bsRelease(left); \
-        bsRelease(right); \
+        BSValue left = BS_READ(inst->b); \
+        BSValue right = BS_READ(inst->c); \
+        bsRegisterSet(regs, inst->a, \
+                      (left.type == BS_NUMBER && right.type == BS_NUMBER) ? bsArithmetic(expr) : bsNull()); \
     } \
     BS_NEXT()
 
 #define BS_COMPARE(name, test) \
     BS_CASE(name) { \
-        BSValue right = stack[--sp]; \
-        BSValue left = stack[--sp]; \
+        BSValue left = BS_READ(inst->b); \
+        BSValue right = BS_READ(inst->c); \
         int cmp; \
         if (left.type == BS_NUMBER && right.type == BS_NUMBER) { \
             double ln = left.u.number, rn = right.u.number; \
             cmp = ln < rn ? -1 : (ln > rn ? 1 : 0); \
         } else { \
             cmp = bsValueCompare(left, right); \
-            bsRelease(left); \
-            bsRelease(right); \
         } \
-        stack[sp++] = bsBoolean(test); \
+        bsRegisterSet(regs, inst->a, bsBoolean(test)); \
     } \
     BS_NEXT()
 
 /* JavaScript semantics: operands are 32-bit integers, and a shift count is masked to five bits */
 #define BS_BITWISE(name, expr) \
     BS_CASE(name) { \
-        BSValue right = stack[--sp]; \
-        BSValue left = stack[--sp]; \
+        BSValue left = BS_READ(inst->b); \
+        BSValue right = BS_READ(inst->c); \
+        BSValue bits = bsNull(); \
         if (bsIsInteger(left) && bsIsInteger(right)) { \
             int32_t leftInt = bsToInt32(left.u.number); \
             int32_t rightInt = bsToInt32(right.u.number); \
-            stack[sp++] = bsNumber((double) (expr)); \
-        } else { \
-            stack[sp++] = bsNull(); \
+            bits = bsNumber((double) (expr)); \
         } \
-        bsRelease(left); \
-        bsRelease(right); \
+        bsRegisterSet(regs, inst->a, bits); \
     } \
     BS_NEXT()
 
 #define BS_JUMP_IF(name, cond) \
     BS_CASE(name) { \
-        BSValue value = stack[--sp]; \
-        bool take = (cond); \
-        bsRelease(value); \
-        if (take) { \
-            bsJumpCover(code, arg, script, hasCoverage, coverage); \
-            pc = arg; \
-        } \
-    } \
-    BS_NEXT()
-
-/* A slot's value, borrowed - an unset slot reads the global of the same name */
-#define BS_SLOT_VALUE(ix) \
-    (BS_IS_UNSET(slots[(ix)]) ? bsObjectGetString(options->globals, code->slotNames[(ix)]) : slots[(ix)])
-
-/* A fused slot load and conditional jump - the slot is in the data word, tested without a push */
-#define BS_JUMP_IF_SLOT(name, cond) \
-    BS_CASE(name) { \
-        BSValue value = BS_SLOT_VALUE(BS_ARG(insts[pc])); \
+        BSValue value = BS_READ(inst->a); \
         if (cond) { \
-            bsJumpCover(code, arg, script, hasCoverage, coverage); \
-            pc = arg; \
-        } else { \
-            pc++; \
+            bsJumpCover(code, inst->w, script, hasCoverage, coverage); \
+            pc = inst->w; \
         } \
     } \
     BS_NEXT()
@@ -1015,12 +1022,22 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         return bsNull();
     }
 
-    BSValue stackInline[BS_STACK_INLINE];
-    BSValue *stack = code->stackMax <= BS_STACK_INLINE ? stackInline :
-        bsAlloc(code->stackMax * sizeof(BSValue));
-    size_t sp = 0;
-    BSValue *slots = scope != NULL ? scope->slots : NULL;
-    BSValue locals = (scope != NULL && slots == NULL) ? scope->object : bsNull();
+    /*
+     * A function call arrives with its registers - the slots the caller filled followed by the
+     * temporaries it nulled; a top-level chunk or an expression allocates its own temporaries
+     */
+    BSValue regsInline[BS_REGS_INLINE];
+    size_t slotCount = code->slotCount;
+    size_t regCount = slotCount + code->tempCount;
+    bool ownRegs = scope == NULL || scope->slots == NULL;
+    BSValue *regs = scope != NULL && scope->slots != NULL ? scope->slots :
+        (regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue)));
+    if (ownRegs) {
+        for (size_t ix = 0; ix < regCount; ix++) {
+            regs[ix] = bsNull();
+        }
+    }
+    BSValue locals = (scope != NULL && scope->slots == NULL) ? scope->object : bsNull();
 
     bool countStatements = script != NULL && !script->system;
     BSValue coverage = bsNull();
@@ -1049,118 +1066,53 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         }
     }
 
-    const uint32_t *insts = code->inst;
+    const BSInst *insts = code->inst;
+    const BSInst *inst;
     size_t pc = 0;
-    uint32_t inst;
-    uint8_t op;
-    uint32_t arg;
+    BSValue result;
 
 #ifdef BS_THREADED_DISPATCH
     /* Indexed by opcode - the order is the BS_OP_ enumeration's */
     static const void *const dispatch[] = {
-        &&op_LOAD_NULL, &&op_LOAD_TRUE, &&op_LOAD_FALSE, &&op_LOAD_CONST, &&op_LOAD_SLOT,
-        &&op_LOAD_NAME, &&op_STORE_SLOT, &&op_STORE_NAME, &&op_POP, &&op_DUP, &&op_JUMP,
-        &&op_JUMP_FALSE, &&op_JUMP_TRUE, &&op_JUMP_UNDEF, &&op_RETURN, &&op_CALL_NAME, &&op_CALL_SLOT,
-        &&op_ADD, &&op_SUB, &&op_MUL, &&op_DIV, &&op_MOD, &&op_POW, &&op_EQ, &&op_NE, &&op_LT,
-        &&op_LE, &&op_GT, &&op_GE, &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG,
-        &&op_NOT, &&op_BNOT, &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT2,
-        &&op_LOAD_SLOT_CONST, &&op_STORE_LOAD_SLOT, &&op_JUMP_FALSE_SLOT, &&op_JUMP_TRUE_SLOT
+        &&op_MOVE, &&op_LOAD_NAME, &&op_STORE_NAME, &&op_JUMP, &&op_JUMP_FALSE, &&op_JUMP_TRUE,
+        &&op_JUMP_UNDEF, &&op_RETURN, &&op_CALL_NAME, &&op_CALL_SLOT, &&op_ADD, &&op_SUB, &&op_MUL,
+        &&op_DIV, &&op_MOD, &&op_POW, &&op_EQ, &&op_NE, &&op_LT, &&op_LE, &&op_GT, &&op_GE,
+        &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG, &&op_NOT, &&op_BNOT,
+        &&op_FUNCTION, &&op_INCLUDE, &&op_STMT
     };
 #define BS_CASE(name) op_##name:
 #define BS_NEXT() \
     do { \
-        inst = insts[pc++]; \
-        op = BS_OP(inst); \
-        arg = BS_ARG(inst); \
-        goto *dispatch[op]; \
+        inst = &insts[pc++]; \
+        goto *dispatch[inst->op]; \
     } while (0)
     BS_NEXT();
 #else
 #define BS_CASE(name) case BS_OP_##name:
 #define BS_NEXT() break
     for (;;) {
-        inst = insts[pc++];
-        op = BS_OP(inst);
-        arg = BS_ARG(inst);
-        switch (op) {
+        inst = &insts[pc++];
+        switch (inst->op) {
 #endif
-        BS_CASE(LOAD_NULL)
-            stack[sp++] = bsNull();
+        BS_CASE(MOVE)
+            bsRegisterSet(regs, inst->a, bsRetain(BS_READ(inst->b)));
             BS_NEXT();
-
-        BS_CASE(LOAD_TRUE)
-            stack[sp++] = bsBoolean(true);
-            BS_NEXT();
-
-        BS_CASE(LOAD_FALSE)
-            stack[sp++] = bsBoolean(false);
-            BS_NEXT();
-
-        BS_CASE(LOAD_CONST)
-            stack[sp++] = bsRetain(code->constants[arg]);
-            BS_NEXT();
-
-        BS_CASE(LOAD_SLOT) {
-            BSValue value = slots[arg];
-            if (BS_IS_UNSET(value)) {
-                value = bsObjectGetString(options->globals, code->slotNames[arg]);
-            }
-            stack[sp++] = bsRetain(value);
-        }
-        BS_NEXT();
-
-        BS_CASE(LOAD_SLOT2) {
-            uint32_t second = BS_ARG(insts[pc++]);
-            stack[sp++] = bsRetain(BS_SLOT_VALUE(arg));
-            stack[sp++] = bsRetain(BS_SLOT_VALUE(second));
-        }
-        BS_NEXT();
-
-        BS_CASE(LOAD_SLOT_CONST) {
-            uint32_t constant = BS_ARG(insts[pc++]);
-            stack[sp++] = bsRetain(BS_SLOT_VALUE(arg));
-            stack[sp++] = bsRetain(code->constants[constant]);
-        }
-        BS_NEXT();
-
-        BS_CASE(STORE_LOAD_SLOT) {
-            uint32_t load = BS_ARG(insts[pc++]);
-            BSValue previous = slots[arg];
-            slots[arg] = stack[--sp];
-            if (!BS_IS_UNSET(previous)) {
-                bsRelease(previous);
-            }
-            stack[sp++] = bsRetain(BS_SLOT_VALUE(load));
-        }
-        BS_NEXT();
-
-        BS_JUMP_IF_SLOT(JUMP_FALSE_SLOT, !bsValueBoolean(value));
-        BS_JUMP_IF_SLOT(JUMP_TRUE_SLOT, bsValueBoolean(value));
 
         BS_CASE(LOAD_NAME) {
-            BSCallCache *cache = &code->caches[arg];
+            BSCallCache *cache = &code->caches[inst->b];
             BSValue name = code->constants[cache->nameIndex];
             BSValue value;
             if (locals.type != BS_OBJECT || !bsObjectLookupString(locals, name, &value)) {
                 value = bsGlobalLookup(cache, name, options);
             }
-            stack[sp++] = bsRetain(value);
-        }
-        BS_NEXT();
-
-        BS_CASE(STORE_SLOT) {
-            BSValue previous = slots[arg];
-            slots[arg] = stack[--sp];
-            if (!BS_IS_UNSET(previous)) {
-                bsRelease(previous);
-            }
+            bsRegisterSet(regs, inst->a, bsRetain(value));
         }
         BS_NEXT();
 
         BS_CASE(STORE_NAME) {
-            BSCallCache *cache = &code->caches[arg];
+            BSCallCache *cache = &code->caches[inst->a];
             BSValue name = code->constants[cache->nameIndex];
-            BSValue value = stack[--sp];
+            BSValue value = bsRetain(BS_READ(inst->b));
             BSValue *slot = bsGlobalSlot(cache, name, options);
             if (slot != NULL) {
                 /* An existing global updates in place - no slot moves, so every site's cache holds */
@@ -1173,18 +1125,9 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         }
         BS_NEXT();
 
-        BS_CASE(POP)
-            bsRelease(stack[--sp]);
-            BS_NEXT();
-
-        BS_CASE(DUP)
-            stack[sp] = bsRetain(stack[sp - 1]);
-            sp++;
-            BS_NEXT();
-
         BS_CASE(JUMP)
-            bsJumpCover(code, arg, script, hasCoverage, coverage);
-            pc = arg;
+            bsJumpCover(code, inst->w, script, hasCoverage, coverage);
+            pc = inst->w;
             BS_NEXT();
 
         BS_JUMP_IF(JUMP_FALSE, !bsValueBoolean(value));
@@ -1192,33 +1135,48 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 
         BS_CASE(JUMP_UNDEF) {
             /* A trap past the chunk's return carries the jump statement's line in a data word */
-            int line = (pc < code->count && BS_OP(insts[pc]) == BS_OP_ARGC) ? (int) BS_ARG(insts[pc]) :
+            int line = (pc < code->count && insts[pc].op == BS_OP_DATA) ? (int) insts[pc].w :
                 bsCodeLine(code, pc - 1);
             bsErrorSetStatement(options, script, line, "Unknown jump label \"%s\"",
-                                bsStringData(code->constants[arg]));
+                                bsStringData(code->constants[inst->a]));
             goto fail;
         }
 
         BS_CASE(RETURN) {
-            BSValue result = stack[--sp];
-            if (stack != stackInline) {
-                free(stack);
+            /* A temporary's value is taken; a constant's or a local's is shared */
+            uint16_t operand = inst->a;
+            if ((operand & BS_OPERAND_CONST) == 0 && operand >= slotCount) {
+                result = regs[operand];
+                regs[operand] = bsNull();
+            } else {
+                result = bsRetain(BS_READ(operand));
             }
-            return result;
+            goto done;
         }
 
         BS_CASE(CALL_NAME)
         BS_CASE(CALL_SLOT) {
+            /* The arguments are operands, three per data word, read into a borrowed argument array */
             size_t callPc = pc - 1;
-            size_t argCount = BS_ARG(insts[pc++]);
-            BSValue *callArgs = stack + (sp - argCount);
-            BSValue result = bsCall(code, callPc, op, arg, callArgs, argCount, script, options, slots,
-                                    locals, builtins);
+            size_t argCount = inst->c;
+            BSValue argsInline[16];
+            BSValue *args = argCount <= 16 ? argsInline : bsAlloc(argCount * sizeof(BSValue));
             for (size_t ix = 0; ix < argCount; ix++) {
-                bsRelease(callArgs[ix]);
+                const BSInst *data = &insts[pc + ix / BS_OPERANDS_PER_DATA];
+                size_t which = ix % BS_OPERANDS_PER_DATA;
+                args[ix] = BS_READ(which == 0 ? data->a : (which == 1 ? data->b : data->c));
             }
-            sp -= argCount;
-            stack[sp++] = result;
+            pc += (argCount + BS_OPERANDS_PER_DATA - 1) / BS_OPERANDS_PER_DATA;
+            BSValue value = bsCall(code, callPc, inst->op, inst->b, args, argCount, script, options, regs,
+                                   locals, builtins);
+            if (args != argsInline) {
+                free(args);
+            }
+            if (inst->a == BS_REG_DISCARD) {
+                bsRelease(value);
+            } else {
+                bsRegisterSet(regs, inst->a, value);
+            }
             if (options->error.type == BS_STRING) {
                 goto fail;
             }
@@ -1226,30 +1184,23 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_NEXT();
 
         BS_CASE(ADD) {
-            BSValue right = stack[--sp];
-            BSValue left = stack[--sp];
-            if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
-                stack[sp++] = bsArithmetic(left.u.number + right.u.number);
-            } else {
-                stack[sp++] = bsAddSlow(left, right);
-                bsRelease(left);
-                bsRelease(right);
-            }
+            BSValue left = BS_READ(inst->b);
+            BSValue right = BS_READ(inst->c);
+            bsRegisterSet(regs, inst->a, (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
+                          bsArithmetic(left.u.number + right.u.number) : bsAddSlow(left, right));
         }
         BS_NEXT();
 
         BS_CASE(SUB) {
-            BSValue right = stack[--sp];
-            BSValue left = stack[--sp];
+            BSValue left = BS_READ(inst->b);
+            BSValue right = BS_READ(inst->c);
+            BSValue value = bsNull();
             if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
-                stack[sp++] = bsArithmetic(left.u.number - right.u.number);
+                value = bsArithmetic(left.u.number - right.u.number);
             } else if (left.type == BS_DATETIME && right.type == BS_DATETIME) {
-                stack[sp++] = bsNumber((double) (left.u.datetime - right.u.datetime));
-            } else {
-                stack[sp++] = bsNull();
-                bsRelease(left);
-                bsRelease(right);
+                value = bsNumber((double) (left.u.datetime - right.u.datetime));
             }
+            bsRegisterSet(regs, inst->a, value);
         }
         BS_NEXT();
 
@@ -1272,28 +1223,24 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_BITWISE(SHR, leftInt >> ((uint32_t) rightInt & 31u));
 
         BS_CASE(NEG) {
-            BSValue value = stack[--sp];
-            stack[sp++] = value.type == BS_NUMBER ? bsNumber(-value.u.number) : bsNull();
-            bsRelease(value);
+            BSValue value = BS_READ(inst->b);
+            bsRegisterSet(regs, inst->a, value.type == BS_NUMBER ? bsNumber(-value.u.number) : bsNull());
         }
         BS_NEXT();
 
-        BS_CASE(NOT) {
-            BSValue value = stack[--sp];
-            stack[sp++] = bsBoolean(!bsValueBoolean(value));
-            bsRelease(value);
-        }
-        BS_NEXT();
+        BS_CASE(NOT)
+            bsRegisterSet(regs, inst->a, bsBoolean(!bsValueBoolean(BS_READ(inst->b))));
+            BS_NEXT();
 
         BS_CASE(BNOT) {
-            BSValue value = stack[--sp];
-            stack[sp++] = bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull();
-            bsRelease(value);
+            BSValue value = BS_READ(inst->b);
+            bsRegisterSet(regs, inst->a,
+                          bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull());
         }
         BS_NEXT();
 
         BS_CASE(FUNCTION) {
-            BSFunctionDef *def = script->functions[arg];
+            BSFunctionDef *def = script->functions[inst->a];
             BSScriptFunction *scriptFunction = bsAlloc(sizeof(BSScriptFunction));
             scriptFunction->script = bsScriptRetain(script);
             scriptFunction->def = def;
@@ -1304,7 +1251,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_NEXT();
 
         BS_CASE(INCLUDE)
-            if (!bsExecuteInclude(script, &code->includes[arg], bsCodeLine(code, pc - 1), options)) {
+            if (!bsExecuteInclude(script, &code->includes[inst->a], bsCodeLine(code, pc - 1), options)) {
                 goto fail;
             }
             BS_NEXT();
@@ -1313,13 +1260,13 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             if (countStatements) {
                 options->statementCount++;
                 if (options->maxStatements > 0 && options->statementCount > options->maxStatements) {
-                    bsErrorSetStatement(options, script, code->coverLines[arg],
+                    bsErrorSetStatement(options, script, code->coverLines[inst->a],
                                         "Exceeded maximum script statements (%lld)",
                                         (long long) options->maxStatements);
                     goto fail;
                 }
                 if (hasCoverage) {
-                    bsRecordCoverage(script, code, arg, coverage);
+                    bsRecordCoverage(script, code, inst->a, coverage);
                 }
             }
             BS_NEXT();
@@ -1332,16 +1279,22 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 #endif
 #undef BS_CASE
 #undef BS_NEXT
+#undef BS_READ
 
 fail:
-    while (sp != 0) {
-        bsRelease(stack[--sp]);
+    result = bsNull();
+done:
+    if (ownRegs) {
+        for (size_t ix = 0; ix < regCount; ix++) {
+            bsReleaseInline(regs[ix]);
+        }
+        if (regs != regsInline) {
+            free(regs);
+        }
     }
-    if (stack != stackInline) {
-        free(stack); /* GCOV_EXCL_LINE - errors are raised at statement boundaries */
-    }
-    return bsNull();
+    return result;
 }
+
 
 BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins)
 {
