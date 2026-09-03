@@ -910,6 +910,22 @@ includeFailed:
  * The binary operator handlers that differ only by their operator. Each opcode keeps its own
  * handler - and, when dispatch is threaded, its own dispatch - so no operator is chosen at run time.
  */
+/*
+ * The modulo operator - integer operands, the common case by far, take the integer remainder,
+ * which agrees with fmod (the sign of the dividend, and a signed zero when the remainder is zero)
+ */
+static inline double bsModulo(double left, double right)
+{
+    if (left > -9007199254740992.0 && left < 9007199254740992.0 &&
+        right > -9007199254740992.0 && right < 9007199254740992.0 && right != 0 &&
+        left == (double) (int64_t) left && right == (double) (int64_t) right) {
+        int64_t remainder = (int64_t) left % (int64_t) right;
+        return remainder != 0 ? (double) remainder : copysign(0.0, left);
+    }
+    return fmod(left, right);
+}
+
+
 #define BS_ARITHMETIC(name, expr) \
     BS_CASE(name) { \
         BSValue right = stack[--sp]; \
@@ -1185,7 +1201,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 
         BS_ARITHMETIC(MUL, left.u.number * right.u.number);
         BS_ARITHMETIC(DIV, left.u.number / right.u.number);
-        BS_ARITHMETIC(MOD, fmod(left.u.number, right.u.number));
+        BS_ARITHMETIC(MOD, bsModulo(left.u.number, right.u.number));
         BS_ARITHMETIC(POW, pow(left.u.number, right.u.number));
 
         BS_COMPARE(EQ, cmp == 0);

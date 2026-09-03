@@ -20,6 +20,10 @@ TEST(runtime_expressions)
     ASSERT_VALUE(bsTestExecute("return 7 / 2"), "3.5");
     ASSERT_VALUE(bsTestExecute("return 7 % 2"), "1");
     ASSERT_VALUE(bsTestExecute("return -7 % 3"), "-1");
+    ASSERT_VALUE(bsTestExecute("return -4 % 2"), "0");
+    ASSERT_VALUE(bsTestExecute("return 5.5 % 2"), "1.5");
+    ASSERT_VALUE(bsTestExecute("return -5.5 % 2"), "-1.5");
+    ASSERT_VALUE(bsTestExecute("return 7 % 2.5"), "2");
     ASSERT_VALUE(bsTestExecute("return 2 ** 3"), "8");
     ASSERT_VALUE(bsTestExecute("return 2 ** 3 ** 2"), "64");
     ASSERT_VALUE(bsTestExecute("return -2 ** 2"), "4");
