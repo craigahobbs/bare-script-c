@@ -131,17 +131,18 @@ COVER_BIN := $(BUILD_DIR)/$(CLI_NAME)-cover
 #
 # Everything that must pass before a commit, as it is in the JavaScript and Python
 # implementations: the unit tests under coverage, the include library suite - which includes its
-# static analysis run - and this project's own language tests. The release build runs last so a
-# flag or LTO problem cannot reach a commit unnoticed.
+# static analysis run - and this project's own language tests. The release build runs last, and
+# then those suites run again against it, so a flag, LTO, or profile problem cannot reach a commit
+# unnoticed.
 #
 
 .PHONY: commit
-commit: test cover test-include test-language release
+commit: test cover test-include test-language release test-release
 
 
 .PHONY: help
 help:
-	@echo "usage: make [commit|compile|test|cover|test-include|test-language|perf|release|includes|install|clean]"
+	@echo "usage: make [commit|compile|test|cover|test-include|test-language|test-release|perf|release|includes|install|clean]"
 	@echo
 	@echo "  commit        everything that must pass before a commit"
 	@echo "  compile       build the shared library and the command-line interface"
@@ -150,6 +151,7 @@ help:
 	@echo "                VERBOSE=1 lists each uncovered line"
 	@echo "  test-include  run the BareScript include library test suite"
 	@echo "  test-language run this project's own BareScript language tests"
+	@echo "  test-release  run those suites again against the release build"
 	@echo "  perf          run the performance suite against the release build"
 	@echo "  release       profile-guided optimization build in build/release"
 	@echo "  includes      regenerate the bundled include library source"
@@ -279,9 +281,14 @@ else
         cli="$$(mangle '$(CURDIR)/$(RELEASE_CLI)')" && \
         obj="$$(mangle '$(CURDIR)/$(RELEASE_OBJ_DIR)')" && \
         for f in "$$src"-*.gcda; do \
+            [ -e "$$f" ] || { echo "PGO: nothing matches $$src-*.gcda - the training output moved" >&2; exit 1; }; \
             tu="$${f$(PROFILE_HASH)$$src-}" && \
             cp -f "$$f" "$$so-$$tu" && cp -f "$$f" "$$cli-$$tu" && \
             cp -f "$$f" "$$obj$(PROFILE_HASH)$$tu"; \
+        done && \
+        for tu in $(notdir $(basename $(LIB_SRCS))); do \
+            [ -e "$$so-$$tu.gcda" ] || \
+                { echo "PGO: $(RELEASE_LIB_SO) would build with no profile for $$tu" >&2; exit 1; }; \
         done
 endif
 
@@ -386,19 +393,37 @@ cover: $(COVER_BIN)
 #
 
 .PHONY: test-include test-include-lint test-include-markdownup test-include-run
+# The binary under test. The release build is what ships, and PGO and LTO are the two things most
+# able to change behaviour without changing a source line, so "test-release" runs these same suites
+# against it - see the pre-commit gate.
+TEST_CLI ?= $(CLI_BIN)
+
 test-include: test-include-lint test-include-markdownup test-include-run
 test-include-lint test-include-markdownup test-include-run: compile
 
 test-include-lint:
-	$(CLI_BIN) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
-	$(CLI_BIN) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
+	$(TEST_CLI) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
+	$(TEST_CLI) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
 
 test-include-markdownup:
-	$(CLI_BIN) -d -v vUnittestReport true \
+	$(TEST_CLI) -d -v vUnittestReport true \
 	    $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
 
 test-include-run:
-	$(CLI_BIN) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
+	$(TEST_CLI) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
+
+
+#
+# The release build under the same suites
+#
+# The shipped binary is built by a different pipeline - profile-guided, link-time optimized - than
+# the one every other target tests. Running the include library suite and the language tests
+# against it is what catches a miscompile, or a profile that silently failed to apply.
+#
+
+.PHONY: test-release
+test-release: release
+	$(MAKE) test-include test-language TEST_CLI=$(CURDIR)/$(RELEASE_CLI)
 
 
 #
@@ -407,7 +432,7 @@ test-include-run:
 
 .PHONY: test-language
 test-language: compile
-	$(CLI_BIN) -d -m $(TEST_DIR)/include/runTests.bare
+	$(TEST_CLI) -d -m $(TEST_DIR)/include/runTests.bare
 
 
 #
