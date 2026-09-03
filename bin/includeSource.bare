@@ -47,20 +47,14 @@ function includeSourceExportName(includeName):
 endfunction
 
 
-# Format a byte as a C hex literal
-function includeSourceHexByte(byte):
-    digits = '0123456789abcdef'
-    return arrayJoin(['0x', stringCharAt(digits, mathFloor(byte / 16)), stringCharAt(digits, byte % 16)], '')
-endfunction
-
-
 # Emit gzip bytes as a C unsigned-char initializer
 function includeSourceGzipBytes(bytes):
+    digits = '0123456789abcdef'
     lines = []
     lineParts = []
     for byte in bytes:
-        arrayPush(lineParts, includeSourceHexByte(byte))
-        if arrayLength(lineParts) == 12:
+        arrayPush(lineParts, '0x' + stringCharAt(digits, mathFloor(byte / 16)) + stringCharAt(digits, byte % 16))
+        if arrayLength(lineParts) == 16:
             arrayPush(lines, '    ' + arrayJoin(lineParts, ', ') + ',')
             lineParts = []
         endif
