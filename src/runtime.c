@@ -944,6 +944,18 @@ static inline void bsRegisterSet(BSValue *regs, uint16_t reg, BSValue value)
 }
 
 
+/* Take a temporary's value; retain a slot's or a constant's */
+static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t slotCount, uint16_t operand)
+{
+    if ((operand & BS_OPERAND_CONST) == 0 && operand >= slotCount) {
+        BSValue value = regs[operand];
+        regs[operand] = bsNull();
+        return value;
+    }
+    return bsRetain(bsOperandRead(code, regs, operand));
+}
+
+
 /*
  * The binary operator handlers that differ only by their operator. Each opcode keeps its own
  * handler - and, when dispatch is threaded, its own dispatch - so no operator is chosen at run time.
@@ -1081,19 +1093,10 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         inst = &insts[pc++];
         switch (inst->op) {
 #endif
-        BS_CASE(MOVE) {
+        BS_CASE(MOVE)
             /* A temporary is dead once moved, so its value is taken; a slot's or constant's is shared */
-            uint16_t source = inst->b;
-            BSValue value;
-            if ((source & BS_OPERAND_CONST) == 0 && source >= slotCount) {
-                value = regs[source];
-                regs[source] = bsNull();
-            } else {
-                value = bsRetain(BS_READ(source));
-            }
-            bsRegisterSet(regs, inst->a, value);
-        }
-        BS_NEXT();
+            bsRegisterSet(regs, inst->a, bsOperandTake(code, regs, slotCount, inst->b));
+            BS_NEXT();
 
         BS_CASE(LOAD_SLOT) {
             /* A slot that might not have been assigned yet - unset, it reads the global of its name */
@@ -1149,17 +1152,10 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             goto fail;
         }
 
-        BS_CASE(RETURN) {
+        BS_CASE(RETURN)
             /* A temporary's value is taken; a constant's or a local's is shared */
-            uint16_t operand = inst->a;
-            if ((operand & BS_OPERAND_CONST) == 0 && operand >= slotCount) {
-                result = regs[operand];
-                regs[operand] = bsNull();
-            } else {
-                result = bsRetain(BS_READ(operand));
-            }
+            result = bsOperandTake(code, regs, slotCount, inst->a);
             goto done;
-        }
 
         BS_CASE(CALL_NAME)
         BS_CASE(CALL_SLOT) {
