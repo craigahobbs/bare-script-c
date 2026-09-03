@@ -35,7 +35,8 @@ endif
 CC ?= cc
 CC_IS_CLANG := $(shell $(CC) --version 2>/dev/null | grep -c -i clang)
 WARN_FLAGS := -Wall -Wextra -Werror -Wno-unused-parameter -Wshadow -Wpointer-arith \
-    -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes -Wwrite-strings
+    -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes -Wwrite-strings \
+    -Wno-clobbered
 BASE_CFLAGS := -std=c11 -pedantic -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -I$(INC_DIR) $(WARN_FLAGS)
 
 # No caller reads errno after a libm call. Without this, GCC and clang on Linux wrap every sqrt,

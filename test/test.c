@@ -235,8 +235,9 @@ int bsTestRun(const char *filter)
 {
     size_t testCount = 0;
     size_t failCount = 0;
+    BSTestCase *testCase;
 
-    for (BSTestCase *testCase = bsTestHead; testCase != NULL; testCase = testCase->next) {
+    for (testCase = bsTestHead; testCase != NULL; testCase = testCase->next) {
         if (filter != NULL && strstr(testCase->name, filter) == NULL) {
             continue;
         }
