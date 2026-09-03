@@ -133,29 +133,15 @@ typedef struct RxNodeChunk {
  * begin with anything, disables it.
  */
 typedef struct RxFirstSet {
-    bool codes[256];
-    bool high;   /* a match can begin with a code point of 256 or more */
-    bool any;    /* a match can begin with anything, so the set is not usable */
+    uint64_t bits[4]; /* membership of the code points 0 - 255 */
+    bool high;        /* a match can begin with a code point of 256 or more */
+    bool any;         /* a match can begin with anything, or be empty, so the set is not usable */
 } RxFirstSet;
 
 
-/*
- * An alternative's first-code-point set, packed
- *
- * The markdown span alternation has sixteen alternatives, and a candidate position - one the
- * pattern's first set admits - used to try every one of them. Each alternative's own first set
- * lets the alternation skip the ones that cannot begin with the code point at hand.
- */
-typedef struct RxBranchFirst {
-    uint64_t bits[4]; /* membership of the code points 0 - 255 */
-    bool high;
-    bool usable;      /* false if the alternative can match the empty string or begin with anything */
-} RxBranchFirst;
-
-
-static inline bool rxBranchFirstHas(const RxBranchFirst *first, uint32_t code)
+static inline bool rxFirstHas(const RxFirstSet *set, uint32_t code)
 {
-    return code >= 256 ? first->high : (first->bits[code >> 6] >> (code & 63)) & 1u;
+    return code >= 256 ? set->high : (set->bits[code >> 6] >> (code & 63)) & 1u;
 }
 
 
@@ -200,7 +186,6 @@ struct BSRegex {
     int32_t refcount;
     unsigned flags;
     bool anchored; /* every alternative begins with "^", so only the start position can match */
-    bool firstUsable;
     RxFirstSet first;
     RxNode *root;
     size_t groupCount;
@@ -1029,11 +1014,11 @@ static void rxFirstAddCode(RxFirstSet *set, unsigned flags, uint32_t code)
         set->high = true;
         return;
     }
-    set->codes[code] = true;
+    set->bits[code >> 6] |= (uint64_t) 1 << (code & 63);
     if ((flags & BS_REGEX_IGNORECASE) != 0) {
         uint32_t other = rxSwapCase(code);
         if (other < 256) {
-            set->codes[other] = true;
+            set->bits[other >> 6] |= (uint64_t) 1 << (other & 63);
         }
     }
 }
@@ -1109,6 +1094,16 @@ static bool rxFirstSet(const RxNode *node, unsigned flags, RxFirstSet *set)
         }
     }
     return true;
+}
+
+
+/* A node chain's first set - unusable if the chain can match the empty string */
+static void rxFirstCompute(const RxNode *node, unsigned flags, RxFirstSet *set)
+{
+    memset(set, 0, sizeof(*set));
+    if (rxFirstSet(node, flags, set)) {
+        set->any = true;
+    }
 }
 
 
@@ -1191,10 +1186,8 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
             }
         }
 
-        /* Compute the set of code points a match can begin with, for the search scan */
-        if (!regex->anchored) {
-            regex->firstUsable = !rxFirstSet(regex->root, flags, &regex->first) && !regex->first.any;
-        }
+        /* The set of code points a match can begin with, for the search scan */
+        rxFirstCompute(regex->root, flags, &regex->first);
 
         rxEmitProgram(regex);
         rxChunksFree(regex);
@@ -1334,7 +1327,7 @@ struct RxInst {
 typedef struct RxAlt {
     uint32_t count;
     uint32_t *branchPcs;    /* each alternative's program */
-    RxBranchFirst *firsts;  /* per-alternative first sets, or NULL if none is usable */
+    RxFirstSet *firsts;     /* per-alternative first sets, or NULL if none is usable */
     RxAltIndex *index;      /* the alternatives by first code point, for a wide alternation */
 } RxAlt;
 
@@ -1616,22 +1609,11 @@ static uint32_t rxEmitAtom(RxEmit *e, RxNode *atom, unsigned *kind)
 static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
 {
     size_t count = node->u.alt.count;
-    RxBranchFirst *firsts = bsAlloc(count * sizeof(RxBranchFirst));
+    RxFirstSet *firsts = bsAlloc(count * sizeof(RxFirstSet));
     bool usable = false;
     for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
-        RxFirstSet set;
-        memset(&set, 0, sizeof(set));
-        bool nullable = rxFirstSet(node->u.alt.branches[ixBranch], flags, &set);
-        RxBranchFirst *first = &firsts[ixBranch];
-        memset(first, 0, sizeof(*first));
-        first->usable = !nullable && !set.any;
-        first->high = set.high;
-        for (uint32_t code = 0; code < 256; code++) {
-            if (set.codes[code]) {
-                first->bits[code >> 6] |= (uint64_t) 1 << (code & 63);
-            }
-        }
-        usable = usable || first->usable;
+        rxFirstCompute(node->u.alt.branches[ixBranch], flags, &firsts[ixBranch]);
+        usable = usable || !firsts[ixBranch].any;
     }
     alt->firsts = NULL;
     alt->index = NULL;
@@ -1646,9 +1628,9 @@ static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
     RxAltIndex *index = bsAlloc(sizeof(RxAltIndex));
     memset(index, 0, sizeof(*index));
     for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
-        const RxBranchFirst *first = &firsts[ixBranch];
+        const RxFirstSet *first = &firsts[ixBranch];
         uint32_t bit = (uint32_t) 1 << ixBranch;
-        if (!first->usable) {
+        if (first->any) {
             index->always |= bit;
             continue;
         }
@@ -1656,7 +1638,7 @@ static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
             index->high |= bit;
         }
         for (uint32_t code = 0; code < 256; code++) {
-            if (rxBranchFirstHas(first, code)) {
+            if (rxFirstHas(first, code)) {
                 index->codes[code] |= bit;
             }
         }
@@ -1871,11 +1853,11 @@ static void rxTrailPushRepeat(RxState *state, uint32_t slot)
 /* Whether an alternative can begin at a position, by its first set */
 static inline bool rxAltViable(const RxAlt *alt, size_t ix, bool atEnd, uint32_t code)
 {
-    const RxBranchFirst *firsts = alt->firsts;
-    if (firsts == NULL || !firsts[ix].usable) {
+    const RxFirstSet *firsts = alt->firsts;
+    if (firsts == NULL || firsts[ix].any) {
         return true;
     }
-    return !atEnd && rxBranchFirstHas(&firsts[ix], code);
+    return !atEnd && rxFirstHas(&firsts[ix], code);
 }
 
 
@@ -2512,11 +2494,11 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     bool found = false;
     for (size_t pos = start; pos <= last && !found; pos++) {
         /* Skip positions whose code point cannot begin a match */
-        if (compiled->firstUsable) {
+        if (!compiled->first.any) {
             while (pos < subject->length) {
                 uint32_t code = subject->codes != NULL ? subject->codes[pos] :
                     (uint32_t) subject->bytes[pos];
-                if (code >= 256 ? compiled->first.high : compiled->first.codes[code]) {
+                if (rxFirstHas(&compiled->first, code)) {
                     break;
                 }
                 pos++;
