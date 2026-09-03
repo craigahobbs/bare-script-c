@@ -1363,7 +1363,6 @@ typedef struct RxBacktrack {
     uint32_t pos;
     uint32_t trail;
     uint32_t aux;
-    uint32_t unused;
 } RxBacktrack;
 
 /*
