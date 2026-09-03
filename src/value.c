@@ -1354,7 +1354,8 @@ static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *obj
     BSObjectNode *created = bsObjectNodeAlloc();
     created->left = NULL;
     created->right = NULL;
-    created->priority = bsObjectPriority();
+    /* A priority is drawn only for a node that joins a treap - bsObjectBuildTreap draws the rest */
+    created->priority = object->u.tree.root != NULL ? bsObjectPriority() : 0;
     created->key = bsRetainInline(key).u.string;
     created->value = item;
     if (bsKeyInterned(key) == NULL) {
@@ -1470,6 +1471,7 @@ static void bsObjectBuildTreap(BSObject *object)
 {
     object->u.tree.root = NULL;
     for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
+        node->priority = bsObjectPriority();
         bsObjectTreapLink(object, node);
     }
 }
