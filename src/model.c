@@ -677,7 +677,7 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
                 if (slot >= 0) {
                     bsEmitInst(e, BS_OP_STORE_SLOT, (uint32_t) slot);
                 } else {
-                    bsEmitInst(e, BS_OP_STORE_NAME, bsEmitConst(e, interned));
+                    bsEmitInst(e, BS_OP_STORE_NAME, bsEmitSite(e, interned));
                 }
                 bsRelease(interned);
             } else {

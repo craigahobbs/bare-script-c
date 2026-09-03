@@ -647,10 +647,11 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
  * Look up a global name through its site cache. Returns a borrowed value, or a null value if the
  * name is absent.
  */
-static inline BSValue bsGlobalLookup(BSCallCache *cache, BSValue name, BSOptions *options)
+/* The globals object's value slot for a name site, or NULL if the name is absent */
+static inline BSValue *bsGlobalSlot(BSCallCache *cache, BSValue name, BSOptions *options)
 {
     if (options->globals.type != BS_OBJECT) {
-        return bsNull();
+        return NULL;
     }
     BSObject *globals = options->globals.u.object;
     if (cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
@@ -658,7 +659,14 @@ static inline BSValue bsGlobalLookup(BSCallCache *cache, BSValue name, BSOptions
         cache->gen = globals->generation;
         cache->epoch = options->cacheEpoch;
     }
-    return cache->slot != NULL ? *cache->slot : bsNull();
+    return cache->slot;
+}
+
+
+static inline BSValue bsGlobalLookup(BSCallCache *cache, BSValue name, BSOptions *options)
+{
+    BSValue *slot = bsGlobalSlot(cache, name, options);
+    return slot != NULL ? *slot : bsNull();
 }
 
 
@@ -984,10 +992,19 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             coverageKey = bsStringIntern(BS_GLOBAL_COVERAGE, strlen(BS_GLOBAL_COVERAGE));
             enabledKey = bsStringIntern("enabled", 7);
         }
-        BSValue enabled;
-        if (bsObjectLookupString(options->globals, coverageKey, &coverage) && coverage.type == BS_OBJECT &&
-            bsObjectLookupString(coverage, enabledKey, &enabled)) {
-            hasCoverage = bsValueBoolean(enabled);
+        if (options->globals.type == BS_OBJECT) {
+            BSObject *globals = options->globals.u.object;
+            if (options->coverageEpoch != options->cacheEpoch || options->coverageGen != globals->generation) {
+                options->coverageSlot = bsObjectValuePtrString(options->globals, coverageKey);
+                options->coverageGen = globals->generation;
+                options->coverageEpoch = options->cacheEpoch;
+            }
+            BSValue enabled;
+            if (options->coverageSlot != NULL && options->coverageSlot->type == BS_OBJECT &&
+                bsObjectLookupString(*options->coverageSlot, enabledKey, &enabled)) {
+                coverage = *options->coverageSlot;
+                hasCoverage = bsValueBoolean(enabled);
+            }
         }
     }
 
@@ -1070,9 +1087,21 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         }
         BS_NEXT();
 
-        BS_CASE(STORE_NAME)
-            bsObjectSetString(options->globals, code->constants[arg], stack[--sp]);
-            BS_NEXT();
+        BS_CASE(STORE_NAME) {
+            BSCallCache *cache = &code->caches[arg];
+            BSValue name = code->constants[cache->nameIndex];
+            BSValue value = stack[--sp];
+            BSValue *slot = bsGlobalSlot(cache, name, options);
+            if (slot != NULL) {
+                /* An existing global updates in place - no slot moves, so every site's cache holds */
+                BSValue previous = *slot;
+                *slot = value;
+                bsRelease(previous);
+            } else {
+                bsObjectSetString(options->globals, name, value);
+            }
+        }
+        BS_NEXT();
 
         BS_CASE(POP)
             bsRelease(stack[--sp]);

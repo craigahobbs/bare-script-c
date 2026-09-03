@@ -423,8 +423,8 @@ observe them) and flatten only in the code stream.
 
 The emitter tracks the value stack depth, so the interpreter allocates each chunk's stack once and
 pushes without bounds checks, and it folds `jumpif (!expr)` into a jump-if-false. Every global
-function call and global variable read compiles to a per-site cache that points at the globals
-object's value slot for the name; the cache is re-resolved only when a key is added to or removed
+function call, global variable read, and global variable write compiles to a per-site cache that
+points at the globals object's value slot for the name; the cache is re-resolved only when a key is added to or removed
 from the globals object (its *structural generation*), so an assignment to a global never
 invalidates other sites. Under GNU C the interpreter dispatches through a label table, one indirect
 branch per opcode. A runtime error is detected at entry, after each call, and at the statements

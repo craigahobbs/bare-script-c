@@ -97,6 +97,14 @@ struct BSOptions {
      * script cannot reuse a function pointer from a previous, already-freed globals object.
      */
     uint32_t cacheEpoch;
+
+    /*
+     * The __barescriptCoverage global's value slot, re-resolved when the globals object changes
+     * shape - a script without coverage then pays two compares per function call, not a lookup
+     */
+    BSValue *coverageSlot;
+    uint32_t coverageGen;
+    uint32_t coverageEpoch;
 };
 
 
