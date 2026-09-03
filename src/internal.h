@@ -168,6 +168,7 @@ enum {
     BS_OP_FUNCTION,    /* define script function a as a global */
     BS_OP_INCLUDE,     /* run include a */
     BS_OP_STMT,        /* statement a begins */
+    BS_OP_LOAD_SLOT,   /* a = slot b, or the global of its name if the slot is unset */
     BS_OP_DATA = 0xFF  /* call operands, or a trap's line; never dispatched */
 };
 

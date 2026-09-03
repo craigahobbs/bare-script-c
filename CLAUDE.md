@@ -83,12 +83,16 @@ operands, each a register or a constant. A chunk's registers are its slots (a fu
 and assigned names) followed by the temporaries the emitter allocates stack-fashion while
 compiling an expression, so a local or a literal feeds an operator or a call with no instruction
 of its own. Jump labels become instruction indexes during emit. A slot holding the internal unset
-marker falls through to the globals object. Group nodes stay in the model and flatten only in the
-code stream. The interpreter is `bsRunCode` in `src/runtime.c`.
+marker falls through to the globals object: the emitter's definite-assignment analysis (a must-
+analysis over each function body's labels and jumps) reads a slot that is definitely assigned as a
+plain register operand, and one that might be unset through `LOAD_SLOT`, which tests. Group nodes
+stay in the model and flatten only in the code stream. The interpreter is `bsRunCode` in
+`src/runtime.c`.
 
 Invariants the interpreter trusts rather than checks: the emitter counts each chunk's temporaries
 (`tempCount`) and a function call arrives with its registers filled, so register operands are never
-bounds-checked; a call's argument operands sit in the `DATA` words that follow it and are read
+bounds-checked, and a register operand is never the unset marker (only `LOAD_SLOT` reads a slot
+that might be); a call's argument operands sit in the `DATA` words that follow it and are read
 into a borrowed argument array; `CALL_NAME`, `LOAD_NAME`, and `STORE_NAME` operands index the
 chunk's per-site caches (`caches[]`), which hold a pointer to the globals
 object's value slot validated by the object's *structural* `generation` (bumped only when a key is

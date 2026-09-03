@@ -284,6 +284,10 @@ typedef struct {
     uint16_t tempTop;     /* the temporaries in use past the slots */
     uint16_t tempMax;
     BSOperand nullConst;  /* the null constant's operand, once allocated */
+    size_t assignedWords; /* the definite-assignment sets, slotCount bits each, or 0 for no analysis */
+    uint32_t *assigned;   /* the slots definitely assigned at the statement being emitted */
+    uint32_t *blockIn;    /* per statement that starts a block, the slots definitely assigned on entry */
+    uint8_t *blockStarts; /* per statement, whether it starts a block */
     BSValue *slotNames;
     size_t slotCount;
     size_t slotCap;
@@ -472,6 +476,173 @@ static void bsEmitJump(BSEmit *e, uint8_t op, BSOperand cond, BSValue label)
 static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst);
 
 
+/*
+ * Definite assignment
+ *
+ * A slot read before the slot is assigned falls through to the global of the same name, which
+ * costs every register read a test for the unset marker. The emitter instead computes, for each
+ * function body, which slots are definitely assigned at each statement - a forward must-analysis
+ * over the body's basic blocks, which its labels and jumps delimit - and reads such slots as plain
+ * registers; a read that might find the slot unset goes through LOAD_SLOT, which tests.
+ *
+ * A jump to a label defined more than once may reach any definition; a jump to an unknown label
+ * traps and reaches nothing.
+ */
+static inline bool bsAssignedTest(const BSEmit *e, int slot)
+{
+    return e->assignedWords != 0 && (e->assigned[slot / 32] >> (slot % 32)) & 1u;
+}
+
+
+static inline void bsAssignedSet(BSEmit *e, int slot)
+{
+    if (e->assignedWords != 0) {
+        e->assigned[slot / 32] |= (uint32_t) 1 << (slot % 32);
+    }
+}
+
+
+/* The slot a statement assigns, or -1 */
+static int bsStatementAssigns(const BSEmit *e, BSValue statement)
+{
+    BSValue expr = bsObjectGetString(statement, bsKeys.expr);
+    BSValue name = expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.name) : bsNull();
+    if (name.type != BS_STRING) {
+        return -1;
+    }
+    BSValue interned = bsInternName(name);
+    int slot = bsSlotFind(e, interned);
+    bsRelease(interned);
+    return slot;
+}
+
+
+static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
+{
+    size_t count = bsArrayCount(statements);
+    size_t words = (e->slotCount + 31) / 32;
+    if (e->slotCount == 0 || count == 0) {
+        return;
+    }
+
+    /* Blocks: the first statement, each label, and each statement after a jump or return start one */
+    uint8_t *starts = bsAlloc(count);
+    memset(starts, 0, count);
+    starts[0] = 1;
+    BSValue labelBlocks = bsObjectNew(); /* label name -> the array of block indexes that define it */
+    for (size_t ix = 0; ix < count; ix++) {
+        BSValue statement = bsArrayGet(statements, ix);
+        if (bsObjectHasString(statement, bsKeys.label)) {
+            starts[ix] = 1;
+        } else if ((bsObjectHasString(statement, bsKeys.jump) || bsObjectHasString(statement, bsKeys.return_)) &&
+                   ix + 1 < count) {
+            starts[ix + 1] = 1;
+        }
+    }
+    size_t blockCount = 0;
+    uint32_t *blockOf = bsAlloc(count * sizeof(uint32_t));
+    for (size_t ix = 0; ix < count; ix++) {
+        if (starts[ix]) {
+            blockCount++;
+        }
+        blockOf[ix] = (uint32_t) (blockCount - 1);
+    }
+    for (size_t ix = 0; ix < count; ix++) {
+        BSValue label = bsObjectGetString(bsArrayGet(statements, ix), bsKeys.label);
+        if (label.type == BS_OBJECT) {
+            BSValue name = bsObjectGetString(label, bsKeys.name);
+            if (name.type == BS_STRING) {
+                BSValue blocks = bsObjectGetString(labelBlocks, name);
+                if (blocks.type != BS_ARRAY) {
+                    blocks = bsArrayNew();
+                    bsObjectSetString(labelBlocks, name, blocks);
+                }
+                bsArrayPush(blocks, bsNumber((double) blockOf[ix]));
+            }
+        }
+    }
+
+    /* Each block's assignments, and its successors: the next block unless it ends in a jump or return */
+    uint32_t *gen = bsAlloc(blockCount * words * sizeof(uint32_t));
+    memset(gen, 0, blockCount * words * sizeof(uint32_t));
+    uint32_t *in = bsAlloc(blockCount * words * sizeof(uint32_t));
+    memset(in, 0xff, blockCount * words * sizeof(uint32_t));
+    memset(in, 0, words * sizeof(uint32_t));
+    for (size_t ix = 0; ix < argCount && ix < e->slotCount; ix++) {
+        in[ix / 32] |= (uint32_t) 1 << (ix % 32);
+    }
+    for (size_t ix = 0; ix < count; ix++) {
+        int slot = bsStatementAssigns(e, bsArrayGet(statements, ix));
+        if (slot >= 0) {
+            gen[blockOf[ix] * words + (size_t) slot / 32] |= (uint32_t) 1 << (slot % 32);
+        }
+    }
+
+    /* The fixed point: a block's entry set is the intersection of its predecessors' exit sets */
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (size_t ix = 0; ix < count; ix++) {
+            bool last = ix + 1 == count || starts[ix + 1];
+            if (!last) {
+                continue;
+            }
+            uint32_t block = blockOf[ix];
+            const uint32_t *blockGen = &gen[block * words];
+            const uint32_t *blockIn = &in[block * words];
+            BSValue statement = bsArrayGet(statements, ix);
+            BSValue jump = bsObjectGetString(statement, bsKeys.jump);
+            bool fallsThrough = jump.type != BS_OBJECT ? !bsObjectHasString(statement, bsKeys.return_) :
+                bsObjectHasString(jump, bsKeys.expr);
+            BSValue targets = jump.type == BS_OBJECT ?
+                bsObjectGetString(labelBlocks, bsObjectGetString(jump, bsKeys.label)) : bsNull();
+            size_t targetCount = targets.type == BS_ARRAY ? bsArrayCount(targets) : 0;
+            for (size_t succIx = 0; succIx < targetCount + (fallsThrough ? 1 : 0); succIx++) {
+                uint32_t succ = succIx < targetCount ? (uint32_t) bsArrayGet(targets, succIx).u.number :
+                    block + 1;
+                if (succ >= blockCount) {
+                    continue;
+                }
+                uint32_t *succIn = &in[succ * words];
+                for (size_t w = 0; w < words; w++) {
+                    uint32_t next = succIn[w] & (blockIn[w] | blockGen[w]);
+                    if (next != succIn[w]) {
+                        succIn[w] = next;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    e->assignedWords = words;
+    e->assigned = bsAlloc(words * sizeof(uint32_t));
+    e->blockStarts = starts;
+    e->blockIn = bsAlloc(count * words * sizeof(uint32_t));
+    for (size_t ix = 0; ix < count; ix++) {
+        if (starts[ix]) {
+            memcpy(&e->blockIn[ix * words], &in[blockOf[ix] * words], words * sizeof(uint32_t));
+        }
+    }
+    free(gen);
+    free(in);
+    free(blockOf);
+    bsRelease(labelBlocks);
+}
+
+
+static void bsAssignedFree(BSEmit *e)
+{
+    free(e->assigned);
+    free(e->blockIn);
+    free(e->blockStarts);
+    e->assigned = NULL;
+    e->blockIn = NULL;
+    e->blockStarts = NULL;
+    e->assignedWords = 0;
+}
+
+
 static uint8_t bsBinaryOpcode(const char *op)
 {
     static const struct {
@@ -532,8 +703,17 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
         BSValue interned = bsInternName(variable);
         int slot = bsSlotFind(e, interned);
         bsRelease(interned);
-        if (slot >= 0) {
+        if (slot >= 0 && bsAssignedTest(e, slot)) {
             *operand = (BSOperand) slot;
+            return true;
+        }
+        if (slot >= 0) {
+            uint16_t temp;
+            if (!bsTempAlloc(e, &temp)) {
+                return false; /* GCOV_EXCL_LINE - 32768 live temporaries need an expression nested that deep */
+            }
+            bsEmitInst(e, BS_OP_LOAD_SLOT, temp, (uint16_t) slot, 0);
+            *operand = temp;
             return true;
         }
     }
@@ -763,6 +943,10 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
                 return ok;
             }
             bsRelease(interned);
+            if (!bsAssignedTest(e, slot)) {
+                bsEmitInst(e, BS_OP_LOAD_SLOT, dst, (uint16_t) slot, 0);
+                return true;
+            }
         }
     }
     uint16_t base = e->tempTop;
@@ -859,7 +1043,11 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         int slot = bsSlotFind(e, interned);
         if (slot >= 0) {
             bsRelease(interned);
-            return bsEmitExprTo(e, expr, (uint16_t) slot);
+            if (!bsEmitExprTo(e, expr, (uint16_t) slot)) {
+                return false;
+            }
+            bsAssignedSet(e, slot);
+            return true;
         }
         uint16_t site;
         bool ok = bsEmitSite(e, interned, &site);
@@ -974,6 +1162,9 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
 {
     size_t count = bsArrayCount(statementModels);
     for (size_t ix = 0; ix < count; ix++) {
+        if (e->assignedWords != 0 && e->blockStarts[ix]) {
+            memcpy(e->assigned, &e->blockIn[ix * e->assignedWords], e->assignedWords * sizeof(uint32_t));
+        }
         if (!bsEmitStatement(e, bsArrayGet(statementModels, ix))) {
             return false;
         }
@@ -1143,7 +1334,10 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
             }
         }
     }
-    if (!bsEmitBody(&body, statements, &def->code)) {
+    bsAssignedAnalyze(&body, statements, def->argCount);
+    bool emitted = bsEmitBody(&body, statements, &def->code);
+    bsAssignedFree(&body);
+    if (!emitted) {
         return false;
     }
     if (index > 0xffffu) {

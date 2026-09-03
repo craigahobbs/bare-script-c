@@ -487,7 +487,12 @@ subexpression's result lands in the lowest free temporary, freed again once cons
 1` is one instruction that reads the local and the literal in place, and a call's arguments are
 operands in the words that follow it, read into a borrowed argument array without a push or a
 reference count. The emitter counts each chunk's temporaries, so the interpreter allocates a
-frame's registers once, and it folds `jumpif (!expr)` into a jump-if-false. Every global
+frame's registers once, and it folds `jumpif (!expr)` into a jump-if-false. A local read before
+it is assigned falls through to the global of the same name, which would cost every register read
+a test; instead the emitter runs a definite-assignment analysis over each function body - a
+forward must-analysis across the basic blocks its labels and jumps delimit - and reads a slot
+that is definitely assigned as a bare register, leaving the test to the reads that might find the
+slot unassigned. Every global
 function call, global variable read, and global variable write compiles to a per-site cache that
 points at the globals object's value slot for the name; the cache is re-resolved only when a key is added to or removed
 from the globals object (its *structural generation*), so an assignment to a global never

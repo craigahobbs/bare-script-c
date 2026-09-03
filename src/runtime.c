@@ -933,18 +933,19 @@ static inline double bsModulo(double left, double right)
 }
 
 
-/* An operand's value, borrowed: a constant, or a register - an unset local reads the global of its name */
-static inline BSValue bsOperandRead(const BSCode *code, const BSValue *regs, BSOptions *options,
-                                    uint16_t operand)
+/*
+ * An operand's value, borrowed: a constant, or a register. The emitter's definite-assignment
+ * analysis guarantees a register operand is never the unset marker - a slot that might be unset
+ * is read through LOAD_SLOT instead.
+ */
+static inline BSValue bsOperandRead(const BSCode *code, const BSValue *regs, uint16_t operand)
 {
-    if ((operand & BS_OPERAND_CONST) != 0) {
-        return code->constants[BS_OPERAND_INDEX(operand)];
+    /* Read as signed: a constant is negative, and a register index is its own sign extension */
+    int32_t signedOperand = (int16_t) operand;
+    if (signedOperand < 0) {
+        return code->constants[signedOperand & 0x7fff];
     }
-    BSValue value = regs[operand];
-    if (BS_IS_UNSET(value)) {
-        value = bsObjectGetString(options->globals, code->slotNames[operand]);
-    }
-    return value;
+    return regs[signedOperand];
 }
 
 
@@ -963,7 +964,7 @@ static inline void bsRegisterSet(BSValue *regs, uint16_t reg, BSValue value)
  * Operands are borrowed reads; only the result is owned, and storing it releases what the
  * destination register held.
  */
-#define BS_READ(operand) bsOperandRead(code, regs, options, (operand))
+#define BS_READ(operand) bsOperandRead(code, regs, (operand))
 
 #define BS_ARITHMETIC(name, expr) \
     BS_CASE(name) { \
@@ -1078,7 +1079,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         &&op_JUMP_UNDEF, &&op_RETURN, &&op_CALL_NAME, &&op_CALL_SLOT, &&op_ADD, &&op_SUB, &&op_MUL,
         &&op_DIV, &&op_MOD, &&op_POW, &&op_EQ, &&op_NE, &&op_LT, &&op_LE, &&op_GT, &&op_GE,
         &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG, &&op_NOT, &&op_BNOT,
-        &&op_FUNCTION, &&op_INCLUDE, &&op_STMT
+        &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT
     };
 #define BS_CASE(name) op_##name:
 #define BS_NEXT() \
@@ -1105,6 +1106,16 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
                 value = bsRetain(BS_READ(source));
             }
             bsRegisterSet(regs, inst->a, value);
+        }
+        BS_NEXT();
+
+        BS_CASE(LOAD_SLOT) {
+            /* A slot that might not have been assigned yet - unset, it reads the global of its name */
+            BSValue value = regs[inst->b];
+            if (BS_IS_UNSET(value)) {
+                value = bsObjectGetString(options->globals, code->slotNames[inst->b]);
+            }
+            bsRegisterSet(regs, inst->a, bsRetain(value));
         }
         BS_NEXT();
 
