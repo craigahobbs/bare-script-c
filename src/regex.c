@@ -4,11 +4,11 @@
 /*
  * A targeted regular expression implementation for BareScript
  *
- * Patterns compile to a tree of nodes chained by "next" pointers. Matching is a backtracking walk
- * of that tree with an explicit continuation list, so alternation, groups, and quantifiers each
- * stay a small local decision. Quantifiers whose body matches exactly one code point - the common
- * case, "\\s*", "[0-9]+", ".*" - are matched iteratively rather than recursively, which keeps the
- * C stack bounded for the long subject strings that make up most real input.
+ * A pattern parses to a tree of nodes chained by "next" pointers, which compiles to a linear
+ * program and is then freed. Matching runs the program in one loop with an explicit backtrack
+ * stack, so no pattern recurses on the C stack beyond one call per lookaround body. Quantifiers
+ * whose body matches exactly one code point - the common case, "\\s*", "[0-9]+", ".*" - scan in
+ * one loop and give back through one backtrack entry.
  */
 
 #include <limits.h>
@@ -61,7 +61,6 @@ typedef enum {
     RX_CLASS,
     RX_ALT,
     RX_GROUP,
-    RX_GROUP_END,
     RX_REPEAT,
     RX_BOL,
     RX_EOL,
@@ -94,28 +93,21 @@ struct RxNode {
         struct {
             RxNode **branches;
             size_t count;
-            struct RxBranchFirst *firsts; /* per-branch first-code-point sets, or NULL if none is usable */
-            struct RxAltIndex *index;     /* the alternatives indexed by first code point, for wide alternations */
         } alt;
         struct {
             RxNode *sub;
-            RxNode *close;
-            size_t group; /* zero for a non-capturing group */
+            size_t group;
         } group;
-        size_t groupIndex; /* RX_GROUP_END and RX_BACKREF */
+        size_t groupIndex; /* RX_BACKREF */
         struct {
             RxNode *sub;
             int min;
             int max; /* -1 for unbounded */
             bool greedy;
-            bool simple;    /* the body matches exactly one code point and captures nothing */
         } repeat;
         struct {
             RxNode *sub;
-            RxNode *atom;       /* the sub-pattern when it is one code point, else NULL */
             bool negate;
-            size_t minLength; /* the sub-pattern's match length bounds, for lookbehind scanning */
-            size_t maxLength;
         } look;
     } u;
 };
@@ -212,8 +204,8 @@ struct BSRegex {
     RxFirstSet first;
     RxNode *root;
     size_t groupCount;
-    BSValue *groupNames;
-    bool uniqueNames; /* no two groups share a name, so a match model can append each */ /* groupCount entries, or NULL if no group is named */
+    BSValue *groupNames;  /* groupCount entries, or NULL if no group is named */
+    bool uniqueNames;     /* no two groups share a name, so a match model can append each */
     RxNodeChunk *chunks;
     RxInst *prog;         /* the compiled program, and the tables its instructions refer to */
     size_t progCount;
@@ -694,7 +686,6 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         if (lookahead || lookbehind) {
             RxNode *node = rxNodeNew(compiler, lookbehind ? RX_LOOKBEHIND : RX_LOOKAHEAD);
             node->u.look.sub = sub;
-            node->u.look.atom = rxSimpleAtom(sub);
             node->u.look.negate = lookaheadNegate;
             return node;
         }
@@ -705,8 +696,6 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         RxNode *node = rxNodeNew(compiler, RX_GROUP);
         node->u.group.sub = sub;
         node->u.group.group = group;
-        node->u.group.close = rxNodeNew(compiler, RX_GROUP_END);
-        node->u.group.close->u.groupIndex = group;
         return node;
     }
 
@@ -813,9 +802,6 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
 }
 
 
-/* True if a node matches exactly one code point and captures nothing */
-
-
 /*
  * Match a quantifier, consuming it on success
  *
@@ -913,7 +899,6 @@ static RxNode *rxParseSequence(RxCompiler *compiler)
             repeat->u.repeat.min = min;
             repeat->u.repeat.max = max;
             repeat->u.repeat.greedy = greedy;
-            repeat->u.repeat.simple = rxIsSimple(atom);
             atom = repeat;
 
             /* A quantifier cannot itself be quantified */
@@ -956,8 +941,6 @@ static RxNode *rxParseAlternation(RxCompiler *compiler)
 
     RxNode *alt = rxNodeNew(compiler, RX_ALT);
     alt->u.alt.branches = branches;
-    alt->u.alt.firsts = NULL;
-    alt->u.alt.index = NULL;
     alt->u.alt.count = count;
     return alt;
 }
@@ -1121,7 +1104,7 @@ static bool rxFirstSet(const RxNode *node, unsigned flags, RxFirstSet *set)
             break;
 
         default:
-            /* RX_ANY, RX_BACKREF, and RX_GROUP_END - not worth enumerating */
+            /* RX_ANY and RX_BACKREF - not worth enumerating */
             set->any = true;
             return false;
         }
@@ -1141,8 +1124,6 @@ static void rxChunksFree(BSRegex *regex)
                 free(node->u.cls.ranges);
             } else if (node->kind == RX_ALT) {
                 free(node->u.alt.branches);
-                free(node->u.alt.firsts);
-                free(node->u.alt.index);
             }
         }
         RxNodeChunk *next = chunk->next;
@@ -1175,16 +1156,10 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         error[0] = '\0';
     }
     BSRegex *regex = bsAlloc(sizeof(BSRegex));
+    memset(regex, 0, sizeof(*regex));
     regex->refcount = 1;
     regex->flags = flags;
-    regex->anchored = false;
-    regex->firstUsable = false;
-    regex->uniqueNames = false;
-    memset(&regex->first, 0, sizeof(regex->first));
-    regex->root = NULL;
     regex->groupCount = 1;
-    regex->groupNames = NULL;
-    regex->chunks = NULL;
 
     RxCompiler compiler;
     memset(&compiler, 0, sizeof(compiler));
@@ -1200,76 +1175,6 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         rxError(&compiler, compiler.offset, "unbalanced parenthesis");
     }
     if (!compiler.failed) {
-        /*
-         * A group's close node continues where the group itself continues, and a lookbehind's scan
-         * is bounded by its sub-pattern's match length
-         */
-        for (RxNodeChunk *chunk = regex->chunks; chunk != NULL; chunk = chunk->next) {
-            for (size_t ix = 0; ix < chunk->used; ix++) {
-                RxNode *node = &chunk->nodes[ix];
-                if (node->kind == RX_GROUP) {
-                    node->u.group.close->next = node->next;
-                } else if (node->kind == RX_LOOKBEHIND) {
-                    rxNodeLength(node->u.look.sub, &node->u.look.minLength, &node->u.look.maxLength);
-                }
-            }
-        }
-
-        /* Each alternative's first set, so an alternation tries only the alternatives that can start here */
-        for (RxNodeChunk *chunk = regex->chunks; chunk != NULL; chunk = chunk->next) {
-            for (size_t ix = 0; ix < chunk->used; ix++) {
-                RxNode *node = &chunk->nodes[ix];
-                if (node->kind != RX_ALT || node->u.alt.count < 2) {
-                    continue;
-                }
-                size_t count = node->u.alt.count;
-                RxBranchFirst *firsts = bsAlloc(count * sizeof(RxBranchFirst));
-                bool usable = false;
-                for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
-                    RxFirstSet set;
-                    memset(&set, 0, sizeof(set));
-                    bool nullable = rxFirstSet(node->u.alt.branches[ixBranch], flags, &set);
-                    RxBranchFirst *first = &firsts[ixBranch];
-                    memset(first, 0, sizeof(*first));
-                    first->usable = !nullable && !set.any;
-                    first->high = set.high;
-                    for (uint32_t code = 0; code < 256; code++) {
-                        if (set.codes[code]) {
-                            first->bits[code >> 6] |= (uint64_t) 1 << (code & 63);
-                        }
-                    }
-                    usable = usable || first->usable;
-                }
-                if (!usable) {
-                    free(firsts);
-                    continue;
-                }
-                node->u.alt.firsts = firsts;
-                if (count < RX_ALT_INDEX_MIN || count > RX_ALT_INDEX_MAX) {
-                    continue;
-                }
-                RxAltIndex *index = bsAlloc(sizeof(RxAltIndex));
-                memset(index, 0, sizeof(*index));
-                for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
-                    const RxBranchFirst *first = &firsts[ixBranch];
-                    uint32_t bit = (uint32_t) 1 << ixBranch;
-                    if (!first->usable) {
-                        index->always |= bit;
-                        continue;
-                    }
-                    if (first->high) {
-                        index->high |= bit;
-                    }
-                    for (uint32_t code = 0; code < 256; code++) {
-                        if (rxBranchFirstHas(first, code)) {
-                            index->codes[code] |= bit;
-                        }
-                    }
-                }
-                node->u.alt.index = index;
-            }
-        }
-
         /*
          * A pattern whose every alternative begins with "^" can only match at the search start, so
          * the scan over later positions is skipped. Multi-line patterns still scan, since "^" also
@@ -1366,14 +1271,6 @@ BSValue bsRegexGroupNameValue(BSValue regex, size_t group)
  * Match
  */
 
-
-/*
- * A capture trail entry
- *
- * Every capture group write records its previous value, so backtracking - and in particular
- * lookaround, which can write many groups before failing - restores state in time proportional to
- * what actually changed rather than copying the whole capture array.
- */
 
 /*
  * The program matcher
@@ -1488,6 +1385,13 @@ typedef struct RxRepeat {
 /* A trail entry restoring a repeat counter rather than a capture - the slot is in the low bits */
 #define RX_TRAIL_REPEAT 0x80000000u
 
+/*
+ * A trail entry
+ *
+ * Every capture group and repeat counter write records its previous value, so backtracking - and
+ * in particular lookaround, which can write many groups before failing - restores state in time
+ * proportional to what actually changed rather than copying the whole capture array.
+ */
 typedef struct RxTrailEntry {
     uint32_t group;
     BSRegexSpan span; /* for a repeat: begin is the count, end the start */
@@ -1707,6 +1611,62 @@ static uint32_t rxEmitAtom(RxEmit *e, RxNode *atom, unsigned *kind)
 }
 
 
+/*
+ * Each alternative's first set, so an alternation tries only the alternatives that can start at a
+ * position - and, for a wide alternation, an index of the alternatives by first code point
+ */
+static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
+{
+    size_t count = node->u.alt.count;
+    RxBranchFirst *firsts = bsAlloc(count * sizeof(RxBranchFirst));
+    bool usable = false;
+    for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
+        RxFirstSet set;
+        memset(&set, 0, sizeof(set));
+        bool nullable = rxFirstSet(node->u.alt.branches[ixBranch], flags, &set);
+        RxBranchFirst *first = &firsts[ixBranch];
+        memset(first, 0, sizeof(*first));
+        first->usable = !nullable && !set.any;
+        first->high = set.high;
+        for (uint32_t code = 0; code < 256; code++) {
+            if (set.codes[code]) {
+                first->bits[code >> 6] |= (uint64_t) 1 << (code & 63);
+            }
+        }
+        usable = usable || first->usable;
+    }
+    alt->firsts = NULL;
+    alt->index = NULL;
+    if (!usable) {
+        free(firsts);
+        return;
+    }
+    alt->firsts = firsts;
+    if (count < RX_ALT_INDEX_MIN || count > RX_ALT_INDEX_MAX) {
+        return;
+    }
+    RxAltIndex *index = bsAlloc(sizeof(RxAltIndex));
+    memset(index, 0, sizeof(*index));
+    for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
+        const RxBranchFirst *first = &firsts[ixBranch];
+        uint32_t bit = (uint32_t) 1 << ixBranch;
+        if (!first->usable) {
+            index->always |= bit;
+            continue;
+        }
+        if (first->high) {
+            index->high |= bit;
+        }
+        for (uint32_t code = 0; code < 256; code++) {
+            if (rxBranchFirstHas(first, code)) {
+                index->codes[code] |= bit;
+            }
+        }
+    }
+    alt->index = index;
+}
+
+
 static void rxEmitChain(RxEmit *e, RxNode *node)
 {
     for (; node != NULL; node = node->next) {
@@ -1735,10 +1695,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
             }
             uint32_t altIndex = (uint32_t) e->altCount++;
             e->alts[altIndex].count = (uint32_t) count;
-            e->alts[altIndex].firsts = node->u.alt.firsts;
-            e->alts[altIndex].index = node->u.alt.index;
-            node->u.alt.firsts = NULL;
-            node->u.alt.index = NULL;
+            rxEmitAltFirsts(&e->alts[altIndex], node, e->flags);
             rxEmit(e, RXI_ALT, 0, 0, altIndex, 0, 0);
             uint32_t *pcs = bsAlloc(count * sizeof(uint32_t));
             uint32_t *jumps = bsAlloc(count * sizeof(uint32_t));
@@ -1768,7 +1725,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
             }
             uint32_t maxOperand = max < 0 ? RX_UNBOUNDED : (uint32_t) max;
             uint8_t greedy = node->u.repeat.greedy ? RX_ATOM_FLAG : 0;
-            if (node->u.repeat.simple) {
+            if (rxIsSimple(node->u.repeat.sub)) {
                 unsigned kind;
                 uint32_t operand = rxEmitAtom(e, node->u.repeat.sub, &kind);
                 rxEmit(e, RXI_REPEAT_SIMPLE, (uint32_t) node->u.repeat.min, maxOperand, operand,
@@ -1810,21 +1767,22 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
         case RX_LOOKBEHIND: {
             bool ahead = node->kind == RX_LOOKAHEAD;
             uint8_t negate = node->u.look.negate ? RX_ATOM_FLAG : 0;
-            if (node->u.look.atom != NULL) {
+            RxNode *atom = rxSimpleAtom(node->u.look.sub);
+            if (atom != NULL) {
                 unsigned kind;
-                uint32_t operand = rxEmitAtom(e, node->u.look.atom, &kind);
+                uint32_t operand = rxEmitAtom(e, atom, &kind);
                 rxEmit(e, RXI_LOOK_ATOM, 0, 0, operand, (uint8_t) (kind | negate | (ahead ? 0 : RX_LOOK_BEHIND)), 0);
                 break;
             }
             uint32_t lookIndex = 0;
             if (!ahead) {
+                /* A lookbehind's scan is bounded by its sub-pattern's match length */
                 if (e->lookCount == e->lookCapacity) {
                     e->lookCapacity = e->lookCapacity != 0 ? e->lookCapacity * 2 : 4;
                     e->looks = bsRealloc(e->looks, e->lookCapacity * sizeof(RxLook));
                 }
                 lookIndex = (uint32_t) e->lookCount++;
-                e->looks[lookIndex].minLength = node->u.look.minLength;
-                e->looks[lookIndex].maxLength = node->u.look.maxLength;
+                rxNodeLength(node->u.look.sub, &e->looks[lookIndex].minLength, &e->looks[lookIndex].maxLength);
             }
             uint32_t look = rxEmit(e, ahead ? RXI_LOOKAHEAD : RXI_LOOKBEHIND, 0, 0, lookIndex, negate, 0);
             e->inst[look].a = (uint32_t) e->count;
@@ -1833,10 +1791,6 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
             e->inst[look].b = (uint32_t) e->count;
             break;
         }
-
-        default:
-            /* RX_GROUP_END - a group's close is emitted with its group, never reached in a chain */
-            break; /* GCOV_EXCL_LINE */
         }
     }
 }

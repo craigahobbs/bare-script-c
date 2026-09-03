@@ -4,8 +4,8 @@
 /*
  * A targeted regular expression implementation for BareScript
  *
- * The engine is a backtracking matcher over a compiled node tree. It implements the subset of
- * JavaScript regular expression syntax that BareScript's regex library functions expose:
+ * A pattern compiles to a program that a backtracking matcher runs. The engine implements the
+ * subset of JavaScript regular expression syntax that BareScript's regex library functions expose:
  *
  *   literals  . [...] [^...] ( ) (?: ) (?<name> ) (?= ) (?! ) (?<= ) (?<! ) |
  *   escapes   \d \D \w \W \s \S \b \B \n \r \t \f \v \0 \xHH \uHHHH \k<name> \1 - \9
