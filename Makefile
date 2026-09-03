@@ -319,7 +319,10 @@ test: $(TEST_BIN)
 # Coverage
 #
 
-COVER_CFLAGS := --coverage -O0 -g
+# The thread test runs eight runtimes at once, and gcov's counters are a plain read-modify-write
+# by default - concurrent updates lose increments, and gcov then solves the flow graph into
+# negative counts that report covered lines as missed. Atomic counters make the run repeatable.
+COVER_CFLAGS := --coverage -O0 -g $(call CC_SUPPORTS,-fprofile-update=atomic)
 
 $(COVER_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
