@@ -227,7 +227,16 @@ $(CLI_BIN): $(CLI_OBJS) $(LIB_SO)
 RELEASE_DIR := $(BUILD_DIR)/release
 RELEASE_OBJ_DIR := $(RELEASE_DIR)/obj
 PROFILE_DIR := $(BUILD_DIR)/profile
-# -O2 and -O3 are equal in speed here at every stage; under PGO and LTO, -O2 emits 10% less code.
+# -O2, not -O3. On Apple clang the two are equal in speed and -O2 emits 10% less code; on GCC 14
+# and aarch64 Linux -O3 is 10.9% slower across the performance suite - every test, from +5.8% on
+# markdownParse to +21% on mandelbrot - and 5.2% slower on the include test suite.
+#
+# Not for the reason code size suggests. -O3 does grow .text 11.2%, but turning off the passes
+# responsible (vectorization, -fipa-cp-clone, unswitching, peeling) returns .text to within 2.5KB
+# of -O2 and recovers none of the time. Nor is it layout: relinking -O2 with -ffunction-sections
+# and --sort-section=name moves every hot function and costs nothing. The cost is in the code
+# generated for the hot functions themselves - mandelbrot, which is a numeric loop almost entirely
+# inside bsRunCode and touches the least other code, regresses the most.
 # -flto=auto avoids the lto-wrapper "serial compilation" note on GCC while preserving full LTO.
 RELEASE_CFLAGS ?= -O2 -DNDEBUG -flto=auto
 RELEASE_LIB_SO := $(RELEASE_DIR)/lib$(LIB_NAME).$(SO_EXT)
