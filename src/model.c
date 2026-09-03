@@ -966,24 +966,8 @@ static bool bsEmitExprDiscard(BSEmit *e, BSValue model)
 }
 
 
-static int bsStatementModelLine(BSValue model)
-{
-    /* The first "lineNumber" among the statement's keys - each statement kind carries one */
-    const BSValue *const keys[] = {
-        &bsKeys.expr, &bsKeys.jump, &bsKeys.return_, &bsKeys.label, &bsKeys.function, &bsKeys.include
-    };
-    for (size_t ix = 0; ix < sizeof(keys) / sizeof(keys[0]); ix++) {
-        BSValue value = bsObjectGetString(model, *keys[ix]);
-        if (value.type == BS_OBJECT) {
-            BSValue line = bsObjectGetString(value, bsKeys.lineNumber);
-            return line.type == BS_NUMBER ? (int) line.u.number : 0;
-        }
-    }
-    return 0; /* GCOV_EXCL_LINE - every statement kind the emitter accepts carries a line */
-}
-
-
-static void bsEmitCover(BSEmit *e, BSValue statementModel)
+/* Record a statement's model and line - "kind" is the statement's member object, which carries the line */
+static void bsEmitCover(BSEmit *e, BSValue statementModel, BSValue kind)
 {
     if (e->coverCount == e->coverCap) {
         e->coverCap = e->coverCap != 0 ? e->coverCap * 2 : 8;
@@ -992,7 +976,8 @@ static void bsEmitCover(BSEmit *e, BSValue statementModel)
         e->coverPcs = bsRealloc(e->coverPcs, e->coverCap * sizeof(uint32_t));
     }
     e->cover[e->coverCount] = statementModel;
-    e->coverLines[e->coverCount] = bsStatementModelLine(statementModel);
+    BSValue line = bsObjectGetString(kind, bsKeys.lineNumber);
+    e->coverLines[e->coverCount] = line.type == BS_NUMBER ? (int) line.u.number : 0;
     e->coverPcs[e->coverCount] = (uint32_t) e->count;
     bsEmitInst(e, BS_OP_STMT, (uint16_t) e->coverCount, 0, 0);
     e->coverCount++;
@@ -1011,7 +996,7 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
 
     BSValue value = bsObjectGetString(model, bsKeys.expr);
     if (value.type == BS_OBJECT) {
-        bsEmitCover(e, model);
+        bsEmitCover(e, model, value);
         BSValue expr = bsObjectGetString(value, bsKeys.expr);
         BSValue name = bsObjectGetString(value, bsKeys.name);
         if (name.type != BS_STRING) {
@@ -1045,7 +1030,7 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         if (label.type != BS_STRING) {
             return false;
         }
-        bsEmitCover(e, model);
+        bsEmitCover(e, model, value);
         if (!bsObjectHasString(value, bsKeys.expr)) {
             bsEmitJump(e, BS_OP_JUMP, 0, label);
             return true;
@@ -1073,7 +1058,7 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
 
     value = bsObjectGetString(model, bsKeys.return_);
     if (value.type == BS_OBJECT) {
-        bsEmitCover(e, model);
+        bsEmitCover(e, model, value);
         uint16_t base = e->tempTop;
         BSOperand operand;
         if (bsObjectHasString(value, bsKeys.expr)) {
@@ -1094,14 +1079,14 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         if (name.type != BS_STRING) {
             return false;
         }
-        bsEmitCover(e, model);
+        bsEmitCover(e, model, value);
         bsEmitLabel(e, name);
         return true;
     }
 
     value = bsObjectGetString(model, bsKeys.function);
     if (value.type == BS_OBJECT) {
-        bsEmitCover(e, model);
+        bsEmitCover(e, model, value);
         return bsEmitFunction(e, value);
     }
 
@@ -1112,7 +1097,7 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         if (includeCount == 0) {
             return false;
         }
-        bsEmitCover(e, model);
+        bsEmitCover(e, model, value);
         for (size_t inc = 0; inc < includeCount; inc++) {
             BSValue include = bsArrayGet(includes, inc);
             BSValue url = bsObjectGetString(include, bsKeys.url);

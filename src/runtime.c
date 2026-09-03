@@ -812,23 +812,18 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
 
     BSScript *includeScript;
     if (system && includeText[0] == '{') {
+        /* A registered system include may be a compiled JSON script model */
         BSValue model = bsJSONDecode(includeText, includeSize, NULL);
         includeScript = bsScriptFromModel(model, bsStringData(includeUrl));
         bsRelease(model);
-        free(includeOwned);
-        if (includeScript == NULL) {
-            goto includeFailed;
-        }
-    } else { /* GCOV_EXCL_LINE - llvm-cov attributes this brace to the JSON-model branch */
+    } else {
         BSParserError parserError;
         memset(&parserError, 0, sizeof(parserError));
         includeScript = bsParseScript(includeText, includeSize, 1, bsStringData(includeUrl),
                                       &parserError);
         free(includeOwned);
         if (includeScript == NULL) {
-            BSValue message = bsRetain(parserError.message);
-            bsErrorSet(options, "%s", bsStringData(message));
-            bsRelease(message);
+            bsErrorSet(options, "%s", bsStringData(parserError.message));
             bsParserErrorFree(&parserError);
             bsRelease(includeUrl);
             return false;
@@ -839,6 +834,9 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
         if (coverage.type != BS_OBJECT || !bsValueBoolean(bsObjectGet(coverage, "enabled"))) {
             bsScriptForgetModel(includeScript);
         }
+    }
+    if (includeScript == NULL) {
+        goto includeFailed;
     }
     includeScript->system = system;
 
