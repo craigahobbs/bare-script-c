@@ -64,9 +64,17 @@ static inline void bsReleaseInline(BSValue value)
     bsReleaseDestroyed(value);
 }
 
+static inline void bsAssignInline(BSValue *target, BSValue value)
+{
+    BSValue previous = *target;
+    *target = value;
+    bsReleaseInline(previous);
+}
+
 #ifndef BARESCRIPT_VALUE_IMPL
 #define bsRetain bsRetainInline
 #define bsRelease bsReleaseInline
+#define bsAssign bsAssignInline
 #endif
 
 

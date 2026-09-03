@@ -935,15 +935,6 @@ static inline BSValue bsOperandRead(const BSCode *code, const BSValue *regs, uin
 }
 
 
-/* Store an owned value in a register, releasing what it held (an unset marker releases as a no-op) */
-static inline void bsRegisterSet(BSValue *regs, uint16_t reg, BSValue value)
-{
-    BSValue previous = regs[reg];
-    regs[reg] = value;
-    bsReleaseInline(previous);
-}
-
-
 /* Take a temporary's value; retain a slot's or a constant's */
 static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t slotCount, uint16_t operand)
 {
@@ -968,8 +959,8 @@ static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t sl
     BS_CASE(name) { \
         BSValue left = BS_READ(inst->b); \
         BSValue right = BS_READ(inst->c); \
-        bsRegisterSet(regs, inst->a, \
-                      (left.type == BS_NUMBER && right.type == BS_NUMBER) ? bsArithmetic(expr) : bsNull()); \
+        bsAssign(&regs[inst->a], \
+                 (left.type == BS_NUMBER && right.type == BS_NUMBER) ? bsArithmetic(expr) : bsNull()); \
     } \
     BS_NEXT()
 
@@ -984,7 +975,7 @@ static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t sl
         } else { \
             cmp = bsValueCompare(left, right); \
         } \
-        bsRegisterSet(regs, inst->a, bsBoolean(test)); \
+        bsAssign(&regs[inst->a], bsBoolean(test)); \
     } \
     BS_NEXT()
 
@@ -999,7 +990,7 @@ static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t sl
             int32_t rightInt = bsToInt32(right.u.number); \
             bits = bsNumber((double) (expr)); \
         } \
-        bsRegisterSet(regs, inst->a, bits); \
+        bsAssign(&regs[inst->a], bits); \
     } \
     BS_NEXT()
 
@@ -1095,7 +1086,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 #endif
         BS_CASE(MOVE)
             /* A temporary is dead once moved, so its value is taken; a slot's or constant's is shared */
-            bsRegisterSet(regs, inst->a, bsOperandTake(code, regs, slotCount, inst->b));
+            bsAssign(&regs[inst->a], bsOperandTake(code, regs, slotCount, inst->b));
             BS_NEXT();
 
         BS_CASE(LOAD_SLOT) {
@@ -1104,7 +1095,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             if (BS_IS_UNSET(value)) {
                 value = bsObjectGetString(options->globals, code->slotNames[inst->b]);
             }
-            bsRegisterSet(regs, inst->a, bsRetain(value));
+            bsAssign(&regs[inst->a], bsRetain(value));
         }
         BS_NEXT();
 
@@ -1115,7 +1106,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             if (locals.type != BS_OBJECT || !bsObjectLookupString(locals, name, &value)) {
                 value = bsGlobalLookup(cache, name, options);
             }
-            bsRegisterSet(regs, inst->a, bsRetain(value));
+            bsAssign(&regs[inst->a], bsRetain(value));
         }
         BS_NEXT();
 
@@ -1126,9 +1117,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             BSValue *slot = bsGlobalSlot(cache, name, options);
             if (slot != NULL) {
                 /* An existing global updates in place - no slot moves, so every site's cache holds */
-                BSValue previous = *slot;
-                *slot = value;
-                bsRelease(previous);
+                bsAssign(slot, value);
             } else {
                 bsObjectSetString(options->globals, name, value);
             }
@@ -1185,7 +1174,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             if (inst->a == BS_REG_DISCARD) {
                 bsRelease(value);
             } else {
-                bsRegisterSet(regs, inst->a, value);
+                bsAssign(&regs[inst->a], value);
             }
             if (options->error.type == BS_STRING) {
                 goto fail;
@@ -1196,7 +1185,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CASE(ADD) {
             BSValue left = BS_READ(inst->b);
             BSValue right = BS_READ(inst->c);
-            bsRegisterSet(regs, inst->a, (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
+            bsAssign(&regs[inst->a], (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
                           bsArithmetic(left.u.number + right.u.number) : bsAddSlow(left, right));
         }
         BS_NEXT();
@@ -1210,7 +1199,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             } else if (left.type == BS_DATETIME && right.type == BS_DATETIME) {
                 value = bsNumber((double) (left.u.datetime - right.u.datetime));
             }
-            bsRegisterSet(regs, inst->a, value);
+            bsAssign(&regs[inst->a], value);
         }
         BS_NEXT();
 
@@ -1234,17 +1223,17 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 
         BS_CASE(NEG) {
             BSValue value = BS_READ(inst->b);
-            bsRegisterSet(regs, inst->a, value.type == BS_NUMBER ? bsNumber(-value.u.number) : bsNull());
+            bsAssign(&regs[inst->a], value.type == BS_NUMBER ? bsNumber(-value.u.number) : bsNull());
         }
         BS_NEXT();
 
         BS_CASE(NOT)
-            bsRegisterSet(regs, inst->a, bsBoolean(!bsValueBoolean(BS_READ(inst->b))));
+            bsAssign(&regs[inst->a], bsBoolean(!bsValueBoolean(BS_READ(inst->b))));
             BS_NEXT();
 
         BS_CASE(BNOT) {
             BSValue value = BS_READ(inst->b);
-            bsRegisterSet(regs, inst->a,
+            bsAssign(&regs[inst->a],
                           bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull());
         }
         BS_NEXT();
