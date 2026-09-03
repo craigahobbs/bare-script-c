@@ -1365,7 +1365,6 @@ typedef struct RxState {
     unsigned flags;
     BSRegexMatch *match;
     size_t end;
-    int depth;
     long steps;
     RxTrailEntry *trail;
     size_t trailCount;
@@ -1521,7 +1520,7 @@ static bool rxMatchOneByte(const RxState *state, const RxNode *node, size_t pos)
 }
 
 
-static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos);
+static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos, int depth);
 
 
 /*
@@ -1529,16 +1528,16 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos);
  * captures its sub-pattern made; a positive one keeps them unless the continuation fails.
  */
 static bool rxLookContinue(RxState *state, const RxNode *node, RxCont *cont, size_t pos, bool matched,
-                           size_t mark)
+                           size_t mark, int depth)
 {
     if (node->u.look.negate) {
         rxTrailUnwind(state, mark);
-        return !matched && rxMatchNode(state, node->next, cont, pos);
+        return !matched && rxMatchNode(state, node->next, cont, pos, depth + 1);
     }
     if (!matched) {
         return false;
     }
-    bool result = rxMatchNode(state, node->next, cont, pos);
+    bool result = rxMatchNode(state, node->next, cont, pos, depth + 1);
     if (!result) {
         rxTrailUnwind(state, mark);
     }
@@ -1546,7 +1545,7 @@ static bool rxLookContinue(RxState *state, const RxNode *node, RxCont *cont, siz
 }
 
 
-static bool rxMatchCont(RxState *state, RxCont *cont, size_t pos)
+static bool rxMatchCont(RxState *state, RxCont *cont, size_t pos, int depth)
 {
     if (cont->kind == RX_CONT_END) {
         state->end = pos;
@@ -1559,38 +1558,41 @@ static bool rxMatchCont(RxState *state, RxCont *cont, size_t pos)
         return pos == cont->startPos;
     }
     if (cont->kind == RX_CONT_NODE) {
-        return rxMatchNode(state, cont->node, cont->next, pos);
+        return rxMatchNode(state, cont->node, cont->next, pos, depth + 1);
     }
 
     /* A repeat continuation - an iteration that consumed nothing ends the repetition */
+    if (++state->steps > RX_STEPS_MAX) {
+        return false;
+    }
     RxNode *repeat = cont->node;
     if (pos == cont->startPos) {
-        return rxMatchNode(state, repeat->next, cont->next, pos);
+        return rxMatchNode(state, repeat->next, cont->next, pos, depth + 1);
     }
     int count = cont->count;
     if (repeat->u.repeat.max >= 0 && count >= repeat->u.repeat.max) {
-        return rxMatchNode(state, repeat->next, cont->next, pos);
+        return rxMatchNode(state, repeat->next, cont->next, pos, depth + 1);
     }
     if (count < repeat->u.repeat.min) {
         RxCont iteration = {RX_CONT_REPEAT, repeat, count + 1, pos, cont->next};
-        return rxMatchNode(state, repeat->u.repeat.sub, &iteration, pos);
+        return rxMatchNode(state, repeat->u.repeat.sub, &iteration, pos, depth + 1);
     }
     if (repeat->u.repeat.greedy) {
         RxCont iteration = {RX_CONT_REPEAT, repeat, count + 1, pos, cont->next};
-        if (rxMatchNode(state, repeat->u.repeat.sub, &iteration, pos)) {
+        if (rxMatchNode(state, repeat->u.repeat.sub, &iteration, pos, depth + 1)) {
             return true;
         }
-        return rxMatchNode(state, repeat->next, cont->next, pos);
+        return rxMatchNode(state, repeat->next, cont->next, pos, depth + 1);
     }
-    if (rxMatchNode(state, repeat->next, cont->next, pos)) {
+    if (rxMatchNode(state, repeat->next, cont->next, pos, depth + 1)) {
         return true;
     }
     RxCont iteration = {RX_CONT_REPEAT, repeat, count + 1, pos, cont->next};
-    return rxMatchNode(state, repeat->u.repeat.sub, &iteration, pos);
+    return rxMatchNode(state, repeat->u.repeat.sub, &iteration, pos, depth + 1);
 }
 
 
-static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size_t pos)
+static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size_t pos, int depth)
 {
     RxNode *sub = node->u.repeat.sub;
     int min = node->u.repeat.min;
@@ -1648,7 +1650,7 @@ static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size
         if (next != NULL && next->kind == RX_CHAR && (state->flags & BS_REGEX_IGNORECASE) == 0) {
             uint32_t ch = next->u.ch;
             for (;; end--) {
-                if (end < length && rxCode(state, end) == ch && rxMatchNode(state, next, cont, end)) {
+                if (end < length && rxCode(state, end) == ch && rxMatchNode(state, next, cont, end, depth + 1)) {
                     return true;
                 }
                 if (end == stop) {
@@ -1657,7 +1659,7 @@ static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size
             }
         }
         for (;; end--) {
-            if (rxMatchNode(state, next, cont, end)) {
+            if (rxMatchNode(state, next, cont, end, depth + 1)) {
                 return true;
             }
             if (end == stop) {
@@ -1676,7 +1678,7 @@ static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size
         count++;
     }
     while (true) {
-        if (rxMatchNode(state, node->next, cont, end)) {
+        if (rxMatchNode(state, node->next, cont, end, depth + 1)) {
             return true;
         }
         if ((max >= 0 && count >= max) ||
@@ -1689,10 +1691,10 @@ static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size
 }
 
 
-static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
+static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos, int depth)
 {
     if (node == NULL) {
-        return rxMatchCont(state, cont, pos);
+        return rxMatchCont(state, cont, pos, depth + 1);
     }
 
     /* Atom sequences already loop in one frame; do not charge depth/steps per atom. */
@@ -1716,11 +1718,15 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
                 node = node->next;
             }
         }
-        return rxMatchNode(state, node, cont, pos);
+        return rxMatchNode(state, node, cont, pos, depth + 1);
     }
 
-    if (++state->depth > RX_DEPTH_MAX || ++state->steps > RX_STEPS_MAX) {
-        state->depth--;
+    /*
+     * The choice points - alternations and repeats, with the iterations charged in rxMatchCont -
+     * pay the step budget; sequences, groups, and lookarounds cannot multiply work on their own
+     */
+    if (depth > RX_DEPTH_MAX ||
+        ((node->kind == RX_ALT || node->kind == RX_REPEAT) && ++state->steps > RX_STEPS_MAX)) {
         return false;
     }
 
@@ -1729,14 +1735,14 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
 
     case RX_BOL:
         if (pos == 0 || ((state->flags & BS_REGEX_MULTILINE) != 0 && rxCode(state, pos - 1) == '\n')) {
-            result = rxMatchNode(state, node->next, cont, pos);
+            result = rxMatchNode(state, node->next, cont, pos, depth + 1);
         }
         break;
 
     case RX_EOL:
         if (pos == state->length ||
             ((state->flags & BS_REGEX_MULTILINE) != 0 && rxCode(state, pos) == '\n')) {
-            result = rxMatchNode(state, node->next, cont, pos);
+            result = rxMatchNode(state, node->next, cont, pos, depth + 1);
         }
         break;
 
@@ -1746,7 +1752,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         bool after = pos < state->length && rxIsWordCode(rxCode(state, pos));
         bool boundary = (before != after);
         if (boundary == (node->kind == RX_WORD_BOUNDARY)) {
-            result = rxMatchNode(state, node->next, cont, pos);
+            result = rxMatchNode(state, node->next, cont, pos, depth + 1);
         }
         break;
     }
@@ -1756,7 +1762,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         const RxBranchFirst *firsts = node->u.alt.firsts;
         if (firsts == NULL) {
             for (size_t ix = 0; ix < node->u.alt.count && !result; ix++) {
-                result = rxMatchNode(state, node->u.alt.branches[ix], &after, pos);
+                result = rxMatchNode(state, node->u.alt.branches[ix], &after, pos, depth + 1);
             }
             break;
         }
@@ -1771,7 +1777,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
             while (mask != 0 && !result) {
                 unsigned ix = rxLowestBit(mask);
                 mask &= mask - 1;
-                result = rxMatchNode(state, node->u.alt.branches[ix], &after, pos);
+                result = rxMatchNode(state, node->u.alt.branches[ix], &after, pos, depth + 1);
             }
             break;
         }
@@ -1780,7 +1786,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
             if (first->usable && (atEnd || !rxBranchFirstHas(first, code))) {
                 continue;
             }
-            result = rxMatchNode(state, node->u.alt.branches[ix], &after, pos);
+            result = rxMatchNode(state, node->u.alt.branches[ix], &after, pos, depth + 1);
         }
         break;
     }
@@ -1791,7 +1797,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         rxTrailPush(state, group);
         state->match->groups[group].begin = pos;
         RxCont after = {RX_CONT_NODE, node->u.group.close, 0, 0, cont};
-        result = rxMatchNode(state, node->u.group.sub, &after, pos);
+        result = rxMatchNode(state, node->u.group.sub, &after, pos, depth + 1);
         if (!result) {
             rxTrailUnwind(state, mark);
         }
@@ -1804,7 +1810,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         rxTrailPush(state, group);
         state->match->groups[group].end = pos;
         state->match->matched[group] = true;
-        result = rxMatchNode(state, node->next, cont, pos);
+        result = rxMatchNode(state, node->next, cont, pos, depth + 1);
         if (!result) {
             rxTrailUnwind(state, mark);
         }
@@ -1813,20 +1819,20 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
 
     case RX_REPEAT:
         if (node->u.repeat.simple) {
-            result = rxMatchSimpleRepeat(state, node, cont, pos);
+            result = rxMatchSimpleRepeat(state, node, cont, pos, depth);
         } else if (node->u.repeat.max == 0) {
-            result = rxMatchNode(state, node->next, cont, pos);
+            result = rxMatchNode(state, node->next, cont, pos, depth + 1);
         } else {
             RxCont iteration = {RX_CONT_REPEAT, node, 1, pos, cont};
             if (node->u.repeat.greedy || node->u.repeat.min > 0) {
-                result = rxMatchNode(state, node->u.repeat.sub, &iteration, pos);
+                result = rxMatchNode(state, node->u.repeat.sub, &iteration, pos, depth + 1);
                 if (!result && node->u.repeat.min == 0) {
-                    result = rxMatchNode(state, node->next, cont, pos);
+                    result = rxMatchNode(state, node->next, cont, pos, depth + 1);
                 }
             } else {
-                result = rxMatchNode(state, node->next, cont, pos);
+                result = rxMatchNode(state, node->next, cont, pos, depth + 1);
                 if (!result) {
-                    result = rxMatchNode(state, node->u.repeat.sub, &iteration, pos);
+                    result = rxMatchNode(state, node->u.repeat.sub, &iteration, pos, depth + 1);
                 }
             }
         }
@@ -1836,7 +1842,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         size_t group = node->u.groupIndex;
         if (group >= state->match->groupCount || !state->match->matched[group]) {
             /* An unmatched backreference matches the empty string */
-            result = rxMatchNode(state, node->next, cont, pos);
+            result = rxMatchNode(state, node->next, cont, pos, depth + 1);
             break;
         }
         BSRegexSpan span = state->match->groups[group];
@@ -1852,7 +1858,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
                 rxFold(expected) == rxFold(actual) : expected == actual;
         }
         if (equal) {
-            result = rxMatchNode(state, node->next, cont, pos + size);
+            result = rxMatchNode(state, node->next, cont, pos + size, depth + 1);
         }
         break;
     }
@@ -1861,13 +1867,13 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         const RxNode *atom = node->u.look.atom;
         if (atom != NULL) {
             bool matched = state->codes == NULL ? rxMatchOneByte(state, atom, pos) : rxMatchOne(state, atom, pos);
-            result = (matched != node->u.look.negate) && rxMatchNode(state, node->next, cont, pos);
+            result = (matched != node->u.look.negate) && rxMatchNode(state, node->next, cont, pos, depth + 1);
             break;
         }
         RxCont stop = {RX_CONT_STOP, NULL, 0, 0, NULL};
         size_t mark = state->trailCount;
-        bool matched = rxMatchNode(state, node->u.look.sub, &stop, pos);
-        result = rxLookContinue(state, node, cont, pos, matched, mark);
+        bool matched = rxMatchNode(state, node->u.look.sub, &stop, pos, depth + 1);
+        result = rxLookContinue(state, node, cont, pos, matched, mark, depth);
         break;
     }
 
@@ -1883,7 +1889,7 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         if (atom != NULL) {
             bool matched = pos >= 1 &&
                 (state->codes == NULL ? rxMatchOneByte(state, atom, pos - 1) : rxMatchOne(state, atom, pos - 1));
-            result = (matched != node->u.look.negate) && rxMatchNode(state, node->next, cont, pos);
+            result = (matched != node->u.look.negate) && rxMatchNode(state, node->next, cont, pos, depth + 1);
             break;
         }
 
@@ -1893,17 +1899,16 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
         bool matched = false;
         for (size_t length = minLength; length <= maxLength && !matched; length++) {
             RxCont anchor = {RX_CONT_ANCHOR, NULL, 0, pos, NULL};
-            matched = rxMatchNode(state, node->u.look.sub, &anchor, pos - length);
+            matched = rxMatchNode(state, node->u.look.sub, &anchor, pos - length, depth + 1);
             if (!matched) {
                 rxTrailUnwind(state, mark);
             }
         }
-        result = rxLookContinue(state, node, cont, pos, matched, mark);
+        result = rxLookContinue(state, node, cont, pos, matched, mark, depth);
         break;
     }
     }
 
-    state->depth--;
     return result;
 }
 
@@ -1987,10 +1992,9 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
             }
         }
         RxCont end = {RX_CONT_END, NULL, 0, 0, NULL};
-        state.depth = 0;
         state.steps = 0;
         state.trailCount = 0;
-        if (rxMatchNode(&state, compiled->root, &end, pos)) {
+        if (rxMatchNode(&state, compiled->root, &end, pos, 0)) {
             match->begin = pos;
             match->end = state.end;
             match->groups[0].begin = pos;

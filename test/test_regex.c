@@ -434,6 +434,38 @@ TEST(regex_depth_limit)
     bsRelease(subject);
     bsRelease(regex);
 
+    /* A chain of alternations with no repeats, and nested repeats with no alternations */
+    bsSBInit(&sb);
+    for (int ix = 0; ix < 24; ix++) {
+        bsSBAppendString(&sb, "(?:a|a)");
+    }
+    bsSBAppendChar(&sb, 'b');
+    BSValue chain = bsSBToValue(&sb);
+    bsSBInit(&sb);
+    for (int ix = 0; ix < 24; ix++) {
+        bsSBAppendChar(&sb, 'a');
+    }
+    subject = bsSBToValue(&sb);
+    regex = bsRegexNew(bsStringData(chain), bsStringSize(chain), 0, NULL, 0);
+    bsRegexSubjectInit(&subjectCodes, subject);
+    ASSERT_FALSE(bsRegexSearch(regex, &subjectCodes, 0, &match));
+    bsRegexSubjectFree(&subjectCodes);
+    bsRelease(subject);
+    bsRelease(regex);
+    bsRelease(chain);
+
+    bsSBInit(&sb);
+    for (int ix = 0; ix < 30; ix++) {
+        bsSBAppendString(&sb, "ab");
+    }
+    subject = bsSBToValue(&sb);
+    regex = bsRegexNew("(?:(?:ab)*)*c", 13, 0, NULL, 0);
+    bsRegexSubjectInit(&subjectCodes, subject);
+    ASSERT_FALSE(bsRegexSearch(regex, &subjectCodes, 0, &match));
+    bsRegexSubjectFree(&subjectCodes);
+    bsRelease(subject);
+    bsRelease(regex);
+
     /* A long simple repeat matches iteratively, without recursion */
     bsSBInit(&sb);
     for (int ix = 0; ix < 20000; ix++) {
