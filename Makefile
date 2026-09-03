@@ -130,11 +130,12 @@ COVER_BIN := $(BUILD_DIR)/$(CLI_NAME)-cover
 #
 # Everything that must pass before a commit, as it is in the JavaScript and Python
 # implementations: the unit tests under coverage, the include library suite - which includes its
-# static analysis run - and this project's own language tests.
+# static analysis run - and this project's own language tests. The release build runs last so a
+# flag or LTO problem cannot reach a commit unnoticed.
 #
 
 .PHONY: commit
-commit: test cover test-include test-language
+commit: test cover test-include test-language release
 
 
 .PHONY: help

@@ -15,7 +15,7 @@ read its **Design** section before making non-trivial changes.
 ## Commands
 
 ```sh
-make commit         # the pre-commit gate: test + cover + test-include + test-language
+make commit         # the pre-commit gate: test + cover + test-include + test-language + release
 make compile        # build build/libbarescript.{so,dylib}, build/libbarescript.a, build/bare
 make test           # C unit tests
 make cover          # C unit tests with line coverage; FAILS THE BUILD under 100%
