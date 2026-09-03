@@ -2549,10 +2549,10 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
         state.repeatsInline : bsAlloc(compiled->repeatCount * sizeof(RxRepeat));
 
     /*
-     * Only the pattern's own capture groups need clearing, not the whole capture array - and only
-     * once: every capture write is on the trail, and a failed attempt unwinds all of them.
+     * Only the pattern's own groups need clearing, and only their matched flags - a span is read
+     * only once its flag is set - and only once: every capture write is on the trail, and a failed
+     * attempt unwinds all of them.
      */
-    memset(match->groups, 0, compiled->groupCount * sizeof(BSRegexSpan));
     memset(match->matched, 0, compiled->groupCount * sizeof(bool));
     match->begin = 0;
     match->end = 0;
