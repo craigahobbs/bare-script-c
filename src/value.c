@@ -2424,6 +2424,17 @@ static int64_t bsFloorDiv(int64_t value, int64_t divisor)
 }
 
 
+/* Move out-of-range units into the next larger field */
+static void bsCarry(int64_t *value, int64_t *next, int64_t unit)
+{
+    if (*value < 0 || *value >= unit) {
+        int64_t extra = bsFloorDiv(*value, unit);
+        *value -= extra * unit;
+        *next += extra;
+    }
+}
+
+
 /* Days since the Unix epoch for a civil date - Howard Hinnant's days_from_civil */
 static int64_t bsDaysFromCivil(int64_t year, int64_t month, int64_t day)
 {
@@ -2487,27 +2498,11 @@ int64_t bsDatetimeFromParts(double year, double month, double day, double hour, 
     int64_t secondInt = (int64_t) second;
     int64_t millisecondInt = (int64_t) millisecond;
 
-    /* Cascade the out-of-range time components, matching the reference implementation */
-    if (millisecondInt < 0 || millisecondInt >= 1000) {
-        int64_t extra = bsFloorDiv(millisecondInt, 1000);
-        millisecondInt -= extra * 1000;
-        secondInt += extra;
-    }
-    if (secondInt < 0 || secondInt >= 60) {
-        int64_t extra = bsFloorDiv(secondInt, 60);
-        secondInt -= extra * 60;
-        minuteInt += extra;
-    }
-    if (minuteInt < 0 || minuteInt >= 60) {
-        int64_t extra = bsFloorDiv(minuteInt, 60);
-        minuteInt -= extra * 60;
-        hourInt += extra;
-    }
-    if (hourInt < 0 || hourInt >= 24) {
-        int64_t extra = bsFloorDiv(hourInt, 24);
-        hourInt -= extra * 24;
-        dayInt += extra;
-    }
+    /* Cascade out-of-range time components, matching the reference implementation */
+    bsCarry(&millisecondInt, &secondInt, 1000);
+    bsCarry(&secondInt, &minuteInt, 60);
+    bsCarry(&minuteInt, &hourInt, 60);
+    bsCarry(&hourInt, &dayInt, 24);
     if (monthInt < 1 || monthInt > 12) {
         int64_t extra = bsFloorDiv(monthInt - 1, 12);
         monthInt -= extra * 12;
