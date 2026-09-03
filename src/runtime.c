@@ -1094,9 +1094,19 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         inst = &insts[pc++];
         switch (inst->op) {
 #endif
-        BS_CASE(MOVE)
-            bsRegisterSet(regs, inst->a, bsRetain(BS_READ(inst->b)));
-            BS_NEXT();
+        BS_CASE(MOVE) {
+            /* A temporary is dead once moved, so its value is taken; a slot's or constant's is shared */
+            uint16_t source = inst->b;
+            BSValue value;
+            if ((source & BS_OPERAND_CONST) == 0 && source >= slotCount) {
+                value = regs[source];
+                regs[source] = bsNull();
+            } else {
+                value = bsRetain(BS_READ(source));
+            }
+            bsRegisterSet(regs, inst->a, value);
+        }
+        BS_NEXT();
 
         BS_CASE(LOAD_NAME) {
             BSCallCache *cache = &code->caches[inst->b];
@@ -1161,12 +1171,21 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             size_t argCount = inst->c;
             BSValue argsInline[16];
             BSValue *args = argCount <= 16 ? argsInline : bsAlloc(argCount * sizeof(BSValue));
-            for (size_t ix = 0; ix < argCount; ix++) {
-                const BSInst *data = &insts[pc + ix / BS_OPERANDS_PER_DATA];
-                size_t which = ix % BS_OPERANDS_PER_DATA;
-                args[ix] = BS_READ(which == 0 ? data->a : (which == 1 ? data->b : data->c));
+            const BSInst *data = &insts[pc];
+            size_t ix = 0;
+            for (; ix + BS_OPERANDS_PER_DATA <= argCount; ix += BS_OPERANDS_PER_DATA, data++) {
+                args[ix] = BS_READ(data->a);
+                args[ix + 1] = BS_READ(data->b);
+                args[ix + 2] = BS_READ(data->c);
             }
-            pc += (argCount + BS_OPERANDS_PER_DATA - 1) / BS_OPERANDS_PER_DATA;
+            if (ix < argCount) {
+                args[ix] = BS_READ(data->a);
+                if (ix + 1 < argCount) {
+                    args[ix + 1] = BS_READ(data->b);
+                }
+                data++;
+            }
+            pc = (size_t) (data - insts);
             BSValue value = bsCall(code, callPc, inst->op, inst->b, args, argCount, script, options, regs,
                                    locals, builtins);
             if (args != argsInline) {
