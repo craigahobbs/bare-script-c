@@ -984,6 +984,23 @@ static inline double bsModulo(double left, double right)
     } \
     BS_NEXT()
 
+/* A slot's value, borrowed - an unset slot reads the global of the same name */
+#define BS_SLOT_VALUE(ix) \
+    (BS_IS_UNSET(slots[(ix)]) ? bsObjectGetString(options->globals, code->slotNames[(ix)]) : slots[(ix)])
+
+/* A fused slot load and conditional jump - the slot is in the data word, tested without a push */
+#define BS_JUMP_IF_SLOT(name, cond) \
+    BS_CASE(name) { \
+        BSValue value = BS_SLOT_VALUE(BS_ARG(insts[pc])); \
+        if (cond) { \
+            bsJumpCover(code, arg, script, hasCoverage, coverage); \
+            pc = arg; \
+        } else { \
+            pc++; \
+        } \
+    } \
+    BS_NEXT()
+
 
 static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
                   bool builtins)
@@ -1040,7 +1057,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         &&op_JUMP_FALSE, &&op_JUMP_TRUE, &&op_JUMP_UNDEF, &&op_RETURN, &&op_CALL_NAME, &&op_CALL_SLOT,
         &&op_ADD, &&op_SUB, &&op_MUL, &&op_DIV, &&op_MOD, &&op_POW, &&op_EQ, &&op_NE, &&op_LT,
         &&op_LE, &&op_GT, &&op_GE, &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG,
-        &&op_NOT, &&op_BNOT, &&op_FUNCTION, &&op_INCLUDE, &&op_STMT
+        &&op_NOT, &&op_BNOT, &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT2,
+        &&op_LOAD_SLOT_CONST, &&op_STORE_LOAD_SLOT, &&op_JUMP_FALSE_SLOT, &&op_JUMP_TRUE_SLOT
     };
 #define BS_CASE(name) op_##name:
 #define BS_NEXT() \
@@ -1084,6 +1102,34 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             stack[sp++] = bsRetain(value);
         }
         BS_NEXT();
+
+        BS_CASE(LOAD_SLOT2) {
+            uint32_t second = BS_ARG(insts[pc++]);
+            stack[sp++] = bsRetain(BS_SLOT_VALUE(arg));
+            stack[sp++] = bsRetain(BS_SLOT_VALUE(second));
+        }
+        BS_NEXT();
+
+        BS_CASE(LOAD_SLOT_CONST) {
+            uint32_t constant = BS_ARG(insts[pc++]);
+            stack[sp++] = bsRetain(BS_SLOT_VALUE(arg));
+            stack[sp++] = bsRetain(code->constants[constant]);
+        }
+        BS_NEXT();
+
+        BS_CASE(STORE_LOAD_SLOT) {
+            uint32_t load = BS_ARG(insts[pc++]);
+            BSValue previous = slots[arg];
+            slots[arg] = stack[--sp];
+            if (!BS_IS_UNSET(previous)) {
+                bsRelease(previous);
+            }
+            stack[sp++] = bsRetain(BS_SLOT_VALUE(load));
+        }
+        BS_NEXT();
+
+        BS_JUMP_IF_SLOT(JUMP_FALSE_SLOT, !bsValueBoolean(value));
+        BS_JUMP_IF_SLOT(JUMP_TRUE_SLOT, bsValueBoolean(value));
 
         BS_CASE(LOAD_NAME) {
             BSCallCache *cache = &code->caches[arg];

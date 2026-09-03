@@ -731,6 +731,48 @@ static double bsTestCoveredCount(BSValue coverage, const char *script, const cha
 }
 
 
+TEST(runtime_fused_slots)
+{
+    /* Each fused slot pair, with set slots and with unset slots that fall through to the globals */
+    static const char *text =
+        "g = 10\n"
+        "h = 20\n"
+        "function pairs(a, b):\n"
+        "    c = a + b\n"
+        "    d = c + 1\n"
+        "    r = [c, d]\n"
+        "    if a:\n"
+        "        arrayPush(r, 'a')\n"
+        "    endif\n"
+        "    if !b:\n"
+        "        arrayPush(r, 'notb')\n"
+        "    endif\n"
+        "    while b:\n"
+        "        b = 0\n"
+        "        arrayPush(r, 'b')\n"
+        "    endwhile\n"
+        "    return r\n"
+        "endfunction\n"
+        "function unset(flag):\n"
+        "    if g:\n"
+        "        r = [g, h]\n"
+        "        r = arrayPush(r, g + 1)\n"
+        "        s = g\n"
+        "        arrayPush(r, s)\n"
+        "    endif\n"
+        "    if flag:\n"
+        "        g = 1\n"
+        "        h = 2\n"
+        "        s = 3\n"
+        "        r = null\n"
+        "    endif\n"
+        "    return r\n"
+        "endfunction\n"
+        "return [pairs(1, 2), pairs(0, 0), unset(false)]";
+    ASSERT_VALUE(bsTestExecute(text), "[[3,4,\"a\",\"b\"],[0,1,\"notb\"],[10,20,11,10]]");
+}
+
+
 TEST(runtime_coverage_forgotten_model)
 {
     /* A script that forgot its model borrows the statement models back when coverage records them */

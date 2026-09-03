@@ -157,7 +157,17 @@ enum {
     BS_OP_FUNCTION,
     BS_OP_INCLUDE,
     BS_OP_STMT,
-    BS_OP_ARGC = 0xFF  /* follows CALL_*; argument count, never dispatched */
+    /*
+     * Fused pairs, each followed by a data word carrying the second operand: two slot loads, a slot
+     * load and a constant, a slot store and a slot load, and a slot load feeding a conditional jump
+     * (the jump target in the instruction, the slot in the data word)
+     */
+    BS_OP_LOAD_SLOT2,
+    BS_OP_LOAD_SLOT_CONST,
+    BS_OP_STORE_LOAD_SLOT,
+    BS_OP_JUMP_FALSE_SLOT,
+    BS_OP_JUMP_TRUE_SLOT,
+    BS_OP_ARGC = 0xFF  /* follows CALL_* and the fused pairs; an operand word, never dispatched */
 };
 
 

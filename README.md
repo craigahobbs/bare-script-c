@@ -422,7 +422,11 @@ simply is not a key of the locals dictionary. Group nodes stay in the model (the
 observe them) and flatten only in the code stream.
 
 The emitter tracks the value stack depth, so the interpreter allocates each chunk's stack once and
-pushes without bounds checks, and it folds `jumpif (!expr)` into a jump-if-false. Every global
+pushes without bounds checks, and it folds `jumpif (!expr)` into a jump-if-false. A finished chunk
+then fuses its commonest adjacent pairs in place - two slot loads, a slot load and a constant, a
+slot store and a slot load, and a slot load feeding a conditional jump, which tests the slot
+without a push - each into one instruction with an operand word; a bundled include's chunk fuses
+again once its statement markers are stripped. Every global
 function call, global variable read, and global variable write compiles to a per-site cache that
 points at the globals object's value slot for the name; the cache is re-resolved only when a key is added to or removed
 from the globals object (its *structural generation*), so an assignment to a global never

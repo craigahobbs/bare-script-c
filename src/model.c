@@ -19,6 +19,58 @@
 #include "internal.h"
 
 
+static bool bsOpIsJump(uint8_t op)
+{
+    return op == BS_OP_JUMP || op == BS_OP_JUMP_FALSE || op == BS_OP_JUMP_TRUE ||
+        op == BS_OP_JUMP_FALSE_SLOT || op == BS_OP_JUMP_TRUE_SLOT;
+}
+
+
+/*
+ * Fuse adjacent instruction pairs in place
+ *
+ * A slot load followed by another, by a constant, or by a conditional jump, and a slot store
+ * followed by a slot load, are the interpreter's commonest pairs; each becomes one instruction
+ * with a data word, saving a dispatch and, for the jump, a push and a pop. A pair is left alone
+ * when a jump lands on its second instruction. The pass runs when a chunk is finished and again
+ * after a system chunk's statement markers are stripped, which puts more pairs side by side.
+ */
+static void bsCodeFuse(uint32_t *inst, size_t count)
+{
+    uint8_t *target = bsAlloc(count + 1);
+    memset(target, 0, count + 1);
+    for (size_t pc = 0; pc < count; pc++) {
+        if (bsOpIsJump(BS_OP(inst[pc]))) {
+            target[BS_ARG(inst[pc])] = 1;
+        }
+    }
+    for (size_t pc = 0; pc + 1 < count; pc++) {
+        uint8_t op = BS_OP(inst[pc]);
+        uint8_t next = BS_OP(inst[pc + 1]);
+        if (target[pc + 1]) {
+            continue;
+        }
+        uint32_t arg = BS_ARG(inst[pc]);
+        uint32_t nextArg = BS_ARG(inst[pc + 1]);
+        if (op == BS_OP_LOAD_SLOT && next == BS_OP_LOAD_SLOT) {
+            inst[pc] = BS_INST(BS_OP_LOAD_SLOT2, arg);
+        } else if (op == BS_OP_LOAD_SLOT && next == BS_OP_LOAD_CONST) {
+            inst[pc] = BS_INST(BS_OP_LOAD_SLOT_CONST, arg);
+        } else if (op == BS_OP_STORE_SLOT && next == BS_OP_LOAD_SLOT) {
+            inst[pc] = BS_INST(BS_OP_STORE_LOAD_SLOT, arg);
+        } else if (op == BS_OP_LOAD_SLOT && (next == BS_OP_JUMP_FALSE || next == BS_OP_JUMP_TRUE)) {
+            inst[pc] = BS_INST(next == BS_OP_JUMP_FALSE ? BS_OP_JUMP_FALSE_SLOT : BS_OP_JUMP_TRUE_SLOT, nextArg);
+            nextArg = arg;
+        } else {
+            continue;
+        }
+        inst[pc + 1] = BS_INST(BS_OP_ARGC, nextArg);
+        pc++;
+    }
+    free(target);
+}
+
+
 /*
  * Finish a cached system include's chunk
  *
@@ -47,7 +99,7 @@ static void bsCodeFinishSystem(BSCode *code)
     }
     for (size_t pc = 0; pc < stripped; pc++) {
         uint8_t op = BS_OP(inst[pc]);
-        if (op == BS_OP_JUMP || op == BS_OP_JUMP_FALSE || op == BS_OP_JUMP_TRUE) {
+        if (bsOpIsJump(op)) {
             inst[pc] = BS_INST(op, map[BS_ARG(inst[pc])]);
         }
     }
@@ -55,6 +107,7 @@ static void bsCodeFinishSystem(BSCode *code)
     free(code->inst);
     code->inst = inst;
     code->count = stripped;
+    bsCodeFuse(inst, stripped);
 }
 
 
@@ -866,6 +919,8 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
     bsRelease(e->labels);
     bsRelease(e->slotMap);
     bsRelease(e->constMap);
+
+    bsCodeFuse(e->inst, e->count);
 
     memset(code, 0, sizeof(*code));
     code->inst = e->inst;
