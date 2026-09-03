@@ -337,6 +337,18 @@ TEST(library_number)
     bsTestExpr("numberToString(255)", "\"255\"");
     bsTestExpr("numberToString(-1)", "null");
     bsTestExpr("numberToString(1.5)", "null");
+
+    /* Exact past 2^53, where a double no longer holds the quotient */
+    bsTestExpr("numberToString(2 ** 52)", "\"4503599627370496\"");
+    bsTestExpr("numberToString(2 ** 60)", "\"1152921504606846976\"");
+    bsTestExpr("numberToString(2 ** 64, 16)", "\"10000000000000000\"");
+
+    /* Radix two is the longest form - the widest double fills the digit buffer exactly */
+    bsTestExpr("stringSlice(numberToString(2 ** 100, 2), 0, 4)", "\"1000\"");
+    bsTestExpr("stringLength(numberToString(2 ** 100, 2))", "101");
+    bsTestExpr("stringLength(numberToString(2 ** 1023, 2))", "1024");
+    bsTestExpr("stringSlice(numberToString(2 ** 1023, 36), 0, 8)", "\"n0p2ftq5\"");
+    bsTestExpr("stringLength(numberToString(2 ** 1023, 36))", "198");
 }
 
 

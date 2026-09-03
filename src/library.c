@@ -12,6 +12,7 @@
  */
 
 #include <ctype.h>
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -945,22 +946,74 @@ static const BSArgModel numberToStringArgs[] = {
     {"radix", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 10, 2, 36, BS_ARG_LTE}
 };
 
+/*
+ * numberToString's digits are exact for every value its argument model admits, which is more
+ * precision than a double holds: 2^1023 divided by ten is not a representable number, so dividing
+ * in floating point drifts once the value passes 2^53. The value expands to a base-2^32 magnitude
+ * instead, and each pass of the division takes one digit exactly.
+ */
+#define BS_LIMB_BITS 32
+#define BS_LIMB_COUNT (DBL_MAX_EXP / BS_LIMB_BITS) /* a finite double is below 2^DBL_MAX_EXP */
+
+/* Expand a positive integral double into limbs, least significant first. Returns the limb count. */
+static size_t bsNumberLimbs(double x, uint32_t *limbs)
+{
+    /* x is "fraction * 2^exponent" with the fraction in [0.5, 1), so its bit length is "exponent" */
+    int exponent;
+    uint64_t mantissa = (uint64_t) ldexp(frexp(x, &exponent), DBL_MANT_DIG);
+    int shift = exponent - DBL_MANT_DIG;
+    if (shift < 0) {
+        /* An integer this small has zeros where the mantissa is shifted down */
+        mantissa >>= -shift;
+        shift = 0;
+    }
+    size_t count = ((size_t) exponent + BS_LIMB_BITS - 1) / BS_LIMB_BITS;
+    size_t offset = (size_t) shift / BS_LIMB_BITS;
+    memset(limbs, 0, BS_LIMB_COUNT * sizeof(*limbs));
+    limbs[offset] = (uint32_t) mantissa;
+    limbs[offset + 1] = (uint32_t) (mantissa >> BS_LIMB_BITS);
+
+    /* The whole limbs of the shift are the offset above; these are the bits left over */
+    for (int ix = shift % BS_LIMB_BITS; ix > 0; ix--) {
+        uint32_t carry = 0;
+        for (size_t limb = offset; limb < count; limb++) {
+            uint32_t next = limbs[limb] >> (BS_LIMB_BITS - 1);
+            limbs[limb] = (limbs[limb] << 1) | carry;
+            carry = next;
+        }
+    }
+    return count;
+}
+
+
 static BSValue bsFnNumberToString(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(numberToStringArgs, bsNull());
     static const char digitChars[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     double x = values[0].u.number;
-    int radix = (int) values[1].u.number;
+    uint32_t radix = (uint32_t) values[1].u.number;
     if (x == 0) {
         return bsStringNew("0");
     }
-    char buffer[80];
+
+    uint32_t limbs[BS_LIMB_COUNT];
+    size_t count = bsNumberLimbs(x, limbs);
+
+    /* The least significant digit comes out first, so the buffer fills from its end. Radix two is
+     * the longest form, one digit per bit, so a double's digits always fit. */
+    char buffer[DBL_MAX_EXP];
     size_t end = sizeof(buffer);
-    while (x >= 1 && end != 0) {
-        double quotient = floor(x / radix);
-        int digit = (int) (x - quotient * radix);
-        buffer[--end] = digitChars[digit];
-        x = quotient;
+    while (count != 0) {
+        uint32_t remainder = 0;
+        for (size_t ix = count; ix > 0; ix--) {
+            uint64_t value = ((uint64_t) remainder << BS_LIMB_BITS) | limbs[ix - 1];
+            limbs[ix - 1] = (uint32_t) (value / radix);
+            remainder = (uint32_t) (value % radix);
+        }
+        buffer[--end] = digitChars[remainder];
+        while (count != 0 && limbs[count - 1] == 0) {
+            count--;
+        }
     }
     return bsStringNewSize(buffer + end, sizeof(buffer) - end);
 }

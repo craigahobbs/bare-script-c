@@ -840,6 +840,7 @@ each other, it follows the one shown in bold.
 | `-7 % 3`                               | `-1` (truncated)  | `2` (floored)   | **`-1`**            |
 | Bitwise operators                      | 32-bit            | arbitrary width | **32-bit**          |
 | A `regexNew` repeat count past 2^32    | accepted          | uncaught error  | **accepted**, saturating at 2^31 - 1 |
+| `numberToString` past 2^53             | shortest round trip, exponential past 1e21 | the value's exact digits | **the value's exact digits** |
 
 `objectKeys` returns keys in insertion order, matching both references for ordinary keys.
 JavaScript additionally hoists integer-like keys to the front in ascending numeric order; this
