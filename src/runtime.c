@@ -338,8 +338,9 @@ static void bsCoverageEnsure(BSScript *script, BSValue coverage)
 }
 
 
-static void bsRecordCoverage(BSScript *script, BSValue statement, int line, BSValue coverage)
+static void bsRecordCoverage(BSScript *script, const BSCode *code, uint32_t index, BSValue coverage)
 {
+    int line = code->coverLines[index];
     if (line <= 0 || script->scriptName.type != BS_STRING) {
         return;
     }
@@ -365,6 +366,8 @@ static void bsRecordCoverage(BSScript *script, BSValue statement, int line, BSVa
         return;
     }
 
+    /* A script that forgot its model borrows the statement models back before recording one */
+    BSValue statement = (code->cover != NULL || bsScriptRestoreCover(script)) ? code->cover[index] : bsNull();
     coveredStatement = bsObjectNew();
     bsObjectSet(coveredStatement, "statement", bsRetain(statement));
     bsObjectSet(coveredStatement, "count", bsNumber(1));
@@ -383,8 +386,7 @@ static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, b
     if (BS_OP(prev) != BS_OP_STMT) {
         return;
     }
-    uint32_t index = BS_ARG(prev);
-    bsRecordCoverage(script, code->cover[index], code->coverLines[index], coverage);
+    bsRecordCoverage(script, code, BS_ARG(prev), coverage);
 }
 
 
@@ -1265,7 +1267,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
                     goto fail;
                 }
                 if (hasCoverage) {
-                    bsRecordCoverage(script, code->cover[arg], code->coverLines[arg], coverage);
+                    bsRecordCoverage(script, code, arg, coverage);
                 }
             }
             BS_NEXT();

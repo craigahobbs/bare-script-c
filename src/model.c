@@ -73,6 +73,48 @@ void bsScriptForgetModel(BSScript *script)
 {
     bsRelease(script->model);
     script->model = bsNull();
+
+    /* The chunks' statement models are borrowed from the model - bsScriptRestoreCover brings them back */
+    free(script->code.cover);
+    script->code.cover = NULL;
+    for (size_t ix = 0; ix < script->functionCount; ix++) {
+        free(script->functions[ix]->code.cover);
+        script->functions[ix]->code.cover = NULL;
+    }
+}
+
+
+/* Move a chunk's statement models from a freshly compiled twin of the same model */
+static bool bsCodeTakeCover(BSCode *code, BSCode *twin)
+{
+    if (twin->coverCount != code->coverCount) {
+        return false; /* GCOV_EXCL_LINE - the same model compiles to the same chunks */
+    }
+    code->cover = twin->cover;
+    twin->cover = NULL;
+    return true;
+}
+
+
+bool bsScriptRestoreCover(BSScript *script)
+{
+    /* Parse the lines again and compile the model once more - its chunks mirror this script's */
+    BSValue model = bsScriptReparse(script);
+    BSScript *twin = model.type == BS_OBJECT ? bsScriptFromModel(model, NULL) : NULL;
+    bool restored = twin != NULL && twin->functionCount == script->functionCount &&
+        bsCodeTakeCover(&script->code, &twin->code);
+    for (size_t ix = 0; restored && ix < script->functionCount; ix++) {
+        restored = bsCodeTakeCover(&script->functions[ix]->code, &twin->functions[ix]->code);
+    }
+    if (restored) {
+        bsRelease(script->model);
+        script->model = bsRetain(model);
+    }
+    if (twin != NULL) {
+        bsScriptRelease(twin);
+    }
+    bsRelease(model);
+    return restored;
 }
 
 

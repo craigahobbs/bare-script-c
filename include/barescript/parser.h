@@ -57,7 +57,8 @@ typedef struct BSCallCache {
  * A compiled bytecode chunk
  *
  * Instructions are (opcode << 24) | arg. Constants are interned names, string literals, and
- * numbers. STMT operands index cover[], borrowed statement models from the parser output.
+ * numbers. STMT operands index cover[], borrowed statement models from the parser output - NULL
+ * once the script forgets its model, until coverage recording restores them.
  * CALL_NAME and LOAD_NAME operands index caches[], one per site. stackMax is the deepest value
  * stack the chunk can reach, computed at emit time, so the interpreter allocates the stack once.
  */

@@ -96,6 +96,9 @@ void bsScriptDropModel(BSScript *script);
 /* Re-parse a script's retained lines into a fresh model. Returns an owned model, or a null value. */
 BSValue bsScriptReparse(const BSScript *script);
 
+/* Bring back a forgotten model and the chunks' borrowed statement models, for coverage recording */
+bool bsScriptRestoreCover(BSScript *script);
+
 
 
 

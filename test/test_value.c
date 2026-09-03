@@ -420,6 +420,32 @@ TEST(value_object)
 }
 
 
+TEST(value_object_treap_remove)
+{
+    /* Deleting every key of a large content-keyed object rotates nodes down on both sides */
+    BSValue object = bsObjectNew();
+    char key[16];
+    for (int ix = 0; ix < 200; ix++) {
+        snprintf(key, sizeof(key), "treap%d", ix);
+        BSValue keyValue = bsStringNew(key);
+        bsObjectSetString(object, keyValue, bsNumber(ix));
+        bsRelease(keyValue);
+    }
+    ASSERT_INT_EQ(bsObjectCount(object), 200);
+    for (int ix = 0; ix < 200; ix += 2) {
+        snprintf(key, sizeof(key), "treap%d", ix);
+        ASSERT_TRUE(bsObjectDelete(object, key));
+    }
+    for (int ix = 199; ix > 0; ix -= 2) {
+        snprintf(key, sizeof(key), "treap%d", ix);
+        ASSERT_TRUE(bsObjectDelete(object, key));
+    }
+    ASSERT_INT_EQ(bsObjectCount(object), 0);
+    ASSERT_FALSE(bsObjectDelete(object, "treap0"));
+    bsRelease(object);
+}
+
+
 TEST(value_object_json_keys)
 {
     /* JSON short keys that are not already interned still round-trip and stay ordinary */

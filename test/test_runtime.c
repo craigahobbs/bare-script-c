@@ -731,6 +731,32 @@ static double bsTestCoveredCount(BSValue coverage, const char *script, const cha
 }
 
 
+TEST(runtime_coverage_forgotten_model)
+{
+    /* A script that forgot its model borrows the statement models back when coverage records them */
+    BSValue coverage;
+    BSOptions *options = bsTestCoverageOptions(&coverage, true);
+    static const char *text = "a = 1\nfunction f(x):\n    return x + a\nendfunction\nreturn f(2)";
+    BSScript *script = bsParseScript(text, strlen(text), 1, "forget.bare", NULL);
+    ASSERT_NOT_NULL(script);
+    bsScriptForgetModel(script);
+    ASSERT_NULL(script->code.cover);
+    ASSERT_NULL(script->functions[0]->code.cover);
+    ASSERT_VALUE(bsExecuteScript(script, options), "3");
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "forget.bare", "1"), 1);
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "forget.bare", "3"), 1);
+    BSValue covered = bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), "forget.bare"), "covered");
+    BSValue statement = bsObjectGet(bsObjectGet(covered, "3"), "statement");
+    ASSERT_INT_EQ(statement.type, BS_OBJECT);
+    ASSERT_TRUE(bsObjectHas(statement, "return"));
+    ASSERT_NOT_NULL(script->code.cover);
+    ASSERT_NOT_NULL(script->functions[0]->code.cover);
+    ASSERT_INT_EQ(script->model.type, BS_OBJECT);
+    bsScriptRelease(script);
+    bsOptionsFree(options);
+}
+
+
 TEST(runtime_coverage)
 {
     BSValue coverage;
