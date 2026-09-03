@@ -696,25 +696,25 @@ print. `perf/test.c` is the native C baseline, the counterpart of their `test.js
 It measures the **release** build, and builds it first if needed. The implementations it is
 compared against are themselves optimized builds - Node ships as one, and CPython is built with
 profile-guided and link-time optimization - so timing the development build here would understate
-this runtime by about 1.35x against them.
+this runtime by about 1.3x against them.
 
 ```sh
 make perf
 make perf TEST=mandelbrot PERF_RUNS=5
 ```
 
-Milliseconds per 1000 runs, best of two, on one machine - lower is better:
+Milliseconds per 1000 runs, best of five, on one machine - lower is better:
 
 | Test             | BareScript (C) | BareScript (JS) | BareScript (PyC) | BareScript (Py) |
 | ---------------- | --------------:| ---------------:| ----------------:| ---------------:|
-| mandelbrot       |     **21,000** |         301,000 |          114,000 |       3,496,000 |
-| markdownElements |        **260** |             754 |              679 |           5,327 |
-| markdownParse    |      **1,468** |           3,060 |            7,340 |          21,140 |
-| qrcodeMatrix     |      **1,367** |          13,000 |            9,100 |         126,033 |
-| schemaParse      |        **136** |           1,220 |            1,248 |           9,272 |
-| schemaValidate   |        **180** |           1,972 |            1,060 |          14,596 |
-| urlDecode        |        **8.5** |              92 |            133.5 |           691.5 |
-| urlEncode        |        **5.5** |            51.5 |             57.5 |           397.5 |
+| mandelbrot       |     **21,000** |         300,000 |          109,000 |       3,495,000 |
+| markdownElements |        **266** |             736 |              664 |           5,222 |
+| markdownParse    |      **1,468** |           3,024 |            7,328 |          20,748 |
+| qrcodeMatrix     |      **1,400** |          13,000 |            9,033 |         123,467 |
+| schemaParse      |        **132** |           1,200 |            1,248 |           9,084 |
+| schemaValidate   |        **184** |           1,928 |            1,056 |          14,272 |
+| urlDecode        |        **8.5** |              89 |            132.5 |             685 |
+| urlEncode        |        **6.0** |              50 |             56.5 |           393.5 |
 
 The C runtime is the fastest BareScript runtime on all eight tests. (`BareScript (PyC)` is the
 Python implementation running its C extension for the runtime core, so it is not a pure-Python
@@ -734,18 +734,18 @@ on the same machine, columns in speed order (the Python suite has no markdown te
 
 | Test             | JavaScript (V8) | BareScript (C) | Python (CPython) |
 | ---------------- | ---------------:| --------------:| ----------------:|
-| mandelbrot       |           1,968 |         21,000 |           46,202 |
-| markdownElements |            32.7 |            260 |                  |
-| markdownParse    |             645 |          1,468 |                  |
-| schemaParse      |            72.8 |            136 |            171.5 |
-| schemaValidate   |            57.0 |            180 |            206.2 |
-| urlDecode        |             5.0 |            8.5 |             11.9 |
-| urlEncode        |             2.6 |            5.5 |             10.6 |
+| mandelbrot       |           1,549 |         21,000 |           45,864 |
+| markdownElements |            33.2 |            266 |                  |
+| markdownParse    |             619 |          1,468 |                  |
+| schemaParse      |            71.3 |            132 |            171.2 |
+| schemaValidate   |            56.8 |            184 |            205.4 |
+| urlDecode        |             5.0 |            8.5 |             11.8 |
+| urlEncode        |             2.3 |            6.0 |             10.4 |
 
 Every row reads the same way: V8's JIT, then this runtime, then CPython. An interpreted BareScript
 program on this runtime runs the reference schema parser faster than CPython runs the pure-Python
 package it was ported from - and does it through a parser that is itself written in BareScript.
-Against the JIT it is 1.7x to 3.2x behind on the schema and URL tests and 2.3x behind on
+Against the JIT it is 1.7x to 3.2x behind on the schema and URL tests and 2.4x behind on
 `markdownParse`, which is almost entirely regular expression work against V8's compiled regex
 engine. The exception is `markdownElements`, which builds nested objects and arrays as fast as
 V8's hidden classes and inline caches can allocate them; there V8 is 8x ahead.
@@ -757,30 +757,30 @@ Milliseconds per run on the same machine - the Ruby and Perl rows are one-off po
 | Runtime                                          | ms per run |
 | ------------------------------------------------ | ----------:|
 | C, clang `-O2` with LTO                          |       0.79 |
-| JavaScript, Node 24 (V8 JIT)                     |       1.97 |
+| JavaScript, Node 26 (V8 JIT)                     |       1.56 |
 | **BareScript (C)**                               |     **21** |
-| JavaScript, Node 24 `--jitless` (V8 interpreter) |         27 |
+| JavaScript, Node 26 `--jitless` (V8 interpreter) |         27 |
 | Python 3.14 (CPython, PGO and LTO)               |         46 |
 | Ruby 2.6 (no JIT)                                |         49 |
 | Perl 5.34                                        |         85 |
-| BareScript (PyC)                                 |        114 |
-| BareScript (JS)                                  |        303 |
-| BareScript (Py)                                  |      3,421 |
+| BareScript (PyC)                                 |        109 |
+| BareScript (JS)                                  |        300 |
+| BareScript (Py)                                  |      3,495 |
 
-That is the neighborhood: 11x behind V8's JIT and 27x behind native C, ahead of V8's own
+That is the neighborhood: 13x behind V8's JIT and 27x behind native C, ahead of V8's own
 bytecode interpreter, twice as fast as CPython, and 5x to 170x ahead of the other BareScript
 runtimes. It gets there as a plain bytecode interpreter - no JIT, no assembly, no dependencies -
-in 209 KB of code.
+in 206 KB of code.
 
-The release build is about 1.35x the default build, milliseconds per test run:
+The release build is about 1.3x the default build, milliseconds per test run:
 
 | Test                        | C (`-O2`) | C (release) |
 | --------------------------- | ---------:| -----------:|
-| mandelbrot, 1 run           |        30 |          21 |
-| markdownParse, 250 runs     |       499 |         367 |
-| qrcodeMatrix, 30 runs       |        60 |          41 |
-| schemaValidate, 250 runs    |        65 |          45 |
-| urlDecode, 2000 runs        |        25 |          17 |
+| mandelbrot, 1 run           |        28 |          21 |
+| markdownParse, 250 runs     |       475 |         367 |
+| qrcodeMatrix, 30 runs       |        55 |          42 |
+| schemaValidate, 250 runs    |        60 |          46 |
+| urlDecode, 2000 runs        |        23 |          17 |
 
 And parsing is its own story, because the parser is an interpreted BareScript script in every
 implementation. Running the include library's full test suite, which parses about 2 MB of
@@ -788,9 +788,9 @@ BareScript before it runs a single test:
 
 | Implementation            | Time  |
 | ------------------------- | -----:|
-| C (release)               | 0.25s |
-| C (`-O2`)                 | 0.32s |
-| JavaScript                | 1.81s |
+| C (release)               | 0.24s |
+| C (`-O2`)                 | 0.30s |
+| JavaScript                | 1.77s |
 | Python (with C extension) |  7.5s |
 | Python                    | 10.2s |
 
@@ -813,15 +813,15 @@ the release build:
 | urlDecode, ms per 2000 runs                   |     28 |     20 |
 | urlEncode, ms per 2000 runs                   |     21 |     15 |
 
-The shared library is 486 KB, of which 205 KB is the compressed include library and 209 KB is
+The shared library is 486 KB, of which 205 KB is the compressed include library and 206 KB is
 code.
 
 Memory is measured the same way, with `/usr/bin/time -l`. A script that does nothing runs in a
-3.1 MB resident set with a 2.4 MB peak footprint, of which about 1.4 MB is the process itself
+3.0 MB resident set with a 2.3 MB peak footprint, of which about 1.4 MB is the process itself
 before the runtime loads: libcurl is not mapped until the first HTTP fetch, the parser is compiled
 from its model a statement at a time, and a script keeps its parser model only where lint or
-coverage will read it. Each perf test above peaks at about 7.3 MB. The include library test suite
-peaks at 34 MB, or 68 MB when it records coverage, which keeps every script's model.
+coverage will read it. Each perf test above peaks at about 6 MB. The include library test suite
+peaks at 34 MB, or 61 MB when it records coverage, which keeps every script's model.
 
 ## Compatibility
 
