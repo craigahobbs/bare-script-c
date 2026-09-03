@@ -24,6 +24,7 @@ make test-language  # this project's own BareScript language tests
 make perf           # performance suite -> build/perf.csv
 make release        # three-stage PGO+LTO build in build/release
 make includes       # regenerate src/includeSource.c (checked in; only after lib/include changes)
+make release INCLUDE="barescriptParser.bare barescriptLint.bare url.bare"  # bundle only these includes
 ```
 
 Filtering and diagnostics:
@@ -97,7 +98,9 @@ every statement in a cached include's code.
 `src/includeSource.c` is **generated and checked in** so a fresh clone builds with no bootstrap;
 `make includes` regenerates it by running `bin/includeSource.bare` - itself a BareScript program -
 under a CLI built from the *existing* generated source. README's **The Bundled Include Library**
-describes the encoding.
+describes the encoding. Any include but the parser and linter compiles out under its
+`NO_BARESCRIPT_INCLUDE_<NAME>` macro; the Makefile's `INCLUDE` list sets the macro for every include
+not named. There is no dependency tracking, so an include's own includes must be listed with it.
 
 ### Values and reference counting
 

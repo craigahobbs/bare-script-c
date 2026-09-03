@@ -82,6 +82,22 @@ INCLUDE_TEST_DIR := $(INCLUDE_LIB_DIR)/test
 INCLUDE_SOURCE_C := $(SRC_DIR)/includeSource.c
 INCLUDE_SOURCE_H := $(INC_DIR)/barescript/includeSource.h
 
+# The includes to bundle - all of them unless INCLUDE lists them, the parser and linter always
+# among them:
+#
+#   make release INCLUDE="barescriptParser.bare barescriptLint.bare markdownUp.bare ..."
+#
+# Every other include is compiled out by its NO_BARESCRIPT_INCLUDE_<NAME> macro, which only
+# src/includeSource.c reads - so a change to INCLUDE needs a "make clean" first. The test suites
+# need them all.
+INCLUDE ?=
+INCLUDE_CFLAGS :=
+ifneq '$(strip $(INCLUDE))' ''
+    INCLUDE_OUT := $(basename $(filter-out $(INCLUDE),$(notdir $(INCLUDE_LIB_SRCS))))
+    INCLUDE_CFLAGS := $(patsubst %,-DNO_BARESCRIPT_INCLUDE_%,$(shell echo '$(INCLUDE_OUT)' | tr '[:lower:]' '[:upper:]'))
+    BASE_CFLAGS += $(INCLUDE_CFLAGS)
+endif
+
 
 # Sources
 LIB_SRCS := $(sort $(wildcard $(SRC_DIR)/*.c))
@@ -140,6 +156,7 @@ help:
 	@echo
 	@echo "  TEST=<name>   filter the unit tests by name substring"
 	@echo "  QUIET=1       print a dot per unit test instead of a line"
+	@echo "  INCLUDE=<names>  bundle only these includes, e.g. \"barescriptParser.bare barescriptLint.bare url.bare\""
 	@echo "  libcurl HTTP fetch: $(if $(strip $(CURL_LIBS)),enabled,disabled)"
 
 
@@ -250,16 +267,17 @@ release: $(RELEASE_CLI) $(RELEASE_LIB_A)
 # never does since it loads bundled models. A synthetic parse script, the language tests, and a
 # static-analysis run were measured and moved neither workload beyond build-to-build noise. %p so
 # each process writes its own profraw, then merge.
+# With includes compiled out, the training programs read them from lib/include instead.
+PROFILE_ENV = LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
+    $(if $(INCLUDE_CFLAGS),BARESCRIPT_INCLUDE_PATH=$(CURDIR)/$(INCLUDE_LIB_DIR))
 $(PROFILE_DATA): $(LIB_SRCS) $(CLI_SRCS) $(PERF_DIR)/test.bare $(INCLUDE_LIB_SRCS) \
         $(sort $(wildcard $(INCLUDE_TEST_DIR)/*.bare))
 	@rm -rf $(PROFILE_DIR) $(BUILD_DIR)/pgo
 	@mkdir -p $(PROFILE_DIR) $(BUILD_DIR)/pgo
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_GENERATE) -o $(BUILD_DIR)/pgo/$(CLI_NAME) \
 	    $(LIB_SRCS) $(CLI_SRCS) $(LIBS)
-	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
-	    $(BUILD_DIR)/pgo/$(CLI_NAME) $(PERF_DIR)/test.bare > /dev/null
-	LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
-	    $(BUILD_DIR)/pgo/$(CLI_NAME) -d -m $(INCLUDE_TEST_DIR)/runTests.bare > /dev/null
+	$(PROFILE_ENV) $(BUILD_DIR)/pgo/$(CLI_NAME) $(PERF_DIR)/test.bare > /dev/null
+	$(PROFILE_ENV) $(BUILD_DIR)/pgo/$(CLI_NAME) -d -m $(INCLUDE_TEST_DIR)/runTests.bare > /dev/null
 	$(PROFILE_MERGE)
 
 # Stage 3 - rebuild with the profile

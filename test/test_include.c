@@ -115,6 +115,35 @@ TEST(include_stub_accessors)
 }
 
 
+TEST(include_compiled_out)
+{
+    /* A compiled-out include keeps its registry entry with no model - as here, with its data cleared */
+    size_t ix = 0;
+    while (strcmp(bsIncludeName(ix), "url.bare") != 0) {
+        ix++;
+    }
+    bsIncludeCleanup();
+    BSIncludeSource saved = bsIncludeSources[ix];
+    bsIncludeSources[ix].gzip = NULL;
+    bsIncludeSources[ix].gzipSize = 0;
+    ASSERT_INT_EQ(bsIncludeCount(), BS_INCLUDE_COUNT);
+    ASSERT_STR_EQ(bsIncludeName(ix), "url.bare");
+    ASSERT_NULL(bsIncludeSourceUrl());
+    ASSERT_NULL(bsIncludeSource("url.bare"));
+    ASSERT_NULL(bsIncludeScript("url.bare"));
+
+    /* An include statement for it fails... */
+    ASSERT_VALUE(bsTestExecute("include <url.bare>\nreturn urlEncode('a b')"), "null");
+    ASSERT_STR_CONTAINS(bsTestErrorText(), "url.bare");
+
+    /* ...unless the system include path serves it */
+    bsSystemIncludeRegister("url.bare", "function urlEncode(text):\n    return 'from the path'\nendfunction\n");
+    ASSERT_VALUE(bsTestExecute("include <url.bare>\nreturn urlEncode('a b')"), "\"from the path\"");
+    bsSystemIncludeClear();
+    bsIncludeSources[ix] = saved;
+}
+
+
 TEST(include_script_cache)
 {
     ASSERT_NULL(bsIncludeScript("no-such-include.bare"));

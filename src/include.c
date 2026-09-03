@@ -363,7 +363,7 @@ BSScript *bsIncludeScript(const char *name)
     }
     const char *text = bsIncludeSourceDecode(&bsIncludeSources[ix]);
     if (text == NULL) {
-        return NULL; /* GCOV_EXCL_LINE - bundled models always inflate */
+        return NULL; /* the include is compiled out */
     }
     BSScript *script = bsScriptFromModelJSON(text, strlen(text), name, NULL);
     free(bsIncludeSources[ix].decoded);

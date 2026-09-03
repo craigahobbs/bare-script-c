@@ -8,7 +8,9 @@
  *
  * Each include is embedded as its parser-compiled JSON script model, gzip-compressed.
  * An accessor decodes its include's model on first use and caches it; the
- * decoded text is released by bsIncludeCleanup.
+ * decoded text is released by bsIncludeCleanup. An include compiled out of the library
+ * with its NO_BARESCRIPT_INCLUDE_<NAME> macro - see src/includeSource.c - keeps its
+ * registry entry and accessor, which return no model.
  */
 
 #ifndef BARESCRIPT_INCLUDE_SOURCE_H

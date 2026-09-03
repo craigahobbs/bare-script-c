@@ -6,7 +6,9 @@
 #
 # Each include library script is embedded as its parser-compiled JSON script model - the runtime
 # JSON-parses any system include starting with "{", skipping the parser entirely - gzip-compressed
-# at level 9 with gzip.bare and emitted as a C unsigned-char array.
+# at level 9 with gzip.bare and emitted as a C unsigned-char array. Each array but the required
+# includes' is compiled out by defining NO_BARESCRIPT_INCLUDE_<NAME>. The unit tests decode every
+# bundled model with the runtime's inflater, so the models are not verified here.
 #
 # Run with the built command-line interface:
 #
@@ -17,53 +19,9 @@ include <barescriptParser.bare>
 include <gzip.bare>
 
 
-# Serialize a value as JSON with object keys in insertion order
-#
-# jsonStringify sorts object keys; walking objectKeys keeps the order the parser creates them in,
-# which gzip then compresses. Leaf values delegate to jsonStringify, so number formatting and
-# string escaping stay exactly what the runtime produces.
-function includeSourceJSON(value):
-    valueType = systemType(value)
-    if valueType == 'object':
-        parts = []
-        for key in objectKeys(value):
-            arrayPush(parts, jsonStringify(key) + ':' + includeSourceJSON(objectGet(value, key)))
-        endfor
-        return '{' + arrayJoin(parts, ',') + '}'
-    elif valueType == 'array':
-        parts = []
-        for item in value:
-            arrayPush(parts, includeSourceJSON(item))
-        endfor
-        return '[' + arrayJoin(parts, ',') + ']'
-    endif
-    return jsonStringify(value)
-endfunction
-
-
-# Convert an include file name to its exported stub name suffix - "markdownUp.bare" is "MarkdownUp"
-function includeSourceExportName(includeName):
-    return stringUpper(stringCharAt(includeName, 0)) + stringSlice(includeName, 1)
-endfunction
-
-
-# Emit gzip bytes as a C unsigned-char initializer
-function includeSourceGzipBytes(bytes):
-    digits = '0123456789abcdef'
-    lines = []
-    lineParts = []
-    for byte in bytes:
-        arrayPush(lineParts, '0x' + stringCharAt(digits, mathFloor(byte / 16)) + stringCharAt(digits, byte % 16))
-        if arrayLength(lineParts) == 20:
-            arrayPush(lines, '    ' + arrayJoin(lineParts, ', ') + ',')
-            lineParts = []
-        endif
-    endfor
-    if arrayLength(lineParts):
-        arrayPush(lines, '    ' + arrayJoin(lineParts, ', '))
-    endif
-    return arrayJoin(lines, '\n')
-endfunction
+# The required includes - the runtime bootstraps its parser and linter from these, so they are
+# always bundled
+includeSourceRequired = ['barescriptParser.bare', 'barescriptLint.bare']
 
 
 async function main():
@@ -86,7 +44,9 @@ async function main():
         ' *\n' + \
         ' * Each include is embedded as its parser-compiled JSON script model, gzip-compressed.\n' + \
         " * An accessor decodes its include's model on first use and caches it; the\n" + \
-        ' * decoded text is released by bsIncludeCleanup.\n' + \
+        ' * decoded text is released by bsIncludeCleanup. An include compiled out of the library\n' + \
+        ' * with its NO_BARESCRIPT_INCLUDE_<NAME> macro - see src/includeSource.c - keeps its\n' + \
+        ' * registry entry and accessor, which return no model.\n' + \
         ' */\n\n' + \
         '#ifndef BARESCRIPT_INCLUDE_SOURCE_H\n' + \
         '#define BARESCRIPT_INCLUDE_SOURCE_H\n\n' + \
@@ -100,17 +60,38 @@ async function main():
     # The source
     sourceParts = [licenseC, '\n', generated, '\n' + \
         '#include "barescript/includeSource.h"\n\n' + \
-        '#include "includeSourceDecode.h"\n']
+        '#include "includeSourceDecode.h"\n\n\n' + \
+        '/*\n' + \
+        ' * Compiling out includes\n' + \
+        ' *\n' + \
+        ' * Define NO_BARESCRIPT_INCLUDE_<NAME> - the include file name without ".bare" in upper case, as in\n' + \
+        " * NO_BARESCRIPT_INCLUDE_MARKDOWNUP - to leave that include's model out of the library. The include\n" + \
+        ' * keeps its registry entry and accessor, which return no model, so an include statement for it is\n' + \
+        ' * served from the system include path, if one is registered, or fails. An include that an included\n' + \
+        ' * script itself includes must be kept along with it. ' + arrayJoin(includeSourceRequired, ' and ') + '\n' + \
+        ' * are always bundled - the runtime parses with them.\n' + \
+        ' */\n']
+
+    # The byte values as C hex literals
+    digits = stringSplit('0123456789abcdef', '')
+    hex = []
+    for high in digits:
+        for low in digits:
+            arrayPush(hex, '0x' + high + low)
+        endfor
+    endfor
 
     # Each include library script
     accessors = []
     registry = []
-    names = []
+    stubs = []
     totalSource = 0
     totalEncoded = 0
-    for file in files:
+    for file, ixFile in files:
         includeName = stringSlice(file, stringLastIndexOf(file, '/') + 1)
-        exportName = includeSourceExportName(stringSlice(includeName, 0, stringLength(includeName) - 5))
+        baseName = stringSlice(includeName, 0, stringLength(includeName) - 5)
+        exportName = stringUpper(stringCharAt(baseName, 0)) + stringSlice(baseName, 1)
+        macroName = stringUpper(baseName)
 
         # Parse the include script into its model, dropping the script lines - a system include's
         # lines are unused at runtime
@@ -127,41 +108,44 @@ async function main():
         model = objectGet(parseResult, 'result')
         objectDelete(model, 'scriptLines')
 
-        # Compress the model at gzip level 9 (max) and verify the round trip
-        modelText = includeSourceJSON(model)
-        modelBytes = stringEncode(modelText)
-        compressed = gzipCompress(modelBytes, 9)
-        if gzipUncompress(compressed) != modelBytes:
-            systemLog('error: "' + includeName + '" compressed model round-trip failure')
-            return 1
-        endif
+        # Compress the model at gzip level 9 (max) and emit the bytes as a C initializer, 18 per line
+        compressed = gzipCompress(stringEncode(jsonStringify(model)), 9)
         totalSource = totalSource + stringLength(text)
         totalEncoded = totalEncoded + arrayLength(compressed)
+        lines = []
+        lineParts = []
+        for byte, ixByte in compressed:
+            arrayPush(lineParts, arrayGet(hex, byte))
+            if arrayLength(lineParts) == 18 || ixByte == arrayLength(compressed) - 1:
+                arrayPush(lines, '    ' + arrayJoin(lineParts, ', '))
+                lineParts = []
+            endif
+        endfor
 
+        # The data, compiled out by its macro unless the include is required
+        required = arrayIndexOf(includeSourceRequired, includeName) != -1
         arrayPush(sourceParts, '\n\n/* ' + includeName + ' */\n' + \
+            if(required, '', '#ifndef NO_BARESCRIPT_INCLUDE_' + macroName + '\n') + \
             'static const unsigned char bsIncludeSourceData' + exportName + '[] = {\n' + \
-            includeSourceGzipBytes(compressed) + '\n};\n\n' + \
-            'const char *bsIncludeSource' + exportName + '(void)\n{\n' + \
-            '    return bsIncludeSourceDecode(&bsIncludeSources[' + arrayLength(names) + ']);\n}\n')
+            arrayJoin(lines, ',\n') + '\n};\n' + \
+            '#define BS_INCLUDE_SOURCE_' + macroName + ' bsIncludeSourceData' + exportName + \
+            ', sizeof(bsIncludeSourceData' + exportName + ')\n' + \
+            if(required, '', '#else\n#define BS_INCLUDE_SOURCE_' + macroName + ' NULL, 0\n#endif\n') + \
+            '\nconst char *bsIncludeSource' + exportName + '(void)\n{\n' + \
+            '    return bsIncludeSourceDecode(&bsIncludeSources[' + ixFile + ']);\n}\n')
         arrayPush(accessors, '/* ' + includeName + ' - the decoded JSON script model */\n' + \
             'const char *bsIncludeSource' + exportName + '(void);')
-        arrayPush(registry, '    {"' + includeName + '", bsIncludeSourceData' + exportName + \
-            ', sizeof(bsIncludeSourceData' + exportName + '), NULL}')
-        arrayPush(names, includeName)
+        arrayPush(registry, '    {"' + includeName + '", BS_INCLUDE_SOURCE_' + macroName + ', NULL}')
+        arrayPush(stubs, '    bsIncludeSource' + exportName)
     endfor
 
     # The include registry and the stub accessor table
-    stubs = []
-    for name in names:
-        arrayPush(stubs, '    bsIncludeSource' + \
-            includeSourceExportName(stringSlice(name, 0, stringLength(name) - 5)))
-    endfor
     arrayPush(sourceParts, '\n\n/* The bundled include library registry */\n' + \
         'BSIncludeSource bsIncludeSources[] = {\n' + arrayJoin(registry, ',\n') + '\n};\n\n\n' + \
         '/* The bundled include library stub accessors, in registry order */\n' + \
         'const BSIncludeSourceFn bsIncludeSourceStubs[] = {\n' + arrayJoin(stubs, ',\n') + '\n};\n')
 
-    arrayPush(headerParts, arrayLength(names) + '\n\n\n' + \
+    arrayPush(headerParts, arrayLength(files) + '\n\n\n' + \
         '/* A bundled include library script */\n' + \
         'typedef struct BSIncludeSource {\n' + \
         '    const char *name;\n' + \
@@ -183,7 +167,7 @@ async function main():
     # Write the generated files
     systemFetch({'url': outputH, 'body': arrayJoin(headerParts, '')})
     systemFetch({'url': outputC, 'body': arrayJoin(sourceParts, '')})
-    systemLog('includeSource: ' + arrayLength(names) + ' includes, ' + totalSource + ' source bytes, ' + \
+    systemLog('includeSource: ' + arrayLength(files) + ' includes, ' + totalSource + ' source bytes, ' + \
         totalEncoded + ' compressed bytes (' + numberToFixed(100 * totalEncoded / totalSource, 1) + '%)')
     return 0
 endfunction
