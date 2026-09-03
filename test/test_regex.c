@@ -641,3 +641,78 @@ TEST(regex_first_set)
     ASSERT_VALUE_STRING(bsTestMatch("(a)?\\1c", "zzc", 0), "c");
     ASSERT_VALUE_STRING(bsTestMatch("(?:)x", "zzx", 0), "x");
 }
+
+
+TEST(regex_sequences_repeat)
+{
+    /* A repeat of an alternation of atom sequences matches iteratively, in the recursive order */
+    ASSERT_VALUE_STRING(bsTestMatch("(?:a|ab)*c", "ababc", 0), "ababc");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:aa|a){3}b", "aaaab", 0), "aaaab");
+    ASSERT_VALUE_STRING(bsTestMatch("x(?:ab|a){2}y", "xabay", 0), "xabay");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab){2}", "ababab", 0), "abab");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab){2,3}c", "ababababc", 0), "abababc");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab){2,3}c", "abc", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab)*", "xab", 0), "");
+
+    /* A lazy repeat tries the continuation before each iteration */
+    ASSERT_VALUE_STRING(bsTestMatch("(?:a|b)*?b", "aab", 0), "aab");
+    ASSERT_VALUE_STRING(bsTestMatch("^(?:ab|cd)*?$", "abcd", 0), "abcd");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab){2,}?", "ababab", 0), "abab");
+    ASSERT_VALUE_STRING(bsTestMatch("^(?:ab|a)+?c", "aabc", 0), "aabc");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab){2,}?c", "abc", 0), "null");
+
+    /* A non-ASCII subject matches by code point */
+    ASSERT_VALUE_STRING(bsTestMatch("(?:\xc3\xa9|ab)+", "ab\xc3\xa9\xc3\xa9x", 0), "ab\xc3\xa9\xc3\xa9");
+
+    /* Bodies the iterative matcher leaves to recursion: an empty alternative, a capture, a non-atom, too many branches */
+    ASSERT_VALUE_STRING(bsTestMatch("(?:|a)*b", "aab", 0), "aab");
+    ASSERT_VALUE_STRING(bsTestMatch("(a|b)*c", "abc", 0), "abc");
+    ASSERT_VALUE_STRING(bsTestMatch("(a|b)*?c", "abc", 0), "abc");
+    ASSERT_VALUE_STRING(bsTestMatch("(a){1,}?b", "aab", 0), "aab");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:a|(b))*c", "abc", 0), "abc");
+    BSStringBuilder sb;
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "(?:a");
+    for (int ix = 0; ix < 255; ix++) {
+        bsSBAppendString(&sb, "|a");
+    }
+    bsSBAppendString(&sb, ")*b");
+    BSValue pattern = bsSBToValue(&sb);
+    ASSERT_VALUE_STRING(bsTestMatch(bsStringData(pattern), "aab", 0), "aab");
+    bsRelease(pattern);
+
+    /* A pathological body gives up on its step budget rather than hanging */
+    bsSBInit(&sb);
+    for (int ix = 0; ix < 30; ix++) {
+        bsSBAppendChar(&sb, 'a');
+    }
+    BSValue subject = bsSBToValue(&sb);
+    ASSERT_VALUE_STRING(bsTestMatch("(?:a|aa)+$b", bsStringData(subject), 0), "null");
+    bsRelease(subject);
+}
+
+
+TEST(regex_sequences_repeat_long_literal)
+{
+    /* The parser's string literal body is such a repeat - a long literal costs no C stack */
+    BSStringBuilder sb;
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "return stringLength('");
+    for (int ix = 0; ix < 20000; ix++) {
+        bsSBAppendChar(&sb, 'a');
+    }
+    bsSBAppendString(&sb, "\\'\xc3\xa9')");
+    BSValue script = bsSBToValue(&sb);
+    ASSERT_VALUE(bsTestExecute(bsStringData(script)), "20002");
+    bsRelease(script);
+
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "return stringLength(\"");
+    for (int ix = 0; ix < 20000; ix++) {
+        bsSBAppendString(&sb, "a\\\\");
+    }
+    bsSBAppendString(&sb, "\")");
+    script = bsSBToValue(&sb);
+    ASSERT_VALUE(bsTestExecute(bsStringData(script)), "40000");
+    bsRelease(script);
+}

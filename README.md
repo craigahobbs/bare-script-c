@@ -579,7 +579,10 @@ because the parser is itself regex-driven:
 
 - A quantifier whose body matches exactly one code point - `\s*`, `[0-9]+`, `.*`, the overwhelming
   majority of real patterns - matches **iteratively**, so the C stack stays bounded on long
-  subjects.
+  subjects. So does one whose body is an alternation of fixed atom sequences with no captures -
+  `(?:\\.|[^'\\])*`, the body of every quoted string the parser reads - by keeping the branch each
+  iteration took on an explicit stack and backtracking through it in the recursive order, so a
+  string literal can be as long as the line that holds it.
 - Capture writes are recorded on an **undo trail**, so backtracking out of a lookaround restores
   state in time proportional to what changed rather than copying the capture array.
 - Recursion depth and backtracking steps are **budgeted**, so a pathological pattern gives up

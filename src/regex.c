@@ -94,7 +94,8 @@ struct RxNode {
             int min;
             int max; /* -1 for unbounded */
             bool greedy;
-            bool simple; /* the body matches exactly one code point and captures nothing */
+            bool simple;    /* the body matches exactly one code point and captures nothing */
+            bool sequences; /* the body is an alternation of non-empty atom sequences and captures nothing */
         } repeat;
         struct {
             RxNode *sub;
@@ -218,6 +219,31 @@ static const RxNode *rxSimpleAtom(const RxNode *node)
         node = node->u.alt.branches[0];
     }
     return (node != NULL && rxIsSimple(node)) ? node : NULL;
+}
+
+
+/*
+ * Whether a repeat body is an alternation of non-empty atom sequences - the shape of a quoted
+ * string's body, "(?:\\.|[^'\\])*". Such a repeat is matched iteratively; the branch chosen for
+ * each iteration is recorded in a byte, so the alternation is limited to 255 branches.
+ */
+static bool rxIsSequences(const RxNode *node)
+{
+    if (node->kind != RX_ALT || node->u.alt.count > 255) {
+        return false;
+    }
+    for (size_t ix = 0; ix < node->u.alt.count; ix++) {
+        const RxNode *atom = node->u.alt.branches[ix];
+        if (atom == NULL) {
+            return false;
+        }
+        for (; atom != NULL; atom = atom->next) {
+            if (atom->kind != RX_CHAR && atom->kind != RX_ANY && atom->kind != RX_CLASS) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 
@@ -886,6 +912,7 @@ static RxNode *rxParseSequence(RxCompiler *compiler)
             repeat->u.repeat.max = max;
             repeat->u.repeat.greedy = greedy;
             repeat->u.repeat.simple = rxIsSimple(atom);
+            repeat->u.repeat.sequences = !repeat->u.repeat.simple && rxIsSequences(atom);
             atom = repeat;
 
             /* A quantifier cannot itself be quantified */
@@ -1691,6 +1718,122 @@ static bool rxMatchSimpleRepeat(RxState *state, RxNode *node, RxCont *cont, size
 }
 
 
+/* Match a sequence of atoms at "pos"; on success "end" is the position after it */
+static bool rxMatchAtoms(const RxState *state, const RxNode *node, size_t pos, size_t *end)
+{
+    if (state->codes == NULL) {
+        for (; node != NULL; node = node->next, pos++) {
+            if (!rxMatchOneByte(state, node, pos)) {
+                return false;
+            }
+        }
+    } else {
+        for (; node != NULL; node = node->next, pos++) {
+            if (!rxMatchOne(state, node, pos)) {
+                return false;
+            }
+        }
+    }
+    *end = pos;
+    return true;
+}
+
+
+/* The number of code points a sequence of atoms matches */
+static size_t rxAtomsLength(const RxNode *node)
+{
+    size_t length = 0;
+    for (; node != NULL; node = node->next) {
+        length++;
+    }
+    return length;
+}
+
+
+/*
+ * Match a repeat whose body is an alternation of atom sequences - see rxIsSequences - iteratively,
+ * so a long quoted string costs no C stack. The branch each iteration took is kept on an explicit
+ * stack; backtracking pops an iteration and tries its next branch, then the continuation, in the
+ * order the recursive matcher would take.
+ */
+static bool rxMatchSequencesRepeat(RxState *state, RxNode *node, RxCont *cont, size_t pos, int depth)
+{
+    RxNode *const *branches = node->u.repeat.sub->u.alt.branches;
+    size_t branchCount = node->u.repeat.sub->u.alt.count;
+    size_t min = (size_t) node->u.repeat.min;
+    int max = node->u.repeat.max;
+    bool greedy = node->u.repeat.greedy;
+
+    uint8_t stackInline[128];
+    uint8_t *stack = stackInline;
+    size_t capacity = sizeof(stackInline);
+    size_t count = 0;
+    size_t branch = 0;
+    bool tryExit = !greedy;
+    bool result = false;
+
+    for (;;) {
+        /* A lazy repeat tries the continuation before another iteration */
+        if (tryExit && count >= min && rxMatchNode(state, node->next, cont, pos, depth + 1)) {
+            result = true;
+            break;
+        }
+        tryExit = false;
+
+        /* Extend with the first branch, from "branch" on, that matches here */
+        bool extended = false;
+        if (max < 0 || count < (size_t) max) {
+            for (; branch < branchCount; branch++) {
+                if (++state->steps > RX_STEPS_MAX) {
+                    goto done;
+                }
+                size_t end;
+                if (rxMatchAtoms(state, branches[branch], pos, &end)) {
+                    if (count == capacity) {
+                        uint8_t *grown = bsAlloc(capacity * 2);
+                        memcpy(grown, stack, capacity);
+                        if (stack != stackInline) {
+                            free(stack);
+                        }
+                        stack = grown;
+                        capacity *= 2;
+                    }
+                    stack[count++] = (uint8_t) branch;
+                    pos = end;
+                    branch = 0;
+                    tryExit = !greedy;
+                    extended = true;
+                    break;
+                }
+            }
+        }
+        if (extended) {
+            continue;
+        }
+
+        /* A greedy repeat tries the continuation once no further iteration matches here */
+        if (greedy && count >= min && rxMatchNode(state, node->next, cont, pos, depth + 1)) {
+            result = true;
+            break;
+        }
+
+        /* Backtrack - undo the last iteration and try its next branch */
+        if (count == 0) {
+            break;
+        }
+        branch = stack[--count];
+        pos -= rxAtomsLength(branches[branch]);
+        branch++;
+    }
+
+done:
+    if (stack != stackInline) {
+        free(stack);
+    }
+    return result;
+}
+
+
 static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos, int depth)
 {
     if (node == NULL) {
@@ -1820,6 +1963,8 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos, 
     case RX_REPEAT:
         if (node->u.repeat.simple) {
             result = rxMatchSimpleRepeat(state, node, cont, pos, depth);
+        } else if (node->u.repeat.sequences) {
+            result = rxMatchSequencesRepeat(state, node, cont, pos, depth);
         } else if (node->u.repeat.max == 0) {
             result = rxMatchNode(state, node->next, cont, pos, depth + 1);
         } else {
