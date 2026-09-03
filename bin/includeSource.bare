@@ -54,7 +54,7 @@ function includeSourceGzipBytes(bytes):
     lineParts = []
     for byte in bytes:
         arrayPush(lineParts, '0x' + stringCharAt(digits, mathFloor(byte / 16)) + stringCharAt(digits, byte % 16))
-        if arrayLength(lineParts) == 16:
+        if arrayLength(lineParts) == 20:
             arrayPush(lines, '    ' + arrayJoin(lineParts, ', ') + ',')
             lineParts = []
         endif
