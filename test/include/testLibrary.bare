@@ -33,8 +33,11 @@ function testLibraryArray():
     unittestEqual(values, ['x', 4])
 
     # Invalid arguments return the documented error values
+    systemLogDebug('NOTICE: The following "arrayGet" error is expected:')
     unittestEqual(arrayGet([1], 5), null)
+    systemLogDebug('NOTICE: The following "arrayLength" error is expected:')
     unittestEqual(arrayLength('not an array'), 0)
+    systemLogDebug('NOTICE: The following "arrayIndexOf" error is expected:')
     unittestEqual(arrayIndexOf('not an array', 1), -1)
 endfunction
 unittestRunTest('testLibraryArray')
@@ -111,8 +114,11 @@ function testLibraryString():
     unittestEqual(stringDecode(stringEncode(unicode)), unicode)
 
     # Invalid arguments
+    systemLogDebug('NOTICE: The following "stringLength" error is expected:')
     unittestEqual(stringLength(1), 0)
+    systemLogDebug('NOTICE: The following "stringIndexOf" error is expected:')
     unittestEqual(stringIndexOf(1, 'a'), -1)
+    systemLogDebug('NOTICE: The following "stringCharAt" error is expected:')
     unittestEqual(stringCharAt(text, 99), null)
 endfunction
 unittestRunTest('testLibraryString')
@@ -136,6 +142,7 @@ function testLibraryMath():
     unittestTrue(mathPi() > 3.14 && mathPi() < 3.15)
     unittestTrue(mathE() > 2.71 && mathE() < 2.72)
     unittestTrue(mathRandom() >= 0 && mathRandom() < 1)
+    systemLogDebug('NOTICE: The following "mathSqrt" error is expected:')
     unittestEqual(mathSqrt(-1), null)
 endfunction
 unittestRunTest('testLibraryMath')
@@ -160,6 +167,7 @@ function testLibraryJSON():
     unittestEqual(jsonStringify([1, 2], 2), '[\n  1,\n  2\n]')
     unittestEqual(jsonParse('{"a": [1, 2, {"b": null}]}'), \
         objectNew('a', arrayNew(1, 2, objectNew('b', null))))
+    systemLogDebug('NOTICE: The following "jsonParse" error is expected:')
     unittestEqual(jsonParse('not json'), null)
     unittestEqual(jsonParse(jsonStringify({'a': [1, 'two', true, null]})), \
         objectNew('a', arrayNew(1, 'two', true, null)))
@@ -218,6 +226,7 @@ function testLibraryRegex():
     unittestEqual(arrayLength(regexMatchAll(regexNew('^.', 'm'), 'ab\ncd')), 2)
     unittestNotEqual(regexMatch(regexNew('a.c', 's'), 'a\nc'), null)
     unittestEqual(regexNew('a', 'q'), null)
+    systemLogDebug('NOTICE: The following "regexNew" error is expected:')
     unittestEqual(regexNew('('), null)
 
     # Lookaround and backreferences
@@ -265,6 +274,7 @@ function testLibraryBarescript():
         {'binary': {'op': '+', 'left': {'number': 1}, 'right': {'number': 2}}}), 3)
     unittestEqual(barescriptEvaluateExpression( \
         {'function': {'name': 'max', 'args': [{'number': 1}, {'number': 5}]}}), 5)
+    systemLogDebug('NOTICE: The following "barescriptEvaluateExpression" error is expected:')
     unittestEqual(barescriptEvaluateExpression('not a model'), null)
 endfunction
 unittestRunTest('testLibraryBarescript')

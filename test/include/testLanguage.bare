@@ -85,6 +85,10 @@ endfunction
 unittestRunTest('testLanguageComparison')
 
 
+function testLanguageUnusedOperand():
+    unittestFail('short-circuit evaluated the unused operand')
+endfunction
+
 function testLanguageLogical():
     unittestEqual(0 && 1, 0)
     unittestEqual(1 && 2, 2)
@@ -94,8 +98,8 @@ function testLanguageLogical():
     unittestEqual(!'a', false)
 
     # Short circuiting does not evaluate the right operand
-    unittestEqual(false && undefinedFunction(), false)
-    unittestEqual(true || undefinedFunction(), true)
+    unittestEqual(false && testLanguageUnusedOperand(), false)
+    unittestEqual(true || testLanguageUnusedOperand(), true)
 endfunction
 unittestRunTest('testLanguageLogical')
 
@@ -153,6 +157,7 @@ function testLanguageForEach():
     unittestEqual(sum, 8)
 
     # Iterating a non-array is a no-op, and the loop variables remain set
+    systemLogDebug('NOTICE: The following "arrayLength" error is expected:')
     count = 0
     for value in 'not an array':
         count = count + 1
@@ -253,8 +258,8 @@ function testLanguageBuiltinIf():
     unittestEqual(testLanguageRecursion(), 3628800)
 
     # Only the selected branch is evaluated
-    unittestEqual(if(false, undefinedFunction(), 'safe'), 'safe')
-    unittestEqual(if(true, 'safe', undefinedFunction()), 'safe')
+    unittestEqual(if(false, testLanguageUnusedOperand(), 'safe'), 'safe')
+    unittestEqual(if(true, 'safe', testLanguageUnusedOperand()), 'safe')
     unittestEqual(if(true), null)
 endfunction
 unittestRunTest('testLanguageBuiltinIf')
@@ -286,3 +291,6 @@ function testLanguageLiterals():
     unittestEqual(null, null)
 endfunction
 unittestRunTest('testLanguageLiterals')
+
+
+systemLogDebug('NOTICE: The following static analysis warning is expected:')

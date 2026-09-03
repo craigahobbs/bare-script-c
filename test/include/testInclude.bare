@@ -26,9 +26,11 @@ async function testIncludeFetch():
     # systemFetch reads files relative to the running script
     text = systemFetch('testIncludeLib.bare')
     unittestTrue(stringIndexOf(text, 'testIncludeLibGlobal') >= 0)
+    systemLogDebug('NOTICE: The following "systemFetch" error is expected:')
     unittestEqual(systemFetch('no-such-file.bare'), null)
 
     # An array of URLs fetches in order
+    systemLogDebug('NOTICE: The following "systemFetch" error is expected:')
     responses = systemFetch(['testIncludeLib.bare', 'no-such-file.bare'])
     unittestEqual(arrayLength(responses), 2)
     unittestEqual(arrayGet(responses, 1), null)
