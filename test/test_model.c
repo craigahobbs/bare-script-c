@@ -148,9 +148,68 @@ TEST(model_operand_limits)
     bsTestInvalidModel(bsStringData(json));
     bsRelease(json);
 
+    /* 32768 live temporaries - a call's arguments hold theirs until the call, and a nested call adds more */
+    static const char *binary = "{\"binary\":{\"op\":\"+\",\"left\":{\"string\":\"a\"},\"right\":{\"string\":\"a\"}}}";
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[");
+    for (int ix = 0; ix < 32766; ix++) {
+        bsSBAppendString(&sb, binary);
+        bsSBAppendChar(&sb, ',');
+    }
+    bsSBAppendString(&sb, "{\"function\":{\"name\":\"g\",\"args\":[");
+    bsSBAppendString(&sb, binary);
+    bsSBAppendChar(&sb, ',');
+    bsSBAppendString(&sb, binary);
+    bsSBAppendChar(&sb, ',');
+    bsSBAppendString(&sb, binary);
+    bsSBAppendString(&sb, "]}}]}}}}]}");
+    json = bsSBToValue(&sb);
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
+
+    /* A chunk holds at most 32768 includes */
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "{\"statements\":[{\"include\":{\"includes\":[");
+    for (int ix = 0; ix < 32769; ix++) {
+        bsSBAppendString(&sb, ix == 0 ? "{\"url\":\"a.bare\"}" : ",{\"url\":\"a.bare\"}");
+    }
+    bsSBAppendString(&sb, "]}}]}");
+    json = bsSBToValue(&sb);
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
+
+    /* A script defines at most 65536 functions */
+    static const char *functionJSON = "{\"function\":{\"name\":\"f\",\"args\":[],\"statements\":[]}}";
+    BSValue function = bsJSONDecode(functionJSON, strlen(functionJSON), NULL);
+    BSValue model = bsObjectNew();
+    BSValue statements = bsArrayNewCapacity(65537);
+    for (int ix = 0; ix < 65537; ix++) {
+        bsArrayPush(statements, bsRetain(function));
+    }
+    bsObjectSet(model, "statements", statements);
+    bsRelease(function);
+    ASSERT_NULL(bsScriptFromModel(model, NULL));
+    bsRelease(model);
+
+    /* A jump to an unknown label needs a constant for the label's name, after the last one was taken */
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "{\"statements\":[{\"jump\":{\"label\":\"nope\"}}");
+    for (int ix = 0; ix < 32767; ix++) {
+        char statement[64];
+        snprintf(statement, sizeof(statement), ",{\"expr\":{\"expr\":{\"number\":%d.5}}}", ix);
+        bsSBAppendString(&sb, statement);
+    }
+    bsSBAppendString(&sb, "]}");
+    json = bsSBToValue(&sb);
+    bsTestInvalidModel(bsStringData(json));
+    bsTestInvalidModelJSON(bsStringData(json), "Invalid BareScript model");
+    bsRelease(json);
+
     /* Malformed expression statements, operands, and a conditional's branch assigned to a local */
     bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":5}}}}]}");
     bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"bogus\":1}}}]}");
+    bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"binary\":5}}}]}");
+    bsTestInvalidModel("{\"statements\":[{\"expr\":{\"name\":\"x\",\"expr\":{\"number\":\"5\"}}}]}");
     bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"unary\":{\"op\":\"-\",\"expr\":{\"bogus\":1}}}}}]}");
     bsTestInvalidModel("{\"statements\":[{\"function\":{\"name\":\"f\",\"args\":[],\"statements\":["
                        "{\"expr\":{\"name\":\"x\",\"expr\":{\"function\":{\"name\":\"if\","

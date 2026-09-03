@@ -284,6 +284,7 @@ typedef struct {
     uint16_t tempTop;     /* the temporaries in use past the slots */
     uint16_t tempMax;
     BSOperand nullConst;  /* the null constant's operand, once allocated */
+    bool overflow;        /* an operand space outgrew its index range, so the chunk is invalid */
     size_t assignedWords; /* the definite-assignment sets, slotCount bits each, or 0 for no analysis */
     uint32_t *assigned;   /* the slots definitely assigned at the statement being emitted */
     uint32_t *blockOf;    /* per statement, its basic block */
@@ -342,9 +343,16 @@ static uint32_t bsEmitJumpInst(BSEmit *e, uint8_t op, uint16_t a, uint32_t targe
 }
 
 
-static bool bsEmitConst(BSEmit *e, BSValue value, BSOperand *operand)
+/*
+ * The operand spaces - constants, temporaries, name sites, includes, functions - are bounded by
+ * their operand's width. An allocation past the bound marks the chunk overflowed rather than
+ * failing at its site; the operand it returns is then meaningless, but nothing reads it before
+ * bsEmitFinish rejects the chunk.
+ */
+
+/* A constant's operand. Interned strings - names and literals - are shared, so a chunk holds each once. */
+static BSOperand bsEmitConst(BSEmit *e, BSValue value)
 {
-    /* Interned strings - names and literals - are shared through a map, so a chunk holds each once */
     bool interned = value.type == BS_STRING && (value.u.string->flags & BS_STR_INTERNED) != 0;
     if (interned) {
         if (e->constMap.type != BS_OBJECT) {
@@ -352,21 +360,19 @@ static bool bsEmitConst(BSEmit *e, BSValue value, BSOperand *operand)
         }
         BSValue index = bsObjectGetString(e->constMap, value);
         if (index.type == BS_NUMBER) {
-            *operand = (BSOperand) (BS_OPERAND_CONST | (uint32_t) index.u.number);
-            return true;
+            return (BSOperand) (BS_OPERAND_CONST | (uint32_t) index.u.number);
         }
         bsObjectSetString(e->constMap, value, bsNumber((double) e->constCount));
     }
     if (e->constCount > BS_OPERAND_MAX) {
-        return false;
+        e->overflow = true;
     }
     if (e->constCount == e->constCap) {
         e->constCap = e->constCap != 0 ? e->constCap * 2 : 16;
         e->constants = bsRealloc(e->constants, e->constCap * sizeof(BSValue));
     }
     e->constants[e->constCount] = bsRetain(value);
-    *operand = (BSOperand) (BS_OPERAND_CONST | (uint32_t) e->constCount++);
-    return true;
+    return (BSOperand) (BS_OPERAND_CONST | (uint32_t) e->constCount++);
 }
 
 
@@ -376,23 +382,22 @@ static void bsEmitInit(BSEmit *e, BSScript *script, size_t *functionCap)
     memset(e, 0, sizeof(*e));
     e->script = script;
     e->functionCap = functionCap;
-    bsEmitConst(e, bsNull(), &e->nullConst);
+    e->nullConst = bsEmitConst(e, bsNull());
 }
 
 
 /* Allocate the next temporary register */
-static bool bsTempAlloc(BSEmit *e, uint16_t *reg)
+static uint16_t bsTempAlloc(BSEmit *e)
 {
     size_t index = e->slotCount + e->tempTop;
     if (index > BS_OPERAND_MAX) {
-        return false;
+        e->overflow = true;
     }
     e->tempTop++;
     if (e->tempTop > e->tempMax) {
         e->tempMax = e->tempTop;
     }
-    *reg = (uint16_t) index;
-    return true;
+    return (uint16_t) index;
 }
 
 
@@ -425,11 +430,10 @@ static void bsSlotAdd(BSEmit *e, BSValue name)
 
 
 /* Allocate a global-name cache site for a name instruction; the operand is its index */
-static bool bsEmitSite(BSEmit *e, BSValue name, uint16_t *site)
+static uint16_t bsEmitSite(BSEmit *e, BSValue name)
 {
-    BSOperand constant;
-    if (!bsEmitConst(e, name, &constant) || e->cacheCount > BS_OPERAND_MAX) {
-        return false;
+    if (e->cacheCount > BS_OPERAND_MAX) {
+        e->overflow = true;
     }
     if (e->cacheCount == e->cacheCap) {
         e->cacheCap = e->cacheCap != 0 ? e->cacheCap * 2 : 8;
@@ -437,9 +441,8 @@ static bool bsEmitSite(BSEmit *e, BSValue name, uint16_t *site)
     }
     BSCallCache *cache = &e->caches[e->cacheCount];
     memset(cache, 0, sizeof(*cache));
-    cache->nameIndex = BS_OPERAND_INDEX(constant);
-    *site = (uint16_t) e->cacheCount++;
-    return true;
+    cache->nameIndex = BS_OPERAND_INDEX(bsEmitConst(e, name));
+    return (uint16_t) e->cacheCount++;
 }
 
 
@@ -660,6 +663,14 @@ static uint8_t bsBinaryOpcode(const char *op)
 }
 
 
+/* Whether an expression model computes its value - a call or an operator - rather than naming one */
+static bool bsExprComputes(BSValue model)
+{
+    return bsObjectHasString(model, bsKeys.function) || bsObjectHasString(model, bsKeys.binary) ||
+        bsObjectHasString(model, bsKeys.unary);
+}
+
+
 /*
  * Compile an expression to an operand: a constant or a local costs no instruction; anything else
  * is computed into the lowest free temporary, which stays allocated for the caller to consume.
@@ -672,15 +683,16 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
 
     BSValue number = bsObjectGetString(model, bsKeys.number);
     if (number.type == BS_NUMBER) {
-        return bsEmitConst(e, number, operand);
+        *operand = bsEmitConst(e, number);
+        return true;
     }
 
     BSValue string = bsObjectGetString(model, bsKeys.string);
     if (string.type == BS_STRING) {
         BSValue interned = bsInternName(string);
-        bool ok = bsEmitConst(e, interned, operand);
+        *operand = bsEmitConst(e, interned);
         bsRelease(interned);
-        return ok;
+        return true;
     }
 
     BSValue variable = bsObjectGetString(model, bsKeys.variable);
@@ -690,11 +702,9 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
             *operand = e->nullConst;
             return true;
         }
-        if (strcmp(name, "true") == 0) {
-            return bsEmitConst(e, bsBoolean(true), operand);
-        }
-        if (strcmp(name, "false") == 0) {
-            return bsEmitConst(e, bsBoolean(false), operand);
+        if (strcmp(name, "true") == 0 || strcmp(name, "false") == 0) {
+            *operand = bsEmitConst(e, bsBoolean(name[0] == 't'));
+            return true;
         }
         BSValue interned = bsInternName(variable);
         int slot = bsSlotFind(e, interned);
@@ -704,12 +714,8 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
             return true;
         }
         if (slot >= 0) {
-            uint16_t temp;
-            if (!bsTempAlloc(e, &temp)) {
-                return false; /* GCOV_EXCL_LINE - 32768 live temporaries need an expression nested that deep */
-            }
-            bsEmitInst(e, BS_OP_LOAD_SLOT, temp, (uint16_t) slot, 0);
-            *operand = temp;
+            *operand = bsTempAlloc(e);
+            bsEmitInst(e, BS_OP_LOAD_SLOT, *operand, (uint16_t) slot, 0);
             return true;
         }
     }
@@ -718,15 +724,12 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
         return bsEmitExprOperand(e, bsObjectGetString(model, bsKeys.group), operand);
     }
 
-    uint16_t temp;
-    if (!bsTempAlloc(e, &temp)) {
-        return false; /* GCOV_EXCL_LINE - 32768 live temporaries need an expression nested that deep */
-    }
-    if (!bsEmitExprTo(e, model, temp)) {
+    /* A global variable loads into a temporary; a call or an operator computes into one */
+    if (variable.type != BS_STRING && !bsExprComputes(model)) {
         return false;
     }
-    *operand = temp;
-    return true;
+    *operand = bsTempAlloc(e);
+    return bsEmitExprTo(e, model, *operand);
 }
 
 
@@ -774,7 +777,7 @@ static bool bsEmitCallTo(BSEmit *e, BSValue function, uint16_t dst)
     BSValue args = bsObjectGetString(function, bsKeys.args);
     size_t argCount = bsArrayCount(args);
     if (argCount > BS_OPERAND_MAX) {
-        return false;
+        e->overflow = true;
     }
     uint16_t base = e->tempTop;
     BSOperand argInline[16];
@@ -787,20 +790,16 @@ static bool bsEmitCallTo(BSEmit *e, BSValue function, uint16_t dst)
         e->tempTop = base;
         BSValue interned = bsInternName(name);
         int slot = bsSlotFind(e, interned);
-        uint16_t site = 0;
-        ok = slot >= 0 || bsEmitSite(e, interned, &site);
+        if (slot >= 0) {
+            bsEmitInst(e, BS_OP_CALL_SLOT, dst, (uint16_t) slot, (uint16_t) argCount);
+        } else {
+            bsEmitInst(e, BS_OP_CALL_NAME, dst, bsEmitSite(e, interned), (uint16_t) argCount);
+        }
         bsRelease(interned);
-        if (ok) {
-            if (slot >= 0) {
-                bsEmitInst(e, BS_OP_CALL_SLOT, dst, (uint16_t) slot, (uint16_t) argCount);
-            } else {
-                bsEmitInst(e, BS_OP_CALL_NAME, dst, site, (uint16_t) argCount);
-            }
-            for (size_t ix = 0; ix < argCount; ix += BS_OPERANDS_PER_DATA) {
-                bsEmitInst(e, BS_OP_DATA, operands[ix],
-                           ix + 1 < argCount ? operands[ix + 1] : 0,
-                           ix + 2 < argCount ? operands[ix + 2] : 0);
-            }
+        for (size_t ix = 0; ix < argCount; ix += BS_OPERANDS_PER_DATA) {
+            bsEmitInst(e, BS_OP_DATA, operands[ix],
+                       ix + 1 < argCount ? operands[ix + 1] : 0,
+                       ix + 2 < argCount ? operands[ix + 2] : 0);
         }
     }
     if (operands != argInline) {
@@ -833,10 +832,7 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
          */
         if (dst < e->slotCount) {
             uint16_t base = e->tempTop;
-            uint16_t temp;
-            if (!bsTempAlloc(e, &temp)) {
-                return false; /* GCOV_EXCL_LINE - 32768 live temporaries need an expression nested that deep */
-            }
+            uint16_t temp = bsTempAlloc(e);
             if (!bsEmitIfTo(e, bsObjectGetString(function, bsKeys.args), temp)) {
                 return false;
             }
@@ -857,10 +853,7 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
         bool isAnd = strcmp(opText, "&&") == 0;
         if (isAnd || strcmp(opText, "||") == 0) {
             uint16_t base = e->tempTop;
-            uint16_t acc = dst;
-            if (dst < e->slotCount && !bsTempAlloc(e, &acc)) {
-                return false; /* GCOV_EXCL_LINE - 32768 live temporaries need an expression nested that deep */
-            }
+            uint16_t acc = dst < e->slotCount ? bsTempAlloc(e) : dst;
             if (!bsEmitExprTo(e, bsObjectGetString(binary, bsKeys.left), acc)) {
                 return false;
             }
@@ -922,7 +915,7 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
         return bsEmitExprTo(e, bsObjectGetString(model, bsKeys.group), dst);
     }
 
-    /* A global variable - or a constant or local, which moves into dst */
+    /* A global variable or an unassigned local loads into dst; a constant or an assigned local moves */
     BSValue variable = bsObjectGetString(model, bsKeys.variable);
     if (variable.type == BS_STRING) {
         const char *name = bsStringData(variable);
@@ -930,13 +923,9 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
             BSValue interned = bsInternName(variable);
             int slot = bsSlotFind(e, interned);
             if (slot < 0) {
-                uint16_t site;
-                bool ok = bsEmitSite(e, interned, &site);
+                bsEmitInst(e, BS_OP_LOAD_NAME, dst, bsEmitSite(e, interned), 0);
                 bsRelease(interned);
-                if (ok) {
-                    bsEmitInst(e, BS_OP_LOAD_NAME, dst, site, 0);
-                }
-                return ok;
+                return true;
             }
             bsRelease(interned);
             if (!bsAssignedTest(e, slot)) {
@@ -945,12 +934,13 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
             }
         }
     }
-    uint16_t base = e->tempTop;
+    if (bsExprComputes(model)) {
+        return false; /* a malformed call or operator */
+    }
     BSOperand operand;
     if (!bsEmitExprOperand(e, model, &operand)) {
         return false;
     }
-    e->tempTop = base;
     if (operand != dst) {
         bsEmitInst(e, BS_OP_MOVE, dst, operand, 0);
     }
@@ -961,18 +951,10 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
 /* Compile an expression statement - a call drops its result; anything else is computed and left */
 static bool bsEmitExprDiscard(BSEmit *e, BSValue model)
 {
-    if (model.type != BS_OBJECT) {
-        return false;
-    }
     BSValue function = bsObjectGetString(model, bsKeys.function);
-    if (function.type == BS_OBJECT) {
-        BSValue name = bsObjectGetString(function, bsKeys.name);
-        if (name.type != BS_STRING) {
-            return false;
-        }
-        if (strcmp(bsStringData(name), "if") != 0) {
-            return bsEmitCallTo(e, function, BS_REG_DISCARD);
-        }
+    BSValue name = bsObjectGetString(function, bsKeys.name);
+    if (name.type == BS_STRING && strcmp(bsStringData(name), "if") != 0) {
+        return bsEmitCallTo(e, function, BS_REG_DISCARD);
     }
     uint16_t base = e->tempTop;
     BSOperand operand;
@@ -1045,12 +1027,11 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
             bsAssignedSet(e, slot);
             return true;
         }
-        uint16_t site;
-        bool ok = bsEmitSite(e, interned, &site);
+        uint16_t site = bsEmitSite(e, interned);
         bsRelease(interned);
         uint16_t base = e->tempTop;
         BSOperand operand;
-        if (!ok || !bsEmitExprOperand(e, expr, &operand)) {
+        if (!bsEmitExprOperand(e, expr, &operand)) {
             return false;
         }
         e->tempTop = base;
@@ -1135,8 +1116,11 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         for (size_t inc = 0; inc < includeCount; inc++) {
             BSValue include = bsArrayGet(includes, inc);
             BSValue url = bsObjectGetString(include, bsKeys.url);
-            if (include.type != BS_OBJECT || url.type != BS_STRING || e->includeCount > BS_OPERAND_MAX) {
+            if (include.type != BS_OBJECT || url.type != BS_STRING) {
                 return false;
+            }
+            if (e->includeCount > BS_OPERAND_MAX) {
+                e->overflow = true;
             }
             if (e->includeCount == e->includeCap) {
                 e->includeCap = e->includeCap != 0 ? e->includeCap * 2 : 4;
@@ -1186,7 +1170,11 @@ int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc)
 }
 
 
-static void bsEmitFinish(BSEmit *e, BSCode *code)
+/*
+ * Finish a chunk into "code", resolving its forward jumps. Returns false if an operand space
+ * overflowed - the chunk is then invalid, but complete, so bsCodeFree releases it.
+ */
+static bool bsEmitFinish(BSEmit *e, BSCode *code)
 {
     for (size_t ix = 0; ix < e->patchCount; ix++) {
         BSValue pc = e->labels.type == BS_OBJECT ? bsObjectGetString(e->labels, e->patches[ix].label) :
@@ -1195,12 +1183,7 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
         if (pc.type == BS_NUMBER) {
             inst->w = (uint32_t) pc.u.number;
         } else {
-            BSOperand name = 0;
-            /* GCOV_EXCL_START - a chunk with 32768 constants and an unknown label */
-            if (!bsEmitConst(e, e->patches[ix].label, &name)) {
-                name = 0;
-            }
-            /* GCOV_EXCL_STOP */
+            BSOperand name = bsEmitConst(e, e->patches[ix].label);
             if (inst->op == BS_OP_JUMP) {
                 inst->op = BS_OP_JUMP_UNDEF;
                 inst->a = BS_OPERAND_INDEX(name);
@@ -1237,27 +1220,23 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
     code->slotNames = e->slotNames;
     code->slotCount = e->slotCount;
     code->caches = e->caches;
+    return !e->overflow;
 }
 
 
-/* Abandon a failed emit: the chunk it would have made is finished and released */
-static void bsEmitDiscard(BSEmit *e)
-{
-    BSCode code;
-    bsEmitFinish(e, &code);
-    bsCodeFree(&code);
-}
-
-
-/* Emit a statement list as a chunk that returns null, into "code". On failure the emit is discarded. */
+/*
+ * Emit a statement list as a chunk that returns null, into "code". Returns false - the chunk
+ * released - for a malformed statement or an overflowed operand space.
+ */
 static bool bsEmitBody(BSEmit *e, BSValue statements, BSCode *code)
 {
-    if (!bsEmitStatements(e, statements)) {
-        bsEmitDiscard(e);
+    bool emitted = bsEmitStatements(e, statements);
+    bsEmitInst(e, BS_OP_RETURN, e->nullConst, 0, 0);
+    bool finished = bsEmitFinish(e, code);
+    if (!emitted || !finished) {
+        bsCodeFree(code);
         return false;
     }
-    bsEmitInst(e, BS_OP_RETURN, e->nullConst, 0, 0);
-    bsEmitFinish(e, code);
     return true;
 }
 
@@ -1319,7 +1298,7 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
         return false;
     }
     if (index > 0xffffu) {
-        return false; /* GCOV_EXCL_LINE - a script defining 65536 functions */
+        e->overflow = true;
     }
     bsEmitInst(e, BS_OP_FUNCTION, (uint16_t) index, 0, 0);
     return true;
@@ -1328,21 +1307,19 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
 
 BSExpr *bsExprFromModel(BSValue model)
 {
-    if (model.type != BS_OBJECT) {
-        return NULL;
-    }
     bsModelKeysInit();
     BSEmit e;
     bsEmitInit(&e, NULL, NULL);
-    BSOperand operand;
-    if (!bsEmitExprOperand(&e, model, &operand)) {
-        bsEmitDiscard(&e);
-        return NULL;
-    }
+    BSOperand operand = e.nullConst;
+    bool emitted = bsEmitExprOperand(&e, model, &operand);
     bsEmitInst(&e, BS_OP_RETURN, operand, 0, 0);
     BSExpr *expr = bsAlloc(sizeof(BSExpr));
     memset(expr, 0, sizeof(*expr));
-    bsEmitFinish(&e, &expr->code);
+    bool finished = bsEmitFinish(&e, &expr->code);
+    if (!emitted || !finished) {
+        bsExprFree(expr);
+        return NULL;
+    }
     expr->model = bsRetain(model);
     return expr;
 }
@@ -1405,9 +1382,11 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
 }
 
 
+/* Emit a streamed statement; an overflow is reported as the decoder's invalid-model error */
 static bool bsEmitStreamedStatement(BSValue statement, void *data)
 {
-    return bsEmitStatement(data, statement);
+    BSEmit *e = data;
+    return bsEmitStatement(e, statement) && !e->overflow;
 }
 
 
@@ -1419,13 +1398,17 @@ BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scrip
     BSEmit e;
     bsEmitInit(&e, script, &functionCap);
     BSValue rest;
-    if (!bsJSONDecodeStatements(text, size, bsEmitStreamedStatement, &e, &rest, error)) {
-        bsEmitDiscard(&e);
+    bool decoded = bsJSONDecodeStatements(text, size, bsEmitStreamedStatement, &e, &rest, error);
+    bsEmitInst(&e, BS_OP_RETURN, e.nullConst, 0, 0);
+    bool finished = bsEmitFinish(&e, &script->code);
+    if (!decoded || !finished) {
+        bsRelease(rest);
+        if (error != NULL && *error == NULL) {
+            *error = "Invalid BareScript model";
+        }
         bsScriptRelease(script);
         return NULL;
     }
-    bsEmitInst(&e, BS_OP_RETURN, e.nullConst, 0, 0);
-    bsEmitFinish(&e, &script->code);
     bsScriptInfo(script, rest, scriptName);
     bsRelease(rest);
 
