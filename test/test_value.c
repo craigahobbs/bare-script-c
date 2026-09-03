@@ -420,6 +420,34 @@ TEST(value_object)
 }
 
 
+TEST(value_object_new_capacity)
+{
+    /* A large expected count starts the object with its lookup table; a small one stays packed */
+    BSValue object = bsObjectNewCapacity(100);
+    ASSERT_INT_EQ(object.u.object->packed, 0);
+    ASSERT_NOT_NULL(object.u.object->u.tree.lookup);
+    ASSERT_INT_EQ(object.u.object->u.tree.lookupMask + 1, 256);
+    char key[16];
+    for (int ix = 0; ix < 100; ix++) {
+        snprintf(key, sizeof(key), "cap%d", ix);
+        bsObjectSet(object, key, bsNumber(ix));
+    }
+    ASSERT_INT_EQ(bsObjectCount(object), 100);
+    ASSERT_INT_EQ(object.u.object->u.tree.lookupMask + 1, 256);
+    ASSERT_VALUE(bsRetain(bsObjectGet(object, "cap99")), "99");
+    ASSERT_VALUE(bsRetain(bsObjectGet(object, "cap0")), "0");
+    ASSERT_TRUE(bsObjectDelete(object, "cap50"));
+    ASSERT_INT_EQ(bsObjectGet(object, "cap50").type, BS_NULL);
+    bsRelease(object);
+
+    object = bsObjectNewCapacity(3);
+    ASSERT_INT_EQ(object.u.object->packed, 1);
+    bsObjectSet(object, "a", bsNumber(1));
+    ASSERT_VALUE(bsRetain(bsObjectGet(object, "a")), "1");
+    bsRelease(object);
+}
+
+
 TEST(value_object_treap_remove)
 {
     /* Deleting every key of a large content-keyed object rotates nodes down on both sides */

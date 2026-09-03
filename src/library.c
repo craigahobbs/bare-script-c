@@ -1110,8 +1110,8 @@ static void bsMatchKeyGroupGrow(size_t count)
 static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSubject *subject,
                                  const BSRegexMatch *match)
 {
-    BSValue groups = bsObjectNew();
     bool uniqueNames = bsRegexGroupNamesUnique(regex);
+    BSValue groups = bsObjectNewCapacity(match->groupCount * (uniqueNames ? 2 : 1));
     if (match->groupCount > bsMatchKeyGroupCount) {
         bsMatchKeyGroupGrow(match->groupCount);
     }

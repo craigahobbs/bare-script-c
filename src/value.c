@@ -1570,6 +1570,28 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
 }
 
 
+BSValue bsObjectNewCapacity(size_t count)
+{
+    BSValue value = bsObjectNew();
+    if (count > BS_OBJECT_SMALL) {
+        /* Born in list form with a table sized for every key, so the appends never rebuild it */
+        BSObject *object = value.u.object;
+        object->packed = 0;
+        object->u.tree.root = NULL;
+        object->u.tree.insertHead = NULL;
+        object->u.tree.insertTail = NULL;
+        uint32_t capacity = 16;
+        while (capacity < (uint32_t) count * 2 + 2) {
+            capacity *= 2;
+        }
+        object->u.tree.lookup = bsAlloc(capacity * sizeof(BSObjectNode *));
+        memset(object->u.tree.lookup, 0, capacity * sizeof(BSObjectNode *));
+        object->u.tree.lookupMask = capacity - 1;
+    }
+    return value;
+}
+
+
 void bsObjectAppend(BSValue value, BSValue key, BSValue item)
 {
     BSObject *object = value.u.object;

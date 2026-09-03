@@ -192,6 +192,9 @@ BSValue bsStringTake(BSString *string); /* takes ownership of the string referen
 BSValue bsArrayNew(void);
 BSValue bsArrayNewCapacity(size_t capacity);
 BSValue bsObjectNew(void);
+
+/* A new object expecting "count" keys - past the small-object threshold it is born with its lookup table */
+BSValue bsObjectNewCapacity(size_t count);
 BSValue bsFunctionNew(const char *name, BSFunctionFn fn, void *data, void (*dataFree)(void *data));
 
 
