@@ -188,15 +188,17 @@ void bsSystemIncludePath(const char *directory)
 }
 
 
-const char *bsSystemIncludeGet(const char *name)
+/*
+ * A registered system include's text, or a search path directory's - registered once found, so a
+ * directory takes precedence over the bundled library and a script can run against an include
+ * library checkout. NULL if neither has the include.
+ */
+static const char *bsSystemIncludeText(const char *name)
 {
     BSValue text = bsObjectGet(bsSystemIncludes, name);
     if (text.type == BS_STRING) {
         return bsStringData(text);
     }
-
-    /* Search the registered directories, caching what is found. A directory takes precedence over
-       the bundled library, so a script can run against an include library checkout. */
     for (size_t ix = 0; ix < bsArrayCount(bsSystemIncludePaths); ix++) {
         BSValue directory = bsArrayGet(bsSystemIncludePaths, ix);
         BSValue path = bsStringNewFormat("%s/%s", bsStringData(directory), name);
@@ -204,21 +206,22 @@ const char *bsSystemIncludeGet(const char *name)
         memset(&request, 0, sizeof(request));
         request.url = bsStringData(path);
         request.headers = bsNull();
-        size_t size = 0;
-        char *fileText = bsFetchReadOnly(&request, &size, NULL);
+        char *fileText = bsFetchReadOnly(&request, NULL, NULL);
         bsRelease(path);
         if (fileText != NULL) {
-            if (bsSystemIncludes.type != BS_OBJECT) {
-                bsSystemIncludes = bsObjectNew();
-            }
-            bsObjectSet(bsSystemIncludes, name, bsStringNewSize(fileText, size));
+            bsSystemIncludeRegister(name, fileText);
             free(fileText);
             return bsStringData(bsObjectGet(bsSystemIncludes, name));
         }
     }
+    return NULL;
+}
 
-    /* The bundled include library, as a compiled JSON script model */
-    return bsIncludeSource(name);
+
+const char *bsSystemIncludeGet(const char *name)
+{
+    const char *text = bsSystemIncludeText(name);
+    return text != NULL ? text : bsIncludeSource(name);
 }
 
 
@@ -778,30 +781,23 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
     bsObjectSetString(includes, includeKey, bsBoolean(true));
     bsRelease(includeKey);
 
-    if (system && bsArrayCount(bsSystemIncludePaths) == 0 &&
-        (bsSystemIncludes.type != BS_OBJECT ||
-         bsObjectGet(bsSystemIncludes, bsStringData(includeUrl)).type != BS_STRING)) {
-        BSScript *cached = bsIncludeScript(bsStringData(includeUrl));
-        if (cached != NULL) {
-            BSValue result = bsRunCode(&cached->code, cached, options, NULL, false);
-            bsRelease(result);
-            bsScriptRelease(cached);
-            bsRelease(includeUrl);
-            if (options->error.type == BS_STRING) {
-                return false; /* GCOV_EXCL_LINE - bundled includes are trusted */
-            }
-            return true;
-        }
-    }
-
     const char *includeText = NULL;
     char *includeOwned = NULL;
     size_t includeSize = 0;
     if (system) {
-        includeText = bsSystemIncludeGet(bsStringData(includeUrl));
-        if (includeText != NULL) {
-            includeSize = strlen(includeText);
+        includeText = bsSystemIncludeText(bsStringData(includeUrl));
+        if (includeText == NULL) {
+            /* The bundled include library's compiled script, cached for the thread */
+            BSScript *cached = bsIncludeScript(bsStringData(includeUrl));
+            if (cached == NULL) {
+                goto includeFailed;
+            }
+            bsRelease(bsRunCode(&cached->code, cached, options, NULL, false));
+            bsScriptRelease(cached);
+            bsRelease(includeUrl);
+            return options->error.type != BS_STRING;
         }
+        includeSize = strlen(includeText);
     } else if (options->fetchFn != NULL) {
         BSFetchRequest request;
         memset(&request, 0, sizeof(request));
