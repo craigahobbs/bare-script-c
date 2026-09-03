@@ -1572,6 +1572,12 @@ static uint32_t rxEmit(RxEmit *e, uint8_t op, uint32_t a, uint32_t b, uint32_t o
 }
 
 
+static uint32_t rxEmitOp(RxEmit *e, uint8_t op)
+{
+    return rxEmit(e, op, 0, 0, 0, 0, 0);
+}
+
+
 /* Move a class node's data into the program's class table. Returns the class index. */
 static uint32_t rxEmitClass(RxEmit *e, RxNode *node)
 {
@@ -1656,7 +1662,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
             break;
 
         case RX_ANY:
-            rxEmit(e, (e->flags & BS_REGEX_DOTALL) != 0 ? RXI_ANY_ALL : RXI_ANY, 0, 0, 0, 0, 0);
+            rxEmitOp(e, (e->flags & BS_REGEX_DOTALL) != 0 ? RXI_ANY_ALL : RXI_ANY);
             break;
 
         case RX_CLASS:
@@ -1682,7 +1688,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
             for (size_t ix = 0; ix < count; ix++) {
                 pcs[ix] = (uint32_t) e->count;
                 rxEmitChain(e, node->u.alt.branches[ix]);
-                jumps[ix] = rxEmit(e, RXI_JMP, 0, 0, 0, 0, 0);
+                jumps[ix] = rxEmitOp(e, RXI_JMP);
             }
             for (size_t ix = 0; ix < count; ix++) {
                 e->inst[jumps[ix]].a = (uint32_t) e->count;
@@ -1723,19 +1729,19 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
         }
 
         case RX_BOL:
-            rxEmit(e, (e->flags & BS_REGEX_MULTILINE) != 0 ? RXI_BOL_ML : RXI_BOL, 0, 0, 0, 0, 0);
+            rxEmitOp(e, (e->flags & BS_REGEX_MULTILINE) != 0 ? RXI_BOL_ML : RXI_BOL);
             break;
 
         case RX_EOL:
-            rxEmit(e, (e->flags & BS_REGEX_MULTILINE) != 0 ? RXI_EOL_ML : RXI_EOL, 0, 0, 0, 0, 0);
+            rxEmitOp(e, (e->flags & BS_REGEX_MULTILINE) != 0 ? RXI_EOL_ML : RXI_EOL);
             break;
 
         case RX_WORD_BOUNDARY:
-            rxEmit(e, RXI_WB, 0, 0, 0, 0, 0);
+            rxEmitOp(e, RXI_WB);
             break;
 
         case RX_NOT_WORD_BOUNDARY:
-            rxEmit(e, RXI_NWB, 0, 0, 0, 0, 0);
+            rxEmitOp(e, RXI_NWB);
             break;
 
         case RX_BACKREF:
@@ -1767,7 +1773,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
             uint32_t look = rxEmit(e, ahead ? RXI_LOOKAHEAD : RXI_LOOKBEHIND, 0, 0, lookIndex, negate, 0);
             e->inst[look].a = (uint32_t) e->count;
             rxEmitChain(e, node->u.look.sub);
-            rxEmit(e, ahead ? RXI_MATCH_SUB : RXI_MATCH_AT, 0, 0, 0, 0, 0);
+            rxEmitOp(e, ahead ? RXI_MATCH_SUB : RXI_MATCH_AT);
             e->inst[look].b = (uint32_t) e->count;
             break;
         }
@@ -1800,7 +1806,7 @@ static void rxEmitProgram(RxCompiler *compiler)
     memset(&e, 0, sizeof(e));
     e.flags = regex->flags;
     rxEmitChain(&e, compiler->root);
-    rxEmit(&e, RXI_MATCH, 0, 0, 0, 0, 0);
+    rxEmitOp(&e, RXI_MATCH);
     regex->prog = bsRealloc(e.inst, e.count * sizeof(RxInst));
     regex->classes = e.classes;
     regex->classCount = e.classCount;
