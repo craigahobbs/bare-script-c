@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "test.h"
@@ -23,10 +24,14 @@ static BSTestCase *bsTestTail = NULL;
 
 /* The current test's state */
 static jmp_buf bsTestJump;
+static const BSTestCase *bsTestCurrent = NULL;
 static bool bsTestRunning = false;
 static bool bsTestFailed = false;
 static size_t bsTestAssertions = 0;
-static size_t bsTestFailures = 0;
+
+/* Quiet mode prints a dot per test and collects the failure details for the end */
+static bool bsTestQuiet = false;
+static BSStringBuilder bsTestFailText;
 
 
 void bsTestRegister(BSTestCase *testCase)
@@ -50,13 +55,31 @@ void bsTestFail(const char *file, int line, const char *format, ...)
 {
     bsTestAssertions++;
     bsTestFailed = true;
-    bsTestFailures++;
-    printf("  FAIL %s:%d: ", file, line);
+
+    /* Format the failure message */
     va_list args;
+    va_list argsCopy;
     va_start(args, format);
-    vprintf(format, args);
+    va_copy(argsCopy, args);
+    int size = vsnprintf(NULL, 0, format, argsCopy);
+    va_end(argsCopy);
+    char *message = malloc((size_t) size + 1);
+    vsnprintf(message, (size_t) size + 1, format, args);
     va_end(args);
-    printf("\n");
+
+    /* Report it now, under the test's line, or collect it for the end of a quiet run */
+    const char *name = bsTestCurrent != NULL ? bsTestCurrent->name : "(none)";
+    if (bsTestQuiet) {
+        putchar('F');
+        fflush(stdout);
+        bsSBAppendFormat(&bsTestFailText,
+                         "======================================================================\n"
+                         "FAIL: %s\n    %s:%d: %s\n", name, file, line, message);
+    } else {
+        printf("FAIL\n    %s:%d: %s\n", file, line, message);
+    }
+    free(message);
+
     if (bsTestRunning) {
         longjmp(bsTestJump, 1);
     }
@@ -231,18 +254,38 @@ static void bsTestTempClear(void)
  */
 
 
-int bsTestRun(const char *filter)
+/* Seconds on a monotonic clock */
+static double bsTestNow(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double) ts.tv_sec + (double) ts.tv_nsec * 1e-9;
+}
+
+
+int bsTestRun(const char *filter, bool quiet)
 {
     size_t testCount = 0;
     size_t failCount = 0;
     BSTestCase *testCase;
+    double timeBegin = bsTestNow();
 
+    bsTestQuiet = quiet;
     for (testCase = bsTestHead; testCase != NULL; testCase = testCase->next) {
         if (filter != NULL && strstr(testCase->name, filter) == NULL) {
             continue;
         }
         testCount++;
+        bsTestCurrent = testCase;
         bsTestFailed = false;
+
+        /* Name the test before it runs, so a crash still says which one */
+        if (!quiet) {
+            printf("%s ... ", testCase->name);
+        }
+        fflush(stdout);
+
+        double testBegin = bsTestNow();
         bsTestRunning = true;
         if (setjmp(bsTestJump) == 0) {
             testCase->fn();
@@ -250,9 +293,13 @@ int bsTestRun(const char *filter)
         bsTestRunning = false;
         if (bsTestFailed) {
             failCount++;
-            printf("  in test \"%s\"\n", testCase->name);
+        } else if (quiet) {
+            putchar('.');
+        } else {
+            printf("ok (%.1fms)\n", (bsTestNow() - testBegin) * 1000);
         }
     }
+    bsTestCurrent = NULL;
 
     bsTestTempClear();
     bsTestLogClear();
@@ -262,10 +309,27 @@ int bsTestRun(const char *filter)
     bsIncludeCleanup();
     bsLibraryCleanup();
 
-    printf("\n%zu test%s, %zu assertion%s, %zu failure%s\n", testCount, testCount == 1 ? "" : "s",
-           bsTestAssertions, bsTestAssertions == 1 ? "" : "s", bsTestFailures,
-           bsTestFailures == 1 ? "" : "s");
-    return failCount != 0 ? 1 : 0;
+    /* The report - a quiet run's failure details come first */
+    if (quiet) {
+        printf("\n");
+        if (bsTestFailText.data != NULL) {
+            printf("%s", bsTestFailText.data);
+        }
+    }
+    bsSBFree(&bsTestFailText);
+    printf("----------------------------------------------------------------------\n");
+    printf("Ran %zu test%s, %zu assertion%s in %.3fs\n\n", testCount, testCount == 1 ? "" : "s",
+           bsTestAssertions, bsTestAssertions == 1 ? "" : "s", bsTestNow() - timeBegin);
+    if (testCount == 0) {
+        printf("NO TESTS RAN\n");
+        return 1;
+    }
+    if (failCount != 0) {
+        printf("FAILED (failures=%zu)\n", failCount);
+        return 1;
+    }
+    printf("OK\n");
+    return 0;
 }
 
 

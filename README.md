@@ -178,10 +178,13 @@ sweeps the built-in library - JSON, sorting, strings, regular expressions, objec
 dates - grows the code 5% and moves nothing, the held-out script included. The two-program,
 equal-weight mix is the optimum.
 
-`make test` and `make cover` accept a `TEST` variable that filters test cases by name substring:
+The unit tests print a line per test with its result and duration, then a summary in the shape
+of Python's unittest report. `make test` and `make cover` accept a `TEST` variable that filters test
+cases by name substring, and `QUIET=1` for a dot per test with the failure details at the end:
 
 ```sh
 make test TEST=regex
+make test QUIET=1
 ```
 
 

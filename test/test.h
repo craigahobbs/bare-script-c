@@ -28,8 +28,12 @@ typedef struct BSTestCase {
 /* Register a test case - called automatically by the TEST macro */
 void bsTestRegister(BSTestCase *testCase);
 
-/* Run the registered tests, optionally filtered by a name substring */
-int bsTestRun(const char *filter);
+/*
+ * Run the registered tests, optionally filtered by a name substring. By default each test prints a
+ * line with its result and duration; quiet prints a dot per test and defers failure details to the
+ * end. Returns 0 when every test passes, 1 otherwise, or 1 when the filter matches no test.
+ */
+int bsTestRun(const char *filter, bool quiet);
 
 /* Report an assertion failure and abort the current test */
 void bsTestFail(const char *file, int line, const char *format, ...);

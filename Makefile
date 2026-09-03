@@ -139,6 +139,7 @@ help:
 	@echo "  clean         remove the build directory"
 	@echo
 	@echo "  TEST=<name>   filter the unit tests by name substring"
+	@echo "  QUIET=1       print a dot per unit test instead of a line"
 	@echo "  libcurl HTTP fetch: $(if $(strip $(CURL_LIBS)),enabled,disabled)"
 
 
@@ -291,7 +292,7 @@ $(TEST_BIN): $(TEST_OBJS) $(OBJ_DIR)/bare.o $(LIB_A)
 
 .PHONY: test
 test: $(TEST_BIN)
-	$(TEST_BIN) $(TEST)
+	$(TEST_BIN) $(if $(QUIET),-q )$(TEST)
 
 
 #
@@ -318,7 +319,7 @@ COVER_GCOV := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/coverage/%.c.gcov,$(COVER_S
 .PHONY: cover
 cover: $(COVER_BIN)
 	rm -f $(COVER_DIR)/*.gcda $(BUILD_DIR)/coverage/*.gcov
-	$(COVER_BIN) $(TEST)
+	$(COVER_BIN) $(if $(QUIET),-q )$(TEST)
 	@mkdir -p $(BUILD_DIR)/coverage
 	$(GCOV) -o $(COVER_DIR) $(COVER_SRCS) > /dev/null
 	@mv *.gcov $(BUILD_DIR)/coverage/

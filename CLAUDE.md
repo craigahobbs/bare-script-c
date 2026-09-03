@@ -31,6 +31,7 @@ Filtering and diagnostics:
 ```sh
 make test TEST=regex_compile        # C tests whose name contains the substring
 make cover TEST=json                # same filter, under coverage
+make test QUIET=1                   # a dot per test instead of a line per test
 make cover VERBOSE=1                # list every uncovered line
 make test-include TEST=testSchemaParse   # filter the BareScript suite
 ```
