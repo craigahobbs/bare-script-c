@@ -405,7 +405,6 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
         *result = array;
         return true;
     }
-    bsArrayReserve(array, 8);
     while (true) {
         BSValue item;
         if (!bsJSONDecodeValue(parser, depth + 1, &item)) {

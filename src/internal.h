@@ -118,7 +118,6 @@ bool bsJSONDecodeStatements(const char *text, size_t size, bool (*emit)(BSValue 
  */
 struct BSInst {
     uint8_t op;
-    uint8_t x;
     uint16_t a;
     union {
         struct {

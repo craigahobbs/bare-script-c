@@ -208,7 +208,6 @@ struct BSRegex {
     bool uniqueNames;     /* no two groups share a name, so a match model can append each */
     RxNodeChunk *chunks;
     RxInst *prog;         /* the compiled program, and the tables its instructions refer to */
-    size_t progCount;
     struct RxClass *classes;
     size_t classCount;
     struct RxAlt *alts;
@@ -1820,7 +1819,6 @@ static void rxEmitProgram(BSRegex *regex)
     rxEmitChain(&e, regex->root);
     rxEmit(&e, RXI_MATCH, 0, 0, 0, 0, 0);
     regex->prog = bsRealloc(e.inst, e.count * sizeof(RxInst));
-    regex->progCount = e.count;
     regex->classes = e.classes;
     regex->classCount = e.classCount;
     regex->alts = e.alts;

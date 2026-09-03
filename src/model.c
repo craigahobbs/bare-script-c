@@ -327,7 +327,6 @@ static uint32_t bsEmitInst(BSEmit *e, uint8_t op, uint16_t a, uint16_t b, uint16
     }
     BSInst *inst = &e->inst[e->count];
     inst->op = op;
-    inst->x = 0;
     inst->a = a;
     inst->b = b;
     inst->c = c;
