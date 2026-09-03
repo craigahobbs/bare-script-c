@@ -1186,7 +1186,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             BSValue left = BS_READ(inst->b);
             BSValue right = BS_READ(inst->c);
             bsAssign(&regs[inst->a], (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
-                          bsArithmetic(left.u.number + right.u.number) : bsAddSlow(left, right));
+                     bsArithmetic(left.u.number + right.u.number) : bsAddSlow(left, right));
         }
         BS_NEXT();
 
@@ -1234,7 +1234,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CASE(BNOT) {
             BSValue value = BS_READ(inst->b);
             bsAssign(&regs[inst->a],
-                          bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull());
+                     bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull());
         }
         BS_NEXT();
 

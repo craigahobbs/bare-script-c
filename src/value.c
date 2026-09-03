@@ -1687,6 +1687,12 @@ static BSObjectNode *bsObjectFind(BSObjectNode *node, const char *key, size_t si
 }
 
 
+/*
+ * Find a key in a list-form object. The caller passes the key already through bsInternResolve, so
+ * a NULL "interned" means the key provably has no interned form - an object holding only interned
+ * keys can then answer a miss without a compare. Calling this with an unresolved key would report
+ * a stored interned key as absent.
+ */
 static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t size,
                                      BSString *interned)
 {
