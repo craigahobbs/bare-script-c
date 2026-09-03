@@ -662,6 +662,23 @@ static uint8_t bsBinaryOpcode(const char *op)
 }
 
 
+static uint8_t bsUnaryOpcode(const char *op)
+{
+    if (op[0] != '\0' && op[1] == '\0') {
+        if (op[0] == '-') {
+            return BS_OP_NEG;
+        }
+        if (op[0] == '!') {
+            return BS_OP_NOT;
+        }
+        if (op[0] == '~') {
+            return BS_OP_BNOT;
+        }
+    }
+    return 0;
+}
+
+
 /* Whether an expression model computes its value - a call or an operator - rather than naming one */
 static bool bsExprComputes(BSValue model)
 {
@@ -732,13 +749,23 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
 }
 
 
+/* Compile args[ix] into dst, or move null if that argument is missing */
+static bool bsEmitArgOrNull(BSEmit *e, BSValue args, size_t ix, size_t argCount, uint16_t dst)
+{
+    if (ix < argCount) {
+        return bsEmitExprTo(e, bsArrayGet(args, ix), dst);
+    }
+    bsEmitInst(e, BS_OP_MOVE, dst, e->nullConst, 0);
+    return true;
+}
+
+
 /* The conditional: if(cond, then, else) - the value of the branch taken, or null */
 static bool bsEmitIfTo(BSEmit *e, BSValue args, uint16_t dst)
 {
     size_t argCount = bsArrayCount(args);
-    BSOperand null = e->nullConst;
     if (argCount == 0) {
-        bsEmitInst(e, BS_OP_MOVE, dst, null, 0);
+        bsEmitInst(e, BS_OP_MOVE, dst, e->nullConst, 0);
         return true;
     }
     uint16_t base = e->tempTop;
@@ -748,21 +775,13 @@ static bool bsEmitIfTo(BSEmit *e, BSValue args, uint16_t dst)
     }
     e->tempTop = base;
     uint32_t jumpElse = bsEmitJumpInst(e, BS_OP_JUMP_FALSE, cond, 0);
-    if (argCount >= 2) {
-        if (!bsEmitExprTo(e, bsArrayGet(args, 1), dst)) {
-            return false;
-        }
-    } else {
-        bsEmitInst(e, BS_OP_MOVE, dst, null, 0);
+    if (!bsEmitArgOrNull(e, args, 1, argCount, dst)) {
+        return false;
     }
     uint32_t jumpEnd = bsEmitJumpInst(e, BS_OP_JUMP, 0, 0);
     e->inst[jumpElse].w = (uint32_t) e->count;
-    if (argCount >= 3) {
-        if (!bsEmitExprTo(e, bsArrayGet(args, 2), dst)) {
-            return false;
-        }
-    } else {
-        bsEmitInst(e, BS_OP_MOVE, dst, null, 0);
+    if (!bsEmitArgOrNull(e, args, 2, argCount, dst)) {
+        return false;
     }
     e->inst[jumpEnd].w = (uint32_t) e->count;
     return true;
@@ -889,15 +908,8 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
         if (op.type != BS_STRING) {
             return false;
         }
-        const char *opText = bsStringData(op);
-        uint8_t opcode = 0;
-        if (strcmp(opText, "-") == 0) {
-            opcode = BS_OP_NEG;
-        } else if (strcmp(opText, "!") == 0) {
-            opcode = BS_OP_NOT;
-        } else if (strcmp(opText, "~") == 0) {
-            opcode = BS_OP_BNOT;
-        } else {
+        uint8_t opcode = bsUnaryOpcode(bsStringData(op));
+        if (opcode == 0) {
             return false;
         }
         uint16_t base = e->tempTop;
