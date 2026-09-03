@@ -1266,17 +1266,23 @@ static void bsObjectLookupPut(BSObject *object, BSObjectNode *node)
     }
 }
 
-static void bsObjectLookupGrow(BSObject *object)
+/* Allocate an empty table with room for "count" keys at half load */
+static void bsObjectLookupAlloc(BSObject *object, size_t count)
 {
-    BSObjectNode **old = object->u.tree.lookup;
-    uint32_t oldMask = object->u.tree.lookupMask;
-    uint32_t capacity = old != NULL ? (oldMask + 1) * 2 : 16;
-    while (capacity < (uint32_t) object->count * 2 + 2) {
+    uint32_t capacity = 16;
+    while (capacity < (uint32_t) count * 2 + 2) {
         capacity *= 2;
     }
     object->u.tree.lookup = bsAlloc(capacity * sizeof(BSObjectNode *));
     memset(object->u.tree.lookup, 0, capacity * sizeof(BSObjectNode *));
     object->u.tree.lookupMask = capacity - 1;
+}
+
+static void bsObjectLookupGrow(BSObject *object)
+{
+    BSObjectNode **old = object->u.tree.lookup;
+    uint32_t oldMask = object->u.tree.lookupMask;
+    bsObjectLookupAlloc(object, object->count);
     if (old != NULL) {
         for (uint32_t ix = 0; ix <= oldMask; ix++) {
             BSObjectNode *node = old[ix];
@@ -1386,6 +1392,19 @@ static BSValue *bsObjectFindValue(BSObject *object, const char *key, size_t size
     return node != NULL ? &node->value : NULL;
 }
 
+/* Make an object an empty list, discarding its packed pairs */
+static void bsObjectListInit(BSObject *object)
+{
+    object->packed = 0;
+    object->count = 0;
+    object->u.tree.root = NULL;
+    object->u.tree.insertHead = NULL;
+    object->u.tree.insertTail = NULL;
+    object->u.tree.lookup = NULL;
+    object->u.tree.lookupMask = 0;
+}
+
+/* Move a full packed object's pairs onto a list */
 static void bsObjectSpill(BSObject *object)
 {
     BSString *keys[BS_OBJECT_PACKED];
@@ -1395,13 +1414,7 @@ static void bsObjectSpill(BSObject *object)
         keys[ix] = object->u.small.keys[ix];
         values[ix] = object->u.small.values[ix];
     }
-    object->packed = 0;
-    object->count = 0;
-    object->u.tree.root = NULL;
-    object->u.tree.insertHead = NULL;
-    object->u.tree.insertTail = NULL;
-    object->u.tree.lookup = NULL;
-    object->u.tree.lookupMask = 0;
+    bsObjectListInit(object);
     for (size_t ix = 0; ix < n; ix++) {
         BSValue key = bsStringTake(keys[ix]);
         bsObjectNodeCreate(key, values[ix], object);
@@ -1644,18 +1657,8 @@ BSValue bsObjectNewCapacity(size_t count)
     BSValue value = bsObjectNew();
     if (count > BS_OBJECT_SMALL) {
         /* Born in list form with a table sized for every key, so the appends never rebuild it */
-        BSObject *object = value.u.object;
-        object->packed = 0;
-        object->u.tree.root = NULL;
-        object->u.tree.insertHead = NULL;
-        object->u.tree.insertTail = NULL;
-        uint32_t capacity = 16;
-        while (capacity < (uint32_t) count * 2 + 2) {
-            capacity *= 2;
-        }
-        object->u.tree.lookup = bsAlloc(capacity * sizeof(BSObjectNode *));
-        memset(object->u.tree.lookup, 0, capacity * sizeof(BSObjectNode *));
-        object->u.tree.lookupMask = capacity - 1;
+        bsObjectListInit(value.u.object);
+        bsObjectLookupAlloc(value.u.object, count);
     }
     return value;
 }
