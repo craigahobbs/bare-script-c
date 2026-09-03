@@ -96,6 +96,7 @@ struct RxNode {
         } repeat;
         struct {
             RxNode *sub;
+            const RxNode *atom; /* the sub-pattern when it is one code point, else NULL */
             bool negate;
             size_t minLength; /* the sub-pattern's match length bounds, for lookbehind scanning */
             size_t maxLength;
@@ -147,6 +148,23 @@ struct BSRegex {
 /*
  * Compile
  */
+
+
+/* A node that matches exactly one code point and captures nothing */
+static bool rxIsSimple(const RxNode *node)
+{
+    return node->next == NULL && (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS);
+}
+
+
+/* The single-code-point node a sub-pattern reduces to, or NULL */
+static const RxNode *rxSimpleAtom(const RxNode *node)
+{
+    if (node != NULL && node->kind == RX_ALT && node->u.alt.count == 1 && node->next == NULL) {
+        node = node->u.alt.branches[0];
+    }
+    return (node != NULL && rxIsSimple(node)) ? node : NULL;
+}
 
 
 typedef struct RxCompiler {
@@ -594,6 +612,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         if (lookahead || lookbehind) {
             RxNode *node = rxNodeNew(compiler, lookbehind ? RX_LOOKBEHIND : RX_LOOKAHEAD);
             node->u.look.sub = sub;
+            node->u.look.atom = rxSimpleAtom(sub);
             node->u.look.negate = lookaheadNegate;
             return node;
         }
@@ -713,11 +732,6 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
 
 
 /* True if a node matches exactly one code point and captures nothing */
-static bool rxIsSimple(const RxNode *node)
-{
-    return node->next == NULL && (node->kind == RX_CHAR || node->kind == RX_ANY || node->kind == RX_CLASS);
-}
-
 
 
 /*
@@ -1357,14 +1371,6 @@ static inline bool rxClassMatch(const RxState *state, const RxNode *node, uint32
 
 
 /* An alternation of one single-code-point atom, or that atom itself */
-static const RxNode *rxSimpleAtom(const RxNode *node)
-{
-    if (node != NULL && node->kind == RX_ALT && node->u.alt.count == 1 && node->next == NULL) {
-        node = node->u.alt.branches[0];
-    }
-    return (node != NULL && rxIsSimple(node)) ? node : NULL;
-}
-
 
 /* Match a single-code-point node at a position */
 static bool rxMatchOne(const RxState *state, const RxNode *node, size_t pos)
@@ -1713,9 +1719,9 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
     }
 
     case RX_LOOKAHEAD: {
-        const RxNode *atom = rxSimpleAtom(node->u.look.sub);
+        const RxNode *atom = node->u.look.atom;
         if (atom != NULL) {
-            bool matched = rxMatchOne(state, atom, pos);
+            bool matched = state->codes == NULL ? rxMatchOneByte(state, atom, pos) : rxMatchOne(state, atom, pos);
             result = (matched != node->u.look.negate) && rxMatchNode(state, node->next, cont, pos);
             break;
         }
@@ -1734,10 +1740,10 @@ static bool rxMatchNode(RxState *state, RxNode *node, RxCont *cont, size_t pos)
          * A lookbehind whose body is one code point - "(?<!\\)", "(?<=a)", "(?<![A-Za-z])" -
          * is a single membership test, the form markdown span matching uses on every candidate.
          */
-        const RxNode *atom = (node->u.look.minLength == 1 && node->u.look.maxLength == 1) ?
-            rxSimpleAtom(node->u.look.sub) : NULL;
+        const RxNode *atom = node->u.look.atom;
         if (atom != NULL) {
-            bool matched = pos >= 1 && rxMatchOne(state, atom, pos - 1);
+            bool matched = pos >= 1 &&
+                (state->codes == NULL ? rxMatchOneByte(state, atom, pos - 1) : rxMatchOne(state, atom, pos - 1));
             result = (matched != node->u.look.negate) && rxMatchNode(state, node->next, cont, pos);
             break;
         }
