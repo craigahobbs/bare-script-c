@@ -101,7 +101,8 @@ struct BSScript {
     int32_t refcount;
     BSValue scriptName;
     BSValue scriptLines;
-    BSValue model;          /* the original parser model, for lint and coverage */
+    int startLineNumber;    /* the first script line's line number - bsScriptToModel re-parses with it */
+    BSValue model;          /* the parser model, if kept - a parsed script drops it once compiled */
     BSCode code;            /* top-level bytecode */
     BSFunctionDef **functions;
     size_t functionCount;
@@ -171,6 +172,13 @@ BSExpr *bsExprFromModel(BSValue model);
 
 /* Convert a compiled script to its JSON "BareScript" model - returns an owned object value */
 BSValue bsScriptToModel(const BSScript *script);
+
+/*
+ * Release a parsed script's model. The model is several times the size of the script text and
+ * only the linter and coverage reporting read it; bsScriptToModel re-parses the script's retained
+ * lines when it is needed after all.
+ */
+void bsScriptForgetModel(BSScript *script);
 
 /* Convert a compiled expression to its JSON "Expression" model - returns an owned object value */
 BSValue bsExprToModel(const BSExpr *expr);

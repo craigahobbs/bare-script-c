@@ -31,6 +31,31 @@ static BSValue bsTestParse(const char *text)
 }
 
 
+TEST(parser_forget_model)
+{
+    static const char *text = "a = 1\nfunction f(x):\n    return x + a\nendfunction\nreturn f(2)";
+    BSScript *script = bsParseScript(text, strlen(text), 5, "forget.bare", NULL);
+    ASSERT_NOT_NULL(script);
+    BSValue model = bsScriptToModel(script);
+    BSValue json = bsJSONEncode(model, 0);
+    bsRelease(model);
+
+    /* Forgetting the model leaves the lines, and bsScriptToModel re-parses them to the same model */
+    bsScriptForgetModel(script);
+    ASSERT_INT_EQ(script->model.type, BS_NULL);
+    ASSERT_INT_EQ(script->startLineNumber, 5);
+    BSValue reparsed = bsScriptToModel(script);
+    ASSERT_INT_EQ(script->model.type, BS_NULL);
+    BSValue reparsedJson = bsJSONEncode(reparsed, 0);
+    ASSERT_STR_EQ(bsStringData(reparsedJson), bsStringData(json));
+    ASSERT_STR_CONTAINS(bsStringData(reparsedJson), "\"lineNumber\":5");
+    bsRelease(reparsed);
+    bsRelease(reparsedJson);
+    bsRelease(json);
+    bsScriptRelease(script);
+}
+
+
 /* Assert that a script's parse result - its model JSON or its error message - contains "needle" */
 static void bsTestParseContains(const char *text, const char *needle)
 {

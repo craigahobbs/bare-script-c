@@ -71,11 +71,13 @@ bugs**.
 The bootstrap: the bundled parser is stored as its own parser-compiled JSON model, so loading it
 needs only a JSON decode (README's **The Parser and Linter** draws it).
 
-`src/model.c` compiles the model to bytecode and keeps the original model on the script for lint
-and coverage (`bsScriptToModel` retains it). Jump labels become instruction indexes and
-function-local names become slot indexes during emit. A slot holding the internal unset marker
-falls through to the globals object. Group nodes stay in the model and flatten only in the code
-stream. The interpreter is `bsRunCode` in `src/runtime.c`.
+`src/model.c` compiles the model to bytecode. A script keeps its model only where something will
+read it - the CLI under static analysis, an include while coverage is recording; otherwise
+`bsScriptForgetModel` drops it and `bsScriptToModel` re-parses the retained source lines on
+demand. Jump labels become instruction indexes and function-local names become slot indexes during
+emit. A slot holding the internal unset marker falls through to the globals object. Group nodes
+stay in the model and flatten only in the code stream. The interpreter is `bsRunCode` in
+`src/runtime.c`.
 
 Invariants the interpreter trusts rather than checks: the emitter computes each chunk's maximum
 stack depth (`stackMax`), so pushes have no bounds checks; `LOAD_SLOT`/`STORE_SLOT` are only

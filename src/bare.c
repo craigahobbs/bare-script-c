@@ -274,6 +274,9 @@ int bsMain(int argc, char **argv)
                 statusCode = 1;
                 break;
             }
+            if (!staticAnalysis) {
+                bsScriptForgetModel(script);
+            }
 
             /*
              * Execute the script

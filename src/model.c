@@ -69,6 +69,13 @@ void bsScriptDropModel(BSScript *script)
 }
 
 
+void bsScriptForgetModel(BSScript *script)
+{
+    bsRelease(script->model);
+    script->model = bsNull();
+}
+
+
 static void bsCodeFree(BSCode *code)
 {
     free(code->inst);
@@ -966,6 +973,7 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
     memset(script, 0, sizeof(*script));
     script->refcount = 1;
     script->system = bsValueBoolean(bsObjectGetString(model, bsKeys.system));
+    script->startLineNumber = 1;
     script->model = bsRetain(model);
 
     BSValue modelName = bsObjectGetString(model, bsKeys.scriptName);
@@ -998,10 +1006,13 @@ BSValue bsExprToModel(const BSExpr *expr)
 
 BSValue bsScriptToModel(const BSScript *script)
 {
+    /* A parsed script keeps its lines, not its model - parse them again */
+    BSValue source = script->model.type == BS_OBJECT ? bsRetain(script->model) : bsScriptReparse(script);
+    BSValue statements = source.type == BS_OBJECT ? bsObjectGet(source, "statements") : bsNull();
     BSValue model = bsObjectNew();
-    BSValue statements = bsObjectGet(script->model, "statements");
     bsObjectSet(model, "statements",
                 statements.type == BS_ARRAY ? bsRetain(statements) : bsArrayNew());
+    bsRelease(source);
     if (script->scriptName.type == BS_STRING) {
         bsObjectSet(model, "scriptName", bsRetain(script->scriptName));
     }

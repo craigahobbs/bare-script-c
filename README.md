@@ -414,9 +414,8 @@ barescriptParser.bare (bundled JSON model)
    bytecode chunk  -> executed by the runtime, which is what parses your script
 ```
 
-`model.c` compiles the model to bytecode and keeps the original model on the script for lint and
-coverage. Jump labels become instruction indexes and function-local names become slot indexes
-during emit - there is no executable expression tree. A slot holding the internal unset marker
+`model.c` compiles the model to bytecode. Jump labels become instruction indexes and
+function-local names become slot indexes during emit - there is no executable expression tree. A slot holding the internal unset marker
 falls through to the globals object, matching the reference behavior where an unassigned local
 simply is not a key of the locals dictionary. Group nodes stay in the model (the parser and linter
 observe them) and flatten only in the code stream.
@@ -437,9 +436,14 @@ When `__barescriptCoverage` is enabled, each compiled script keeps a line-indexe
 pointers into the coverage object's per-line counts, so a loop increments a number instead of
 formatting a line key and searching the covered object on every statement.
 
-`bsScriptToModel` and `bsExprToModel` return the saved model (with `scriptName` / `scriptLines` /
+`bsScriptToModel` and `bsExprToModel` return the model (with `scriptName` / `scriptLines` /
 `system` overlaid), which is how the linter receives a script and how `barescriptEvaluateExpression`
-works.
+works. A model is several times the size of its script text and only the linter and coverage
+reporting read it, so a compiled script does not have to keep one: `bsScriptForgetModel` drops it,
+and `bsScriptToModel` then re-parses the lines the script retains. The CLI forgets each script's
+model unless static analysis was requested, and the runtime forgets an include's unless coverage
+is recording - so the include library's test suite, which records coverage, keeps its models, while
+a script that merely includes the library holds bytecode and source lines alone.
 
 
 ### The Bundled Include Library

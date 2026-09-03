@@ -826,6 +826,12 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
             bsRelease(includeUrl);
             return false;
         }
+
+        /* Only coverage reporting reads an include's model - keep it while coverage is recording */
+        BSValue coverage = bsObjectGet(options->globals, BS_GLOBAL_COVERAGE);
+        if (coverage.type != BS_OBJECT || !bsValueBoolean(bsObjectGet(coverage, "enabled"))) {
+            bsScriptForgetModel(includeScript);
+        }
     }
     includeScript->system = system;
 

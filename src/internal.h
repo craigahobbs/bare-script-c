@@ -93,6 +93,9 @@ static inline BSValue bsUnset(void)
 /* Drop the saved parser model from a cached system include (not linted or covered) */
 void bsScriptDropModel(BSScript *script);
 
+/* Re-parse a script's retained lines into a fresh model. Returns an owned model, or a null value. */
+BSValue bsScriptReparse(const BSScript *script);
+
 
 
 
