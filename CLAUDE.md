@@ -117,6 +117,13 @@ through free lists.
 Allocation failure is fatal (`bsAlloc` aborts); do not thread out-of-memory results through value
 operations.
 
+All mutable runtime state is `_Thread_local` - the free lists, the intern table, the model keys, the
+library function values, the compiled parser, linter, and include caches, the system include
+registry, the RNG - so each thread is an isolated runtime, and values, scripts, and options never
+cross threads (README's **Threads**). Keep it so: a new file-scope variable is `_Thread_local` or
+`const`. The one process-wide object is the libcurl loader, behind a C11 atomic once. The cleanups
+are per thread, `bsValueCleanup` last; `test/test_thread.c` runs eight runtimes at once.
+
 ### Library functions
 
 The function format is README's **The Function Format**: `args` is a borrowed slice of the

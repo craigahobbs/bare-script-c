@@ -149,7 +149,7 @@ BSScript *bsParseScript(const char *text, size_t size, int startLineNumber, cons
  */
 BSValue bsLintScript(const BSScript *script, BSValue globals);
 
-/* Release the parser and linter include library scripts - call at process exit */
+/* Release the calling thread's parser and linter include library scripts - call at thread exit */
 void bsParserCleanup(void);
 
 /*

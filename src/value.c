@@ -247,6 +247,41 @@ size_t bsUTF8Length(const char *data, size_t size)
 
 
 /*
+ * The thread's value state
+ *
+ * The free lists, the treap priority source, and the intern table are per thread, so threads never
+ * share a value and never contend - see README's "Threads". They are one struct so a function that
+ * touches several of them computes the thread-local address once.
+ */
+#define BS_STRING_POOL_CLASSES 4
+#define BS_ARRAY_BUF_CLASS_COUNT 4
+
+typedef struct {
+    BSString *string;
+    uint32_t hash;
+} BSInternSlot;
+
+typedef struct {
+    BSString *stringPool[BS_STRING_POOL_CLASSES];
+    unsigned stringPoolCount[BS_STRING_POOL_CLASSES];
+    BSArray *arrayPool;
+    unsigned arrayPoolCount;
+    BSValue *arrayBufPool[BS_ARRAY_BUF_CLASS_COUNT];
+    unsigned arrayBufPoolCount[BS_ARRAY_BUF_CLASS_COUNT];
+    BSObject *objectPool;
+    unsigned objectPoolCount;
+    BSObjectNode *nodePool;
+    unsigned nodePoolCount;
+    uint32_t priorityState;
+    BSInternSlot *internSlots; /* NULL until the thread's first intern */
+    size_t internMask;
+    size_t internCount;
+} BSValueState;
+
+static _Thread_local BSValueState bsTS = {.priorityState = 0x9E3779B9u};
+
+
+/*
  * Small string recycling
  *
  * Strings are the runtime's most frequent allocation - a match group, a slice, a computed key -
@@ -254,12 +289,9 @@ size_t bsUTF8Length(const char *data, size_t size)
  * recycled through that class's free list; the class is kept in the string's flags so release
  * knows where the block goes. The free-list link reuses the offsets pointer.
  */
-#define BS_STRING_POOL_CLASSES 4
 #define BS_STRING_POOL_MAX 4096
 #define BS_STR_POOL_SHIFT 4
 static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128};
-static BSString *bsStringPool[BS_STRING_POOL_CLASSES];
-static unsigned bsStringPoolCount[BS_STRING_POOL_CLASSES];
 
 
 static BSString *bsStringAlloc(size_t size)
@@ -270,10 +302,10 @@ static BSString *bsStringAlloc(size_t size)
     for (unsigned ix = 0; ix < BS_STRING_POOL_CLASSES; ix++) {
         if (total <= bsStringPoolSize[ix]) {
             flags = (uint8_t) ((ix + 1) << BS_STR_POOL_SHIFT);
-            if (bsStringPool[ix] != NULL) {
-                string = bsStringPool[ix];
-                bsStringPool[ix] = (BSString *) string->offsets;
-                bsStringPoolCount[ix]--;
+            if (bsTS.stringPool[ix] != NULL) {
+                string = bsTS.stringPool[ix];
+                bsTS.stringPool[ix] = (BSString *) string->offsets;
+                bsTS.stringPoolCount[ix]--;
             } else {
                 string = bsAlloc(bsStringPoolSize[ix]);
             }
@@ -321,10 +353,10 @@ static void bsStringFree(BSString *string)
 {
     free(string->offsets);
     unsigned class = string->flags >> BS_STR_POOL_SHIFT;
-    if (class != 0 && bsStringPoolCount[class - 1] < BS_STRING_POOL_MAX) {
-        string->offsets = (uint32_t *) bsStringPool[class - 1];
-        bsStringPool[class - 1] = string;
-        bsStringPoolCount[class - 1]++;
+    if (class != 0 && bsTS.stringPoolCount[class - 1] < BS_STRING_POOL_MAX) {
+        string->offsets = (uint32_t *) bsTS.stringPool[class - 1];
+        bsTS.stringPool[class - 1] = string;
+        bsTS.stringPoolCount[class - 1]++;
         return;
     }
     free(string);
@@ -677,15 +709,10 @@ BSValue bsSBToValue(BSStringBuilder *sb)
  */
 
 
-static BSArray *bsArrayPool;
-static unsigned bsArrayPoolCount;
 #define BS_ARRAY_POOL_MAX 16384
 
 /* Recycle common array value buffers so JSON arrays are not two mallocs every time */
-#define BS_ARRAY_BUF_CLASS_COUNT 4
 static const size_t bsArrayBufClass[BS_ARRAY_BUF_CLASS_COUNT] = {8, 16, 32, 64};
-static BSValue *bsArrayBufPool[BS_ARRAY_BUF_CLASS_COUNT];
-static unsigned bsArrayBufPoolCount[BS_ARRAY_BUF_CLASS_COUNT];
 #define BS_ARRAY_BUF_POOL_MAX 64
 
 static int bsArrayBufClassIndex(size_t capacity)
@@ -701,10 +728,10 @@ static int bsArrayBufClassIndex(size_t capacity)
 static BSValue *bsArrayBufAlloc(size_t capacity)
 {
     int classIndex = bsArrayBufClassIndex(capacity);
-    if (classIndex >= 0 && bsArrayBufPool[classIndex] != NULL) {
-        BSValue *values = bsArrayBufPool[classIndex];
-        bsArrayBufPool[classIndex] = (BSValue *) values[0].u.ref;
-        bsArrayBufPoolCount[classIndex]--;
+    if (classIndex >= 0 && bsTS.arrayBufPool[classIndex] != NULL) {
+        BSValue *values = bsTS.arrayBufPool[classIndex];
+        bsTS.arrayBufPool[classIndex] = (BSValue *) values[0].u.ref;
+        bsTS.arrayBufPoolCount[classIndex]--;
         return values;
     }
     return bsAlloc(capacity * sizeof(BSValue));
@@ -713,10 +740,10 @@ static BSValue *bsArrayBufAlloc(size_t capacity)
 static void bsArrayBufFree(BSValue *values, size_t capacity)
 {
     int classIndex = bsArrayBufClassIndex(capacity);
-    if (classIndex >= 0 && bsArrayBufPoolCount[classIndex] < BS_ARRAY_BUF_POOL_MAX) {
-        values[0].u.ref = bsArrayBufPool[classIndex];
-        bsArrayBufPool[classIndex] = values;
-        bsArrayBufPoolCount[classIndex]++;
+    if (classIndex >= 0 && bsTS.arrayBufPoolCount[classIndex] < BS_ARRAY_BUF_POOL_MAX) {
+        values[0].u.ref = bsTS.arrayBufPool[classIndex];
+        bsTS.arrayBufPool[classIndex] = values;
+        bsTS.arrayBufPoolCount[classIndex]++;
         return;
     }
     free(values);
@@ -724,10 +751,10 @@ static void bsArrayBufFree(BSValue *values, size_t capacity)
 
 static BSArray *bsArrayAlloc(void)
 {
-    if (bsArrayPool != NULL) {
-        BSArray *array = bsArrayPool;
-        bsArrayPool = (BSArray *) array->values;
-        bsArrayPoolCount--;
+    if (bsTS.arrayPool != NULL) {
+        BSArray *array = bsTS.arrayPool;
+        bsTS.arrayPool = (BSArray *) array->values;
+        bsTS.arrayPoolCount--;
         return array;
     }
     return bsAlloc(sizeof(BSArray));
@@ -735,13 +762,13 @@ static BSArray *bsArrayAlloc(void)
 
 static void bsArrayRecycle(BSArray *array)
 {
-    if (bsArrayPoolCount >= BS_ARRAY_POOL_MAX) {
+    if (bsTS.arrayPoolCount >= BS_ARRAY_POOL_MAX) {
         free(array);
         return;
     }
-    array->values = (BSValue *) bsArrayPool;
-    bsArrayPool = array;
-    bsArrayPoolCount++;
+    array->values = (BSValue *) bsTS.arrayPool;
+    bsTS.arrayPool = array;
+    bsTS.arrayPoolCount++;
 }
 
 
@@ -894,16 +921,14 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
  */
 
 
-static BSObject *bsObjectPool;
-static unsigned bsObjectPoolCount;
 #define BS_OBJECT_POOL_MAX 16384
 
 static BSObject *bsObjectAlloc(void)
 {
-    if (bsObjectPool != NULL) {
-        BSObject *object = bsObjectPool;
-        bsObjectPool = (BSObject *) object->u.tree.insertHead;
-        bsObjectPoolCount--;
+    if (bsTS.objectPool != NULL) {
+        BSObject *object = bsTS.objectPool;
+        bsTS.objectPool = (BSObject *) object->u.tree.insertHead;
+        bsTS.objectPoolCount--;
         return object;
     }
     return bsAlloc(sizeof(BSObject));
@@ -914,13 +939,13 @@ static void bsObjectRecycle(BSObject *object)
     if (!object->packed) {
         free(object->u.tree.lookup);
     }
-    if (bsObjectPoolCount >= BS_OBJECT_POOL_MAX) {
+    if (bsTS.objectPoolCount >= BS_OBJECT_POOL_MAX) {
         free(object);
         return;
     }
-    object->u.tree.insertHead = (BSObjectNode *) bsObjectPool;
-    bsObjectPool = object;
-    bsObjectPoolCount++;
+    object->u.tree.insertHead = (BSObjectNode *) bsTS.objectPool;
+    bsTS.objectPool = object;
+    bsTS.objectPoolCount++;
 }
 
 
@@ -946,25 +971,15 @@ size_t bsObjectCount(BSValue value)
 }
 
 
-/*
- * The node priority source
- *
- * A deterministic xorshift keeps object layout - and therefore test behavior - reproducible from
- * run to run while still keeping the tree balanced in expectation.
- */
-static uint32_t bsObjectPriorityState = 0x9E3779B9u;
-
 /* Recycled treap nodes - BareScript allocates and frees objects constantly */
-static BSObjectNode *bsObjectNodePool;
-static unsigned bsObjectNodePoolCount;
 #define BS_OBJECT_NODE_POOL_MAX 16384
 
 static BSObjectNode *bsObjectNodeAlloc(void)
 {
-    if (bsObjectNodePool != NULL) {
-        BSObjectNode *node = bsObjectNodePool;
-        bsObjectNodePool = node->left;
-        bsObjectNodePoolCount--;
+    if (bsTS.nodePool != NULL) {
+        BSObjectNode *node = bsTS.nodePool;
+        bsTS.nodePool = node->left;
+        bsTS.nodePoolCount--;
         return node;
     }
     return bsAlloc(sizeof(BSObjectNode));
@@ -972,22 +987,28 @@ static BSObjectNode *bsObjectNodeAlloc(void)
 
 static void bsObjectNodeRecycle(BSObjectNode *node)
 {
-    if (bsObjectNodePoolCount >= BS_OBJECT_NODE_POOL_MAX) {
+    if (bsTS.nodePoolCount >= BS_OBJECT_NODE_POOL_MAX) {
         free(node);
         return;
     }
-    node->left = bsObjectNodePool;
-    bsObjectNodePool = node;
-    bsObjectNodePoolCount++;
+    node->left = bsTS.nodePool;
+    bsTS.nodePool = node;
+    bsTS.nodePoolCount++;
 }
 
+/*
+ * The node priority source
+ *
+ * A deterministic xorshift keeps object layout - and therefore test behavior - reproducible from
+ * run to run while still keeping the tree balanced in expectation.
+ */
 static uint32_t bsObjectPriority(void)
 {
-    uint32_t state = bsObjectPriorityState;
+    uint32_t state = bsTS.priorityState;
     state ^= state << 13;
     state ^= state >> 17;
     state ^= state << 5;
-    bsObjectPriorityState = state;
+    bsTS.priorityState = state;
     return state;
 }
 
@@ -998,22 +1019,12 @@ static uint32_t bsObjectPriority(void)
  * Short C-string keys (script names, bsObjectSet) are interned so lookup can compare pointers.
  * JSON and computed objectSet keys reuse an interned string when the name is already interned
  * and otherwise stay ordinary, so untrusted unique keys cannot grow the table. The table holds
- * one reference; interned strings live until process exit. New intern entries stop at COUNT_MAX.
+ * one reference; interned strings live until bsValueCleanup. New intern entries stop at COUNT_MAX.
  */
 #define BS_INTERN_MAX 64
 #define BS_INTERN_INITIAL 32
 #define BS_INTERN_COUNT_MAX 65536
 
-typedef struct {
-    BSString *string;
-    uint32_t hash;
-} BSInternSlot;
-
-static BSInternSlot bsInternInitial[BS_INTERN_INITIAL];
-static BSInternSlot *bsInternSlots = bsInternInitial;
-static size_t bsInternMask = BS_INTERN_INITIAL - 1;
-static size_t bsInternCount;
-static int bsInternHeap;
 
 static uint32_t bsInternHash(const char *data, size_t size, bool *ascii)
 {
@@ -1045,24 +1056,25 @@ static uint32_t bsInternHash(const char *data, size_t size, bool *ascii)
 static void bsInternPut(BSString *string, uint32_t hash)
 {
     for (size_t probe = 0;; probe++) {
-        size_t slot = (hash + probe) & bsInternMask;
-        if (bsInternSlots[slot].string == NULL) {
-            bsInternSlots[slot].string = string;
-            bsInternSlots[slot].hash = hash;
+        size_t slot = (hash + probe) & bsTS.internMask;
+        if (bsTS.internSlots[slot].string == NULL) {
+            bsTS.internSlots[slot].string = string;
+            bsTS.internSlots[slot].hash = hash;
             return;
         }
     }
 }
 
 
+/* Double the table - or create it, at the thread's first intern */
 static void bsInternGrow(void)
 {
-    size_t oldCapacity = bsInternMask + 1;
-    BSInternSlot *old = bsInternSlots;
-    size_t capacity = oldCapacity * 2;
-    bsInternMask = capacity - 1;
-    bsInternSlots = bsAlloc(capacity * sizeof(BSInternSlot));
-    memset(bsInternSlots, 0, capacity * sizeof(BSInternSlot));
+    BSInternSlot *old = bsTS.internSlots;
+    size_t oldCapacity = old != NULL ? bsTS.internMask + 1 : 0;
+    size_t capacity = old != NULL ? oldCapacity * 2 : BS_INTERN_INITIAL;
+    bsTS.internMask = capacity - 1;
+    bsTS.internSlots = bsAlloc(capacity * sizeof(BSInternSlot));
+    memset(bsTS.internSlots, 0, capacity * sizeof(BSInternSlot));
     for (size_t ix = 0; ix < oldCapacity; ix++) {
         BSString *string = old[ix].string;
         if (string == NULL) {
@@ -1070,21 +1082,21 @@ static void bsInternGrow(void)
         }
         bsInternPut(string, old[ix].hash);
     }
-    if (bsInternHeap) {
-        free(old);
-    }
-    bsInternHeap = 1;
+    free(old);
 }
 
 static BSString *bsInternLookupHash(const char *data, size_t size, uint32_t hash)
 {
+    if (bsTS.internSlots == NULL) {
+        return NULL;
+    }
     for (size_t probe = 0;; probe++) {
-        size_t slot = (hash + probe) & bsInternMask;
-        BSString *string = bsInternSlots[slot].string;
+        size_t slot = (hash + probe) & bsTS.internMask;
+        BSString *string = bsTS.internSlots[slot].string;
         if (string == NULL) {
             return NULL;
         }
-        if (bsInternSlots[slot].hash == hash && string->size == size &&
+        if (bsTS.internSlots[slot].hash == hash && string->size == size &&
             (size == 0 || memcmp(string->data, data, size) == 0)) {
             return string;
         }
@@ -1108,17 +1120,17 @@ BSValue bsStringIntern(const char *data, size_t size)
         found->refcount++;
         return bsStringTake(found);
     }
-    if (bsInternCount >= BS_INTERN_COUNT_MAX) {
+    if (bsTS.internCount >= BS_INTERN_COUNT_MAX) {
         return ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
     }
-    if ((bsInternCount + 1) * 4 >= (bsInternMask + 1) * 3) {
+    if ((bsTS.internCount + 1) * 4 >= (bsTS.internMask + 1) * 3) {
         bsInternGrow();
     }
     BSValue value = ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
     value.u.string->flags |= BS_STR_INTERNED;
     value.u.string->refcount++;
     bsInternPut(value.u.string, hash);
-    bsInternCount++;
+    bsTS.internCount++;
     return value;
 }
 
@@ -1132,6 +1144,61 @@ BSValue bsStringInternExisting(const char *data, size_t size)
         }
     }
     return bsStringNewSize(data, size);
+}
+
+
+void bsValueCleanup(void)
+{
+    /* The intern table's references - a string still held elsewhere lives on as an ordinary string */
+    if (bsTS.internSlots != NULL) {
+        for (size_t ix = 0; ix <= bsTS.internMask; ix++) {
+            BSString *string = bsTS.internSlots[ix].string;
+            if (string != NULL) {
+                string->flags &= (uint8_t) ~BS_STR_INTERNED;
+                bsRelease(bsStringTake(string));
+            }
+        }
+        free(bsTS.internSlots);
+        bsTS.internSlots = NULL;
+        bsTS.internMask = 0;
+        bsTS.internCount = 0;
+    }
+
+    /* The free lists */
+    for (unsigned ix = 0; ix < BS_STRING_POOL_CLASSES; ix++) {
+        while (bsTS.stringPool[ix] != NULL) {
+            BSString *string = bsTS.stringPool[ix];
+            bsTS.stringPool[ix] = (BSString *) string->offsets;
+            free(string);
+        }
+        bsTS.stringPoolCount[ix] = 0;
+    }
+    while (bsTS.arrayPool != NULL) {
+        BSArray *array = bsTS.arrayPool;
+        bsTS.arrayPool = (BSArray *) array->values;
+        free(array);
+    }
+    bsTS.arrayPoolCount = 0;
+    for (int ix = 0; ix < BS_ARRAY_BUF_CLASS_COUNT; ix++) {
+        while (bsTS.arrayBufPool[ix] != NULL) {
+            BSValue *values = bsTS.arrayBufPool[ix];
+            bsTS.arrayBufPool[ix] = (BSValue *) values[0].u.ref;
+            free(values);
+        }
+        bsTS.arrayBufPoolCount[ix] = 0;
+    }
+    while (bsTS.objectPool != NULL) {
+        BSObject *object = bsTS.objectPool;
+        bsTS.objectPool = (BSObject *) object->u.tree.insertHead;
+        free(object);
+    }
+    bsTS.objectPoolCount = 0;
+    while (bsTS.nodePool != NULL) {
+        BSObjectNode *node = bsTS.nodePool;
+        bsTS.nodePool = node->left;
+        free(node);
+    }
+    bsTS.nodePoolCount = 0;
 }
 
 static int bsKeyCompare(const BSString *key1, const char *key2, size_t size2)

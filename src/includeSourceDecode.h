@@ -13,8 +13,8 @@
 #include "barescript/includeSource.h"
 
 
-/* Decode a bundled include's compressed model, caching the result on the registry entry */
-const char *bsIncludeSourceDecode(BSIncludeSource *source);
+/* Decode a bundled include's compressed model by registry index, caching the text for the thread */
+const char *bsIncludeSourceDecode(size_t index);
 
 
 #endif

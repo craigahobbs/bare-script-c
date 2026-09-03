@@ -83,7 +83,7 @@ BSValue bsLibraryExpressionFunction(BSValue name);
 /* Look up a built-in script function by name; returns a borrowed value */
 BSValue bsLibraryScriptFunction(const char *name);
 
-/* Release the library's static function values - call at process exit */
+/* Release the calling thread's library function values - call at thread exit, before bsValueCleanup */
 void bsLibraryCleanup(void);
 
 

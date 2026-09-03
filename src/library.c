@@ -833,13 +833,14 @@ static BSValue bsFnMathMin(const BSValue *args, size_t argCount, BSOptions *opti
 }
 
 
-/* The random number generator - a deterministic xorshift, seeded from the clock at first use */
-static uint64_t bsRandomState;
+/* The random number generator - a deterministic xorshift, seeded from the clock and the thread at first use */
+static _Thread_local uint64_t bsRandomState;
 
 static BSValue bsFnMathRandom(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     if (bsRandomState == 0) {
-        bsRandomState = (uint64_t) bsDatetimeNow() | 1u;
+        /* The thread-local's address separates threads that start in the same millisecond */
+        bsRandomState = ((uint64_t) bsDatetimeNow() ^ (uint64_t) (uintptr_t) &bsRandomState) | 1u;
     }
     uint64_t state = bsRandomState;
     state ^= state << 13;
@@ -1083,25 +1084,27 @@ static BSValue bsFnRegexEscape(const BSValue *args, size_t argCount, BSOptions *
 }
 
 
-static BSValue bsMatchKeyIndex;
-static BSValue bsMatchKeyInput;
-static BSValue bsMatchKeyGroups;
-static BSValue bsMatchEmpty;
-
-/* The group index keys "0", "1", ... - interned once and grown to the widest pattern matched */
-static BSValue *bsMatchKeyGroup;
-static size_t bsMatchKeyGroupCount;
+/*
+ * The thread's regex match model keys - "index", "input", "groups", the empty string, and the group
+ * index keys "0", "1", ..., grown to the widest pattern matched. Interned once per thread by
+ * bsLibraryInit, and one struct so a match computes the thread-local address once.
+ */
+static _Thread_local struct {
+    BSValue index, input, groups, empty;
+    BSValue *group;
+    size_t groupCount;
+} bsMatchKeys;
 
 
 static void bsMatchKeyGroupGrow(size_t count)
 {
-    bsMatchKeyGroup = bsRealloc(bsMatchKeyGroup, count * sizeof(BSValue));
-    for (size_t ix = bsMatchKeyGroupCount; ix < count; ix++) {
+    bsMatchKeys.group = bsRealloc(bsMatchKeys.group, count * sizeof(BSValue));
+    for (size_t ix = bsMatchKeys.groupCount; ix < count; ix++) {
         char key[24];
         int keySize = snprintf(key, sizeof(key), "%zu", ix);
-        bsMatchKeyGroup[ix] = bsStringIntern(key, (size_t) keySize);
+        bsMatchKeys.group[ix] = bsStringIntern(key, (size_t) keySize);
     }
-    bsMatchKeyGroupCount = count;
+    bsMatchKeys.groupCount = count;
 }
 
 
@@ -1112,7 +1115,7 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
 {
     bool uniqueNames = bsRegexGroupNamesUnique(regex);
     BSValue groups = bsObjectNewCapacity(match->groupCount * (uniqueNames ? 2 : 1));
-    if (match->groupCount > bsMatchKeyGroupCount) {
+    if (match->groupCount > bsMatchKeys.groupCount) {
         bsMatchKeyGroupGrow(match->groupCount);
     }
     for (size_t ix = 0; ix < match->groupCount; ix++) {
@@ -1121,14 +1124,14 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
             size_t begin = bsStringOffset(string, match->groups[ix].begin);
             size_t end = bsStringOffset(string, match->groups[ix].end);
             if (end == begin) {
-                text = bsRetain(bsMatchEmpty);
+                text = bsRetain(bsMatchKeys.empty);
             } else if (subject->codes == NULL) {
                 text = bsStringNewAscii(bsStringData(string) + begin, end - begin);
             } else {
                 text = bsStringNewSize(bsStringData(string) + begin, end - begin);
             }
         }
-        bsObjectAppend(groups, bsMatchKeyGroup[ix], text);
+        bsObjectAppend(groups, bsMatchKeys.group[ix], text);
 
         /* A named group is keyed by both its number and its name - an interned string already. A
          * pattern that reuses a name across alternatives keys the last definition. */
@@ -1143,9 +1146,9 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
     }
 
     BSValue model = bsObjectNew();
-    bsObjectAppend(model, bsMatchKeyIndex, bsNumber((double) match->begin));
-    bsObjectAppend(model, bsMatchKeyInput, bsRetain(string));
-    bsObjectAppend(model, bsMatchKeyGroups, groups);
+    bsObjectAppend(model, bsMatchKeys.index, bsNumber((double) match->begin));
+    bsObjectAppend(model, bsMatchKeys.input, bsRetain(string));
+    bsObjectAppend(model, bsMatchKeys.groups, groups);
     return model;
 }
 
@@ -2003,7 +2006,7 @@ static BSValue bsFnSystemPartial(const BSValue *args, size_t argCount, BSOptions
 
 
 /* Interned by bsLibraryInit; schemaValidate compares these on every value */
-static BSValue bsSystemTypeNames[BS_REGEX + 1];
+static _Thread_local BSValue bsSystemTypeNames[BS_REGEX + 1];
 
 BSValue bsSystemTypeName(BSValue value)
 {
@@ -2143,12 +2146,12 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
 /*
  * The library function value cache
  *
- * Library function values are created once and shared by every globals object, so a library
- * function has a stable identity - which systemIs relies on, and which lets an override be
- * detected by pointer inequality.
+ * Library function values are created once per thread and shared by every globals object on it,
+ * so a library function has a stable identity - which systemIs relies on, and which lets an
+ * override be detected by pointer inequality.
  */
-static BSValue bsScriptFunctionValues = {BS_NULL, {0}};
-static BSValue bsExpressionFunctionValues = {BS_NULL, {0}};
+static _Thread_local BSValue bsScriptFunctionValues = {BS_NULL, {0}};
+static _Thread_local BSValue bsExpressionFunctionValues = {BS_NULL, {0}};
 
 
 static void bsLibraryInit(void)
@@ -2170,10 +2173,10 @@ static void bsLibraryInit(void)
     }
 
     /* The strings the regex match model and systemType intern once */
-    bsMatchKeyIndex = bsStringIntern("index", 5);
-    bsMatchKeyInput = bsStringIntern("input", 5);
-    bsMatchKeyGroups = bsStringIntern("groups", 6);
-    bsMatchEmpty = bsStringIntern("", 0);
+    bsMatchKeys.index = bsStringIntern("index", 5);
+    bsMatchKeys.input = bsStringIntern("input", 5);
+    bsMatchKeys.groups = bsStringIntern("groups", 6);
+    bsMatchKeys.empty = bsStringIntern("", 0);
     bsMatchKeyGroupGrow(10);
     for (int ix = 0; ix <= (int) BS_REGEX; ix++) {
         bsSystemTypeNames[ix] = bsStringIntern(bsTypeNames[ix], strlen(bsTypeNames[ix]));
@@ -2216,16 +2219,16 @@ void bsLibraryCleanup(void)
     bsRelease(bsScriptFunctionValues);
     bsExpressionFunctionValues = bsNull();
     bsScriptFunctionValues = bsNull();
-    bsRelease(bsMatchKeyIndex);
-    bsRelease(bsMatchKeyInput);
-    bsRelease(bsMatchKeyGroups);
-    bsRelease(bsMatchEmpty);
-    for (size_t ix = 0; ix < bsMatchKeyGroupCount; ix++) {
-        bsRelease(bsMatchKeyGroup[ix]);
+    bsRelease(bsMatchKeys.index);
+    bsRelease(bsMatchKeys.input);
+    bsRelease(bsMatchKeys.groups);
+    bsRelease(bsMatchKeys.empty);
+    for (size_t ix = 0; ix < bsMatchKeys.groupCount; ix++) {
+        bsRelease(bsMatchKeys.group[ix]);
     }
-    free(bsMatchKeyGroup);
-    bsMatchKeyGroup = NULL;
-    bsMatchKeyGroupCount = 0;
+    free(bsMatchKeys.group);
+    bsMatchKeys.group = NULL;
+    bsMatchKeys.groupCount = 0;
     for (int ix = 0; ix <= (int) BS_REGEX; ix++) {
         bsRelease(bsSystemTypeNames[ix]);
     }

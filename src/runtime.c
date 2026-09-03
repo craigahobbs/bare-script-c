@@ -26,7 +26,13 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 /* The maximum expression evaluation recursion depth */
 #define BS_DEPTH_MAX 500
 
-static uint32_t bsCacheEpoch;
+/* Stamps each options instance so a script's per-site caches re-resolve for a new one */
+static _Thread_local uint32_t bsCacheEpoch;
+
+/* The coverage lookup keys, interned once per thread when a coverage slot is first resolved */
+static _Thread_local struct {
+    BSValue coverage, enabled;
+} bsCoverageKeys;
 
 /* The largest datetime JavaScript's Date represents, in milliseconds */
 #define BS_DATETIME_MAX 8640000000000000.0
@@ -160,8 +166,8 @@ void bsScopeInit(BSScope *scope)
  */
 
 
-static BSValue bsSystemIncludes = {BS_NULL, {0}};
-static BSValue bsSystemIncludePaths = {BS_NULL, {0}};
+static _Thread_local BSValue bsSystemIncludes = {BS_NULL, {0}};
+static _Thread_local BSValue bsSystemIncludePaths = {BS_NULL, {0}};
 
 
 void bsSystemIncludeRegister(const char *name, const char *text)
@@ -1019,27 +1025,27 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
     bool countStatements = script != NULL && !script->system;
     BSValue coverage = bsNull();
     bool hasCoverage = false;
-    if (countStatements) {
-        /* Interned keys make both lookups pointer comparisons - this runs on every function call */
-        static BSValue coverageKey = {BS_NULL, {0}};
-        static BSValue enabledKey = {BS_NULL, {0}};
-        if (coverageKey.type != BS_STRING) {
-            coverageKey = bsStringIntern(BS_GLOBAL_COVERAGE, strlen(BS_GLOBAL_COVERAGE));
-            enabledKey = bsStringIntern("enabled", 7);
+    if (countStatements && options->globals.type == BS_OBJECT) {
+        /*
+         * Interned keys make both lookups pointer comparisons. This runs on every function call, so
+         * the thread-local keys are touched only when the slot is re-resolved; the "enabled" lookup
+         * that follows a resolved slot finds them interned.
+         */
+        BSObject *globals = options->globals.u.object;
+        if (options->coverageEpoch != options->cacheEpoch || options->coverageGen != globals->generation) {
+            if (bsCoverageKeys.coverage.type != BS_STRING) {
+                bsCoverageKeys.coverage = bsStringIntern(BS_GLOBAL_COVERAGE, strlen(BS_GLOBAL_COVERAGE));
+                bsCoverageKeys.enabled = bsStringIntern("enabled", 7);
+            }
+            options->coverageSlot = bsObjectValuePtrString(options->globals, bsCoverageKeys.coverage);
+            options->coverageGen = globals->generation;
+            options->coverageEpoch = options->cacheEpoch;
         }
-        if (options->globals.type == BS_OBJECT) {
-            BSObject *globals = options->globals.u.object;
-            if (options->coverageEpoch != options->cacheEpoch || options->coverageGen != globals->generation) {
-                options->coverageSlot = bsObjectValuePtrString(options->globals, coverageKey);
-                options->coverageGen = globals->generation;
-                options->coverageEpoch = options->cacheEpoch;
-            }
-            BSValue enabled;
-            if (options->coverageSlot != NULL && options->coverageSlot->type == BS_OBJECT &&
-                bsObjectLookupString(*options->coverageSlot, enabledKey, &enabled)) {
-                coverage = *options->coverageSlot;
-                hasCoverage = bsValueBoolean(enabled);
-            }
+        BSValue enabled;
+        if (options->coverageSlot != NULL && options->coverageSlot->type == BS_OBJECT &&
+            bsObjectLookupString(*options->coverageSlot, bsCoverageKeys.enabled, &enabled)) {
+            coverage = *options->coverageSlot;
+            hasCoverage = bsValueBoolean(enabled);
         }
     }
 

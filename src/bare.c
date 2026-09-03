@@ -379,5 +379,6 @@ done:
     bsSystemIncludeClear();
     bsIncludeCleanup();
     bsLibraryCleanup();
+    bsValueCleanup();
     return statusCode;
 }

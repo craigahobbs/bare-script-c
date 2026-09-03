@@ -208,6 +208,13 @@ void bsRelease(BSValue value);
 /* Release "*target" and replace it with the owned reference "value" */
 void bsAssign(BSValue *target, BSValue value);
 
+/*
+ * Free the calling thread's recycled value blocks and its intern table. The runtime's state is
+ * thread-local - see barescript.h - so call this last, after the other cleanups, once the thread
+ * holds no values; a value created before it must not be used after it.
+ */
+void bsValueCleanup(void);
+
 
 /*
  * Value accessors

@@ -7,8 +7,8 @@
  * The bundled BareScript include library
  *
  * Each include is embedded as its parser-compiled JSON script model, gzip-compressed.
- * An accessor decodes its include's model on first use and caches it; the
- * decoded text is released by bsIncludeCleanup. An include compiled out of the library
+ * An accessor decodes its include's model on first use and caches it for the calling
+ * thread; the text is released by bsIncludeCleanup. An include compiled out of the library
  * with its NO_BARESCRIPT_INCLUDE_<NAME> macro - see src/includeSource.c - keeps its
  * registry entry and accessor, which return no model.
  */
@@ -36,7 +36,6 @@ typedef struct BSIncludeSource {
     const char *name;
     const unsigned char *gzip;
     size_t gzipSize;
-    char *decoded;
 } BSIncludeSource;
 
 /* The bundled include library registry, in name order */

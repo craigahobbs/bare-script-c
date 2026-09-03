@@ -52,6 +52,7 @@ BASE_CFLAGS := -std=c11 -pedantic -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -I
 BASE_CFLAGS += -fno-math-errno
 OPT_CFLAGS ?= -O2 -g
 LIBS := -lm
+TEST_LIBS := -pthread
 
 # Shared library code generation
 #
@@ -307,7 +308,7 @@ $(RELEASE_LIB_A): $(RELEASE_A_OBJS)
 
 $(TEST_BIN): $(TEST_OBJS) $(OBJ_DIR)/bare.o $(LIB_A)
 	@mkdir -p $(dir $@)
-	$(CC) -o $@ $(TEST_OBJS) $(OBJ_DIR)/bare.o $(LIB_A) $(LIBS)
+	$(CC) -o $@ $(TEST_OBJS) $(OBJ_DIR)/bare.o $(LIB_A) $(LIBS) $(TEST_LIBS)
 
 .PHONY: test
 test: $(TEST_BIN)
@@ -330,7 +331,7 @@ $(COVER_DIR)/test-%.o: $(TEST_DIR)/%.c
 
 $(COVER_BIN): $(COVER_OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) --coverage -o $@ $^ $(LIBS)
+	$(CC) --coverage -o $@ $^ $(LIBS) $(TEST_LIBS)
 
 GCOV := $(if $(filter-out 0,$(CC_IS_CLANG)),xcrun llvm-cov gcov,gcov)
 COVER_GCOV := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/coverage/%.c.gcov,$(COVER_SRCS))
@@ -374,7 +375,7 @@ test-include-run:
 
 .PHONY: test-language
 test-language: compile
-	$(CLI_BIN) $(if $(DEBUG),-d )$(TEST_DIR)/include/runTests.bare
+	$(CLI_BIN) -d -m $(TEST_DIR)/include/runTests.bare
 
 
 #

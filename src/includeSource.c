@@ -278,7 +278,7 @@ static const unsigned char bsIncludeSourceDataArgs[] = {
 
 const char *bsIncludeSourceArgs(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[0]);
+    return bsIncludeSourceDecode(0);
 }
 
 
@@ -619,7 +619,7 @@ static const unsigned char bsIncludeSourceDataBaredoc[] = {
 
 const char *bsIncludeSourceBaredoc(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[1]);
+    return bsIncludeSourceDecode(1);
 }
 
 
@@ -846,7 +846,7 @@ static const unsigned char bsIncludeSourceDataBaredocCLI[] = {
 
 const char *bsIncludeSourceBaredocCLI(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[2]);
+    return bsIncludeSourceDecode(2);
 }
 
 
@@ -1208,7 +1208,7 @@ static const unsigned char bsIncludeSourceDataBarescriptLint[] = {
 
 const char *bsIncludeSourceBarescriptLint(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[3]);
+    return bsIncludeSourceDecode(3);
 }
 
 
@@ -1324,7 +1324,7 @@ static const unsigned char bsIncludeSourceDataBarescriptModel[] = {
 
 const char *bsIncludeSourceBarescriptModel(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[4]);
+    return bsIncludeSourceDecode(4);
 }
 
 
@@ -2034,7 +2034,7 @@ static const unsigned char bsIncludeSourceDataBarescriptParser[] = {
 
 const char *bsIncludeSourceBarescriptParser(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[5]);
+    return bsIncludeSourceDecode(5);
 }
 
 
@@ -2177,7 +2177,7 @@ static const unsigned char bsIncludeSourceDataBase64[] = {
 
 const char *bsIncludeSourceBase64(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[6]);
+    return bsIncludeSourceDecode(6);
 }
 
 
@@ -2782,7 +2782,7 @@ static const unsigned char bsIncludeSourceDataData[] = {
 
 const char *bsIncludeSourceData(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[7]);
+    return bsIncludeSourceDecode(7);
 }
 
 
@@ -3356,7 +3356,7 @@ static const unsigned char bsIncludeSourceDataDataLineChart[] = {
 
 const char *bsIncludeSourceDataLineChart(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[8]);
+    return bsIncludeSourceDecode(8);
 }
 
 
@@ -3694,7 +3694,7 @@ static const unsigned char bsIncludeSourceDataDataTable[] = {
 
 const char *bsIncludeSourceDataTable(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[9]);
+    return bsIncludeSourceDecode(9);
 }
 
 
@@ -3770,7 +3770,7 @@ static const unsigned char bsIncludeSourceDataDataUtil[] = {
 
 const char *bsIncludeSourceDataUtil(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[10]);
+    return bsIncludeSourceDecode(10);
 }
 
 
@@ -3885,7 +3885,7 @@ static const unsigned char bsIncludeSourceDataDiff[] = {
 
 const char *bsIncludeSourceDiff(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[11]);
+    return bsIncludeSourceDecode(11);
 }
 
 
@@ -4074,7 +4074,7 @@ static const unsigned char bsIncludeSourceDataDraw[] = {
 
 const char *bsIncludeSourceDraw(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[12]);
+    return bsIncludeSourceDecode(12);
 }
 
 
@@ -4284,7 +4284,7 @@ static const unsigned char bsIncludeSourceDataElementModel[] = {
 
 const char *bsIncludeSourceElementModel(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[13]);
+    return bsIncludeSourceDecode(13);
 }
 
 
@@ -4344,7 +4344,7 @@ static const unsigned char bsIncludeSourceDataForms[] = {
 
 const char *bsIncludeSourceForms(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[14]);
+    return bsIncludeSourceDecode(14);
 }
 
 
@@ -4963,7 +4963,7 @@ static const unsigned char bsIncludeSourceDataGzip[] = {
 
 const char *bsIncludeSourceGzip(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[15]);
+    return bsIncludeSourceDecode(15);
 }
 
 
@@ -5126,7 +5126,7 @@ static const unsigned char bsIncludeSourceDataMarkdown[] = {
 
 const char *bsIncludeSourceMarkdown(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[16]);
+    return bsIncludeSourceDecode(16);
 }
 
 
@@ -5393,7 +5393,7 @@ static const unsigned char bsIncludeSourceDataMarkdownElements[] = {
 
 const char *bsIncludeSourceMarkdownElements(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[17]);
+    return bsIncludeSourceDecode(17);
 }
 
 
@@ -6469,7 +6469,7 @@ static const unsigned char bsIncludeSourceDataMarkdownHighlight[] = {
 
 const char *bsIncludeSourceMarkdownHighlight(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[18]);
+    return bsIncludeSourceDecode(18);
 }
 
 
@@ -7149,7 +7149,7 @@ static const unsigned char bsIncludeSourceDataMarkdownParser[] = {
 
 const char *bsIncludeSourceMarkdownParser(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[19]);
+    return bsIncludeSourceDecode(19);
 }
 
 
@@ -7712,7 +7712,7 @@ static const unsigned char bsIncludeSourceDataMarkdownString[] = {
 
 const char *bsIncludeSourceMarkdownString(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[20]);
+    return bsIncludeSourceDecode(20);
 }
 
 
@@ -7839,7 +7839,7 @@ static const unsigned char bsIncludeSourceDataMarkdownUp[] = {
 
 const char *bsIncludeSourceMarkdownUp(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[21]);
+    return bsIncludeSourceDecode(21);
 }
 
 
@@ -8063,7 +8063,7 @@ static const unsigned char bsIncludeSourceDataPager[] = {
 
 const char *bsIncludeSourcePager(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[22]);
+    return bsIncludeSourceDecode(22);
 }
 
 
@@ -8915,7 +8915,7 @@ static const unsigned char bsIncludeSourceDataQrcode[] = {
 
 const char *bsIncludeSourceQrcode(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[23]);
+    return bsIncludeSourceDecode(23);
 }
 
 
@@ -9428,7 +9428,7 @@ static const unsigned char bsIncludeSourceDataSchema[] = {
 
 const char *bsIncludeSourceSchema(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[24]);
+    return bsIncludeSourceDecode(24);
 }
 
 
@@ -9923,7 +9923,7 @@ static const unsigned char bsIncludeSourceDataSchemaDoc[] = {
 
 const char *bsIncludeSourceSchemaDoc(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[25]);
+    return bsIncludeSourceDecode(25);
 }
 
 
@@ -10457,7 +10457,7 @@ static const unsigned char bsIncludeSourceDataSchemaParser[] = {
 
 const char *bsIncludeSourceSchemaParser(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[26]);
+    return bsIncludeSourceDecode(26);
 }
 
 
@@ -10618,7 +10618,7 @@ static const unsigned char bsIncludeSourceDataSchemaTypeModel[] = {
 
 const char *bsIncludeSourceSchemaTypeModel(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[27]);
+    return bsIncludeSourceDecode(27);
 }
 
 
@@ -10962,7 +10962,7 @@ static const unsigned char bsIncludeSourceDataSchemaUtil[] = {
 
 const char *bsIncludeSourceSchemaUtil(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[28]);
+    return bsIncludeSourceDecode(28);
 }
 
 
@@ -11424,7 +11424,7 @@ static const unsigned char bsIncludeSourceDataUnittest[] = {
 
 const char *bsIncludeSourceUnittest(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[29]);
+    return bsIncludeSourceDecode(29);
 }
 
 
@@ -11583,7 +11583,7 @@ static const unsigned char bsIncludeSourceDataUnittestMock[] = {
 
 const char *bsIncludeSourceUnittestMock(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[30]);
+    return bsIncludeSourceDecode(30);
 }
 
 
@@ -11839,44 +11839,44 @@ static const unsigned char bsIncludeSourceDataUrl[] = {
 
 const char *bsIncludeSourceUrl(void)
 {
-    return bsIncludeSourceDecode(&bsIncludeSources[31]);
+    return bsIncludeSourceDecode(31);
 }
 
 
 /* The bundled include library registry */
 BSIncludeSource bsIncludeSources[] = {
-    {"args.bare", BS_INCLUDE_SOURCE_ARGS, NULL},
-    {"baredoc.bare", BS_INCLUDE_SOURCE_BAREDOC, NULL},
-    {"baredocCLI.bare", BS_INCLUDE_SOURCE_BAREDOCCLI, NULL},
-    {"barescriptLint.bare", BS_INCLUDE_SOURCE_BARESCRIPTLINT, NULL},
-    {"barescriptModel.bare", BS_INCLUDE_SOURCE_BARESCRIPTMODEL, NULL},
-    {"barescriptParser.bare", BS_INCLUDE_SOURCE_BARESCRIPTPARSER, NULL},
-    {"base64.bare", BS_INCLUDE_SOURCE_BASE64, NULL},
-    {"data.bare", BS_INCLUDE_SOURCE_DATA, NULL},
-    {"dataLineChart.bare", BS_INCLUDE_SOURCE_DATALINECHART, NULL},
-    {"dataTable.bare", BS_INCLUDE_SOURCE_DATATABLE, NULL},
-    {"dataUtil.bare", BS_INCLUDE_SOURCE_DATAUTIL, NULL},
-    {"diff.bare", BS_INCLUDE_SOURCE_DIFF, NULL},
-    {"draw.bare", BS_INCLUDE_SOURCE_DRAW, NULL},
-    {"elementModel.bare", BS_INCLUDE_SOURCE_ELEMENTMODEL, NULL},
-    {"forms.bare", BS_INCLUDE_SOURCE_FORMS, NULL},
-    {"gzip.bare", BS_INCLUDE_SOURCE_GZIP, NULL},
-    {"markdown.bare", BS_INCLUDE_SOURCE_MARKDOWN, NULL},
-    {"markdownElements.bare", BS_INCLUDE_SOURCE_MARKDOWNELEMENTS, NULL},
-    {"markdownHighlight.bare", BS_INCLUDE_SOURCE_MARKDOWNHIGHLIGHT, NULL},
-    {"markdownParser.bare", BS_INCLUDE_SOURCE_MARKDOWNPARSER, NULL},
-    {"markdownString.bare", BS_INCLUDE_SOURCE_MARKDOWNSTRING, NULL},
-    {"markdownUp.bare", BS_INCLUDE_SOURCE_MARKDOWNUP, NULL},
-    {"pager.bare", BS_INCLUDE_SOURCE_PAGER, NULL},
-    {"qrcode.bare", BS_INCLUDE_SOURCE_QRCODE, NULL},
-    {"schema.bare", BS_INCLUDE_SOURCE_SCHEMA, NULL},
-    {"schemaDoc.bare", BS_INCLUDE_SOURCE_SCHEMADOC, NULL},
-    {"schemaParser.bare", BS_INCLUDE_SOURCE_SCHEMAPARSER, NULL},
-    {"schemaTypeModel.bare", BS_INCLUDE_SOURCE_SCHEMATYPEMODEL, NULL},
-    {"schemaUtil.bare", BS_INCLUDE_SOURCE_SCHEMAUTIL, NULL},
-    {"unittest.bare", BS_INCLUDE_SOURCE_UNITTEST, NULL},
-    {"unittestMock.bare", BS_INCLUDE_SOURCE_UNITTESTMOCK, NULL},
-    {"url.bare", BS_INCLUDE_SOURCE_URL, NULL}
+    {"args.bare", BS_INCLUDE_SOURCE_ARGS},
+    {"baredoc.bare", BS_INCLUDE_SOURCE_BAREDOC},
+    {"baredocCLI.bare", BS_INCLUDE_SOURCE_BAREDOCCLI},
+    {"barescriptLint.bare", BS_INCLUDE_SOURCE_BARESCRIPTLINT},
+    {"barescriptModel.bare", BS_INCLUDE_SOURCE_BARESCRIPTMODEL},
+    {"barescriptParser.bare", BS_INCLUDE_SOURCE_BARESCRIPTPARSER},
+    {"base64.bare", BS_INCLUDE_SOURCE_BASE64},
+    {"data.bare", BS_INCLUDE_SOURCE_DATA},
+    {"dataLineChart.bare", BS_INCLUDE_SOURCE_DATALINECHART},
+    {"dataTable.bare", BS_INCLUDE_SOURCE_DATATABLE},
+    {"dataUtil.bare", BS_INCLUDE_SOURCE_DATAUTIL},
+    {"diff.bare", BS_INCLUDE_SOURCE_DIFF},
+    {"draw.bare", BS_INCLUDE_SOURCE_DRAW},
+    {"elementModel.bare", BS_INCLUDE_SOURCE_ELEMENTMODEL},
+    {"forms.bare", BS_INCLUDE_SOURCE_FORMS},
+    {"gzip.bare", BS_INCLUDE_SOURCE_GZIP},
+    {"markdown.bare", BS_INCLUDE_SOURCE_MARKDOWN},
+    {"markdownElements.bare", BS_INCLUDE_SOURCE_MARKDOWNELEMENTS},
+    {"markdownHighlight.bare", BS_INCLUDE_SOURCE_MARKDOWNHIGHLIGHT},
+    {"markdownParser.bare", BS_INCLUDE_SOURCE_MARKDOWNPARSER},
+    {"markdownString.bare", BS_INCLUDE_SOURCE_MARKDOWNSTRING},
+    {"markdownUp.bare", BS_INCLUDE_SOURCE_MARKDOWNUP},
+    {"pager.bare", BS_INCLUDE_SOURCE_PAGER},
+    {"qrcode.bare", BS_INCLUDE_SOURCE_QRCODE},
+    {"schema.bare", BS_INCLUDE_SOURCE_SCHEMA},
+    {"schemaDoc.bare", BS_INCLUDE_SOURCE_SCHEMADOC},
+    {"schemaParser.bare", BS_INCLUDE_SOURCE_SCHEMAPARSER},
+    {"schemaTypeModel.bare", BS_INCLUDE_SOURCE_SCHEMATYPEMODEL},
+    {"schemaUtil.bare", BS_INCLUDE_SOURCE_SCHEMAUTIL},
+    {"unittest.bare", BS_INCLUDE_SOURCE_UNITTEST},
+    {"unittestMock.bare", BS_INCLUDE_SOURCE_UNITTESTMOCK},
+    {"url.bare", BS_INCLUDE_SOURCE_URL}
 };
 
 

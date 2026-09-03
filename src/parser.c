@@ -23,7 +23,7 @@
 
 
 /*
- * The include library script globals, lazily initialized
+ * The include library script globals, lazily initialized per thread
  *
  * Each bootstrapped script gets its own globals and options, so parsing and linting never disturb
  * - or are disturbed by - the script being parsed.
@@ -34,8 +34,8 @@ typedef struct BSBootstrap {
     BSScript *script;
 } BSBootstrap;
 
-static BSBootstrap bsParserBootstrap = {"barescriptParser.bare", NULL, NULL};
-static BSBootstrap bsLintBootstrap = {"barescriptLint.bare", NULL, NULL};
+static _Thread_local BSBootstrap bsParserBootstrap = {"barescriptParser.bare", NULL, NULL};
+static _Thread_local BSBootstrap bsLintBootstrap = {"barescriptLint.bare", NULL, NULL};
 
 
 /* Load a bundled include library script and execute it, returning its globals */

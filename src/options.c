@@ -18,6 +18,7 @@
 #ifdef BARESCRIPT_CURL
 #include <curl/curl.h>
 #include <dlfcn.h>
+#include <stdatomic.h>
 #endif
 
 
@@ -143,10 +144,15 @@ void bsLogStdout(const char *text, void *data)
  * libcurl is loaded on the first HTTP fetch rather than linked. Linking it made every process map
  * libcurl and its dependency tree at startup - several megabytes of resident memory and a third of
  * an empty script's instructions - whether or not the script ever fetched a URL.
+ *
+ * This is the runtime's one piece of process-wide state. libcurl is loaded and globally
+ * initialized once, by the first thread to fetch, behind an atomic state: 0 before, 1 while that
+ * thread loads, 2 after. Every other thread waits for 2 and reads the entry points published
+ * before it.
  */
 typedef struct BSCurl {
-    bool tried;
     void *handle;
+    CURLcode (*globalInit)(long);
     CURL *(*easyInit)(void);
     CURLcode (*easySetopt)(CURL *, CURLoption, ...);
     CURLcode (*easyPerform)(CURL *);
@@ -157,6 +163,7 @@ typedef struct BSCurl {
 } BSCurl;
 
 static BSCurl bsCurl;
+static atomic_int bsCurlState;
 
 #ifdef __APPLE__
 static const char *const bsCurlLibraries[] = {"libcurl.4.dylib", "libcurl.dylib"};
@@ -177,28 +184,36 @@ static bool bsCurlSymbol(void *handle, const char *name, void *function)
 /* The loaded libcurl entry points, or NULL if libcurl is not available at runtime */
 static const BSCurl *bsCurlLoad(void)
 {
-    if (!bsCurl.tried) {
-        bsCurl.tried = true;
+    int state = 0;
+    if (atomic_compare_exchange_strong(&bsCurlState, &state, 1)) {
         void *handle = NULL;
         for (size_t ix = 0; handle == NULL && ix < sizeof(bsCurlLibraries) / sizeof(bsCurlLibraries[0]); ix++) {
             handle = dlopen(bsCurlLibraries[ix], RTLD_LAZY | RTLD_LOCAL);
         }
         /* GCOV_EXCL_START - a libcurl that is missing or incomplete at runtime */
-        if (handle == NULL) {
-            return NULL;
-        }
-        if (!bsCurlSymbol(handle, "curl_easy_init", &bsCurl.easyInit) ||
-            !bsCurlSymbol(handle, "curl_easy_setopt", &bsCurl.easySetopt) ||
-            !bsCurlSymbol(handle, "curl_easy_perform", &bsCurl.easyPerform) ||
-            !bsCurlSymbol(handle, "curl_easy_getinfo", &bsCurl.easyGetinfo) ||
-            !bsCurlSymbol(handle, "curl_easy_cleanup", &bsCurl.easyCleanup) ||
-            !bsCurlSymbol(handle, "curl_slist_append", &bsCurl.slistAppend) ||
-            !bsCurlSymbol(handle, "curl_slist_free_all", &bsCurl.slistFreeAll)) {
+        if (handle != NULL &&
+            (!bsCurlSymbol(handle, "curl_global_init", &bsCurl.globalInit) ||
+             !bsCurlSymbol(handle, "curl_easy_init", &bsCurl.easyInit) ||
+             !bsCurlSymbol(handle, "curl_easy_setopt", &bsCurl.easySetopt) ||
+             !bsCurlSymbol(handle, "curl_easy_perform", &bsCurl.easyPerform) ||
+             !bsCurlSymbol(handle, "curl_easy_getinfo", &bsCurl.easyGetinfo) ||
+             !bsCurlSymbol(handle, "curl_easy_cleanup", &bsCurl.easyCleanup) ||
+             !bsCurlSymbol(handle, "curl_slist_append", &bsCurl.slistAppend) ||
+             !bsCurlSymbol(handle, "curl_slist_free_all", &bsCurl.slistFreeAll))) {
             dlclose(handle);
-            return NULL;
+            handle = NULL;
         }
         /* GCOV_EXCL_STOP */
-        bsCurl.handle = handle;
+        if (handle != NULL) {
+            /* curl_global_init is not thread-safe before libcurl 7.84 - so it runs here, once */
+            bsCurl.globalInit(CURL_GLOBAL_DEFAULT);
+            bsCurl.handle = handle;
+        }
+        atomic_store_explicit(&bsCurlState, 2, memory_order_release);
+    }
+
+    /* Another thread may be loading - wait for it */
+    while (atomic_load_explicit(&bsCurlState, memory_order_acquire) != 2) {
     }
     return bsCurl.handle != NULL ? &bsCurl : NULL;
 }

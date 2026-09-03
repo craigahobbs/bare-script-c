@@ -22,7 +22,9 @@
 #include "internal.h"
 
 
-static BSScript *bsIncludeScripts[BS_INCLUDE_COUNT];
+/* The thread's compiled include scripts and decoded model texts - the registry itself is never written */
+static _Thread_local BSScript *bsIncludeScripts[BS_INCLUDE_COUNT];
+static _Thread_local char *bsIncludeDecoded[BS_INCLUDE_COUNT];
 
 
 /*
@@ -210,8 +212,8 @@ static int bsInflate(BsBits *bits, unsigned char *out, size_t outCap, size_t *ou
 }
 
 
-static uint32_t bsCrc32Table[256];
-static bool bsCrc32Ready;
+static _Thread_local uint32_t bsCrc32Table[256];
+static _Thread_local bool bsCrc32Ready;
 
 
 static void bsCrc32Init(void)
@@ -309,16 +311,17 @@ char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
 }
 
 
-const char *bsIncludeSourceDecode(BSIncludeSource *source)
+const char *bsIncludeSourceDecode(size_t index)
 {
-    if (source->decoded != NULL) {
-        return source->decoded;
+    if (bsIncludeDecoded[index] != NULL) {
+        return bsIncludeDecoded[index];
     }
+    const BSIncludeSource *source = &bsIncludeSources[index];
     if (source->gzip == NULL || source->gzipSize == 0) {
         return NULL;
     }
-    source->decoded = bsGzipUncompress(source->gzip, source->gzipSize);
-    return source->decoded;
+    bsIncludeDecoded[index] = bsGzipUncompress(source->gzip, source->gzipSize);
+    return bsIncludeDecoded[index];
 }
 
 
@@ -348,7 +351,7 @@ static size_t bsIncludeFind(const char *name)
 const char *bsIncludeSource(const char *name)
 {
     size_t ix = bsIncludeFind(name);
-    return ix < BS_INCLUDE_COUNT ? bsIncludeSourceDecode(&bsIncludeSources[ix]) : NULL;
+    return ix < BS_INCLUDE_COUNT ? bsIncludeSourceDecode(ix) : NULL;
 }
 
 
@@ -361,13 +364,13 @@ BSScript *bsIncludeScript(const char *name)
     if (bsIncludeScripts[ix] != NULL) {
         return bsScriptRetain(bsIncludeScripts[ix]);
     }
-    const char *text = bsIncludeSourceDecode(&bsIncludeSources[ix]);
+    const char *text = bsIncludeSourceDecode(ix);
     if (text == NULL) {
         return NULL; /* the include is compiled out */
     }
     BSScript *script = bsScriptFromModelJSON(text, strlen(text), name, NULL);
-    free(bsIncludeSources[ix].decoded);
-    bsIncludeSources[ix].decoded = NULL;
+    free(bsIncludeDecoded[ix]);
+    bsIncludeDecoded[ix] = NULL;
     if (script == NULL) {
         return NULL; /* GCOV_EXCL_LINE - bundled models always convert */
     }
@@ -381,8 +384,8 @@ BSScript *bsIncludeScript(const char *name)
 void bsIncludeCleanup(void)
 {
     for (size_t ix = 0; ix < BS_INCLUDE_COUNT; ix++) {
-        free(bsIncludeSources[ix].decoded);
-        bsIncludeSources[ix].decoded = NULL;
+        free(bsIncludeDecoded[ix]);
+        bsIncludeDecoded[ix] = NULL;
         if (bsIncludeScripts[ix] != NULL) {
             bsScriptRelease(bsIncludeScripts[ix]);
             bsIncludeScripts[ix] = NULL;

@@ -251,10 +251,10 @@ void bsScriptRelease(BSScript *script)
  * The model keys, interned once so every lookup compares pointers. The JSON decoder and the
  * parser script produce interned keys, so a model object's keys are never compared by content.
  */
-static struct {
+static _Thread_local struct {
     BSValue args, binary, expr, function, group, include, includes, jump, label, lastArgArray, left, lineNumber, name, number, op, return_, right, scriptLines, scriptName, statements, string, system, unary, url, variable;
 } bsKeys;
-static bool bsKeysReady;
+static _Thread_local bool bsKeysReady;
 
 
 void bsModelKeysInit(void)

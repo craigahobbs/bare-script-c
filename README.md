@@ -36,6 +36,7 @@ make compile
   - [The Bundled Include Library](#the-bundled-include-library)
   - [JSON](#json)
   - [Regular Expressions](#regular-expressions)
+  - [Threads](#threads)
 - [Testing](#testing)
   - [The Include Library Test Suite](#the-include-library-test-suite)
 - [Performance](#performance)
@@ -298,6 +299,7 @@ int main(void)
     bsOptionsFree(options);
     bsScriptRelease(script);
     bsLibraryCleanup();
+    bsValueCleanup();
     return 0;
 }
 ```
@@ -372,7 +374,7 @@ and computed keys reuse an interned name when it is already in the table and oth
 ordinary strings, so untrusted unique keys cannot grow the table. The intern table is also
 capped. Interned names on the compiled script skip hashing entirely. A hash-table miss is
 definitive unless the object also has uninterned keys. The intern table holds one reference;
-interned strings live until process exit.
+interned strings live until the thread's `bsValueCleanup`.
 
 Allocation failure is fatal: there is no useful way for a script runtime to continue without
 memory, and threading an out-of-memory result through every value operation would obscure the code
@@ -601,6 +603,38 @@ because the parser is itself regex-driven:
   state in time proportional to what changed rather than copying the capture array.
 - Recursion depth and backtracking steps are **budgeted**, so a pathological pattern gives up
   rather than hanging the runtime or overflowing the stack.
+
+
+### Threads
+
+The runtime has no process-wide mutable state. Every free list, the intern table, the interned
+model keys, the library's function values, the compiled parser, linter, and bundled include caches,
+the system include registry and search path, and the random number generator state are
+`_Thread_local`, so each thread is an independent runtime and threads never contend - there are no
+locks. The one exception is libcurl, which the first thread to fetch a URL loads and globally
+initializes behind a C11 atomic, because `curl_global_init` was not thread-safe before libcurl 7.84.
+
+What this buys is confinement, and confinement is the rule: values, scripts, expressions, and
+options belong to the thread that created them and cannot be handed to another. Reference counts
+are plain integers, and an interned string is known only to its own thread's table, so a key that
+crossed threads would be compared by pointer against strings it can never equal. Pass text between
+threads instead - a script's source, or a JSON string - and let the receiving thread parse it.
+
+Each thread pays for its own copy of what it uses. The parser and linter bootstrap once per thread
+that parses, an include compiles once per thread that includes it, and the free lists and intern
+table fill per thread - about what the command-line interface's startup costs, a few milliseconds
+and under 2 MB. A thread that used the runtime releases that state before it exits with
+`bsParserCleanup`, `bsSystemIncludeClear`, `bsIncludeCleanup`, `bsLibraryCleanup`, and last
+`bsValueCleanup`, which frees the free lists and the intern table; a thread that exits without them
+leaks its copy. The command-line interface is single-threaded and calls the five at exit. The C
+unit tests run eight threads through the parser, linter, includes, and library at once, and the
+suite passes under ThreadSanitizer.
+
+Thread-local storage is not free: on Mach-O every access to a thread-local variable is a call to
+the loader's thunk, so each file keeps its state in one struct and a function computes the address
+once, and the interpreter touches none of it on a function call. What remains is one address
+computation per free-list push or pop and per interned-key lookup - on the performance suite, 1-3%
+more instructions and 1-4% more cycles than the process-global runtime this replaced.
 
 
 ## Testing

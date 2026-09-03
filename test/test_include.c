@@ -239,10 +239,18 @@ TEST(include_gzip_invalid)
         free(decoded);
     }
 
-    /* A missing gzip blob fails to decode */
-    BSIncludeSource emptySource = {"t.bare", NULL, 0, NULL};
-    ASSERT_NULL(bsIncludeSourceDecode(&emptySource));
+    /* A missing or empty gzip blob fails to decode - patched into a registry entry, then restored */
+    size_t ixUrl = 0;
+    while (strcmp(bsIncludeName(ixUrl), "url.bare") != 0) {
+        ixUrl++;
+    }
+    bsIncludeCleanup();
+    BSIncludeSource saved = bsIncludeSources[ixUrl];
     static const unsigned char dummyGzip[1] = {0};
-    BSIncludeSource zeroSource = {"t.bare", dummyGzip, 0, NULL};
-    ASSERT_NULL(bsIncludeSourceDecode(&zeroSource));
+    bsIncludeSources[ixUrl].gzip = dummyGzip;
+    bsIncludeSources[ixUrl].gzipSize = 0;
+    ASSERT_NULL(bsIncludeSourceDecode(ixUrl));
+    bsIncludeSources[ixUrl].gzip = NULL;
+    ASSERT_NULL(bsIncludeSourceDecode(ixUrl));
+    bsIncludeSources[ixUrl] = saved;
 }
