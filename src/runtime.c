@@ -654,10 +654,6 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
 }
 
 
-/*
- * Look up a global name through its site cache. Returns a borrowed value, or a null value if the
- * name is absent.
- */
 /* The globals object's value slot for a name site, or NULL if the name is absent */
 static inline BSValue *bsGlobalSlot(BSCallCache *cache, BSValue name, BSOptions *options)
 {
@@ -674,6 +670,7 @@ static inline BSValue *bsGlobalSlot(BSCallCache *cache, BSValue name, BSOptions 
 }
 
 
+/* Look up a global name through its site cache. Returns a borrowed value, or a null value if absent. */
 static inline BSValue bsGlobalLookup(BSCallCache *cache, BSValue name, BSOptions *options)
 {
     BSValue *slot = bsGlobalSlot(cache, name, options);
@@ -681,30 +678,25 @@ static inline BSValue bsGlobalLookup(BSCallCache *cache, BSValue name, BSOptions
 }
 
 
-/*
- * Call the function named by a CALL_NAME or CALL_SLOT instruction. "pc" is the call instruction's
- * index, for error line numbers. Returns the owned result.
- */
-static BSValue bsCall(const BSCode *code, size_t pc, uint8_t op, uint32_t arg, const BSValue *args,
-                      size_t argCount, BSScript *script, BSOptions *options, const BSValue *slots,
-                      BSValue locals, bool builtins)
+/* Call the function named by a CALL_NAME or CALL_SLOT instruction. Returns the owned result. */
+static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *args, size_t argCount,
+                      BSScript *script, BSOptions *options, const BSValue *regs, BSValue locals,
+                      bool builtins)
 {
+    size_t pc = (size_t) (inst - code->inst);
     BSValue name;
     BSValue function = bsNull();
-    if (op == BS_OP_CALL_SLOT) {
-        name = code->slotNames[arg];
-        if (slots != NULL) {
-            BSValue value = slots[arg];
-            if (!BS_IS_UNSET(value)) {
-                function = value;
-            }
+    if (inst->op == BS_OP_CALL_SLOT) {
+        name = code->slotNames[inst->b];
+        if (!BS_IS_UNSET(regs[inst->b])) {
+            function = regs[inst->b];
         }
         if (function.type == BS_NULL) {
             /* An unset or null slot falls through to the globals */
             function = bsObjectGetString(options->globals, name);
         }
     } else {
-        BSCallCache *cache = &code->caches[arg];
+        BSCallCache *cache = &code->caches[inst->b];
         name = code->constants[cache->nameIndex];
         if (locals.type == BS_OBJECT) {
             BSValue found;
@@ -896,11 +888,11 @@ includeFailed:
 /*
  * Run a compiled chunk
  *
- * The value stack is allocated once at the chunk's emit-time maximum depth, so pushes and pops
- * carry no bounds checks; the emitter's stack accounting is the invariant. Slot operands are
- * likewise trusted - LOAD_SLOT and STORE_SLOT are only emitted in a function body, which always
- * runs with its own slot array. A runtime error is detected where it can arise: at entry, after
- * each call, and at the statements that raise one themselves.
+ * The registers are allocated once at the chunk's emit-time count, so register operands carry no
+ * bounds checks; the emitter's accounting is the invariant. Slot operands are likewise trusted -
+ * LOAD_SLOT and CALL_SLOT are only emitted in a function body, which always runs with its own
+ * slots. A runtime error is detected where it can arise: at entry, after each call, and at the
+ * statements that raise one themselves.
  *
  * With GNU C, each handler jumps straight to the next one through a label table, so the branch
  * predictor sees one indirect branch per opcode rather than a single shared switch branch.
@@ -1031,14 +1023,14 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
     size_t slotCount = code->slotCount;
     size_t regCount = slotCount + code->tempCount;
     bool ownRegs = scope == NULL || scope->slots == NULL;
-    BSValue *regs = scope != NULL && scope->slots != NULL ? scope->slots :
+    BSValue *regs = !ownRegs ? scope->slots :
         (regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue)));
     if (ownRegs) {
         for (size_t ix = 0; ix < regCount; ix++) {
             regs[ix] = bsNull();
         }
     }
-    BSValue locals = (scope != NULL && scope->slots == NULL) ? scope->object : bsNull();
+    BSValue locals = (ownRegs && scope != NULL) ? scope->object : bsNull();
 
     bool countStatements = script != NULL && !script->system;
     BSValue coverage = bsNull();
@@ -1178,7 +1170,6 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CASE(CALL_NAME)
         BS_CASE(CALL_SLOT) {
             /* The arguments are operands, three per data word, read into a borrowed argument array */
-            size_t callPc = pc - 1;
             size_t argCount = inst->c;
             BSValue argsInline[16];
             BSValue *args = argCount <= 16 ? argsInline : bsAlloc(argCount * sizeof(BSValue));
@@ -1197,8 +1188,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
                 data++;
             }
             pc = (size_t) (data - insts);
-            BSValue value = bsCall(code, callPc, inst->op, inst->b, args, argCount, script, options, regs,
-                                   locals, builtins);
+            BSValue value = bsCall(code, inst, args, argCount, script, options, regs, locals, builtins);
             if (args != argsInline) {
                 free(args);
             }

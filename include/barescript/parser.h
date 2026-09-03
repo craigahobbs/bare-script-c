@@ -56,11 +56,12 @@ typedef struct BSCallCache {
 /*
  * A compiled bytecode chunk
  *
- * Instructions are (opcode << 24) | arg. Constants are interned names, string literals, and
- * numbers. STMT operands index cover[], borrowed statement models from the parser output - NULL
- * once the script forgets its model, until coverage recording restores them.
- * CALL_NAME and LOAD_NAME operands index caches[], one per site. stackMax is the deepest value
- * stack the chunk can reach, computed at emit time, so the interpreter allocates the stack once.
+ * Instructions are eight-byte register instructions whose operands name a register - a slot or a
+ * temporary - or a constant: an interned name, a string literal, or a number. STMT operands index
+ * cover[], borrowed statement models from the parser output - NULL once the script forgets its
+ * model, until coverage recording restores them. CALL_NAME, LOAD_NAME, and STORE_NAME operands
+ * index caches[], one per site. tempCount is the temporaries the chunk needs past its slots,
+ * computed at emit time, so the interpreter allocates its registers once.
  */
 typedef struct BSInst BSInst;
 

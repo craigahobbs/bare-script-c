@@ -278,16 +278,16 @@ typedef struct {
     BSInclude *includes;
     size_t includeCount;
     size_t includeCap;
-    uint32_t *callNames;  /* per CALL_NAME or LOAD_NAME site, the name's constant index */
-    size_t callCount;
-    size_t callCap;
+    BSCallCache *caches;  /* per CALL_NAME, LOAD_NAME, or STORE_NAME site */
+    size_t cacheCount;
+    size_t cacheCap;
     uint16_t tempTop;     /* the temporaries in use past the slots */
     uint16_t tempMax;
     BSOperand nullConst;  /* the null constant's operand, once allocated */
     size_t assignedWords; /* the definite-assignment sets, slotCount bits each, or 0 for no analysis */
     uint32_t *assigned;   /* the slots definitely assigned at the statement being emitted */
-    uint32_t *blockIn;    /* per statement that starts a block, the slots definitely assigned on entry */
-    uint8_t *blockStarts; /* per statement, whether it starts a block */
+    uint32_t *blockOf;    /* per statement, its basic block */
+    uint32_t *blockIn;    /* per block, the slots definitely assigned on entry */
     BSValue *slotNames;
     size_t slotCount;
     size_t slotCap;
@@ -428,15 +428,17 @@ static void bsSlotAdd(BSEmit *e, BSValue name)
 static bool bsEmitSite(BSEmit *e, BSValue name, uint16_t *site)
 {
     BSOperand constant;
-    if (!bsEmitConst(e, name, &constant) || e->callCount > BS_OPERAND_MAX) {
+    if (!bsEmitConst(e, name, &constant) || e->cacheCount > BS_OPERAND_MAX) {
         return false;
     }
-    if (e->callCount == e->callCap) {
-        e->callCap = e->callCap != 0 ? e->callCap * 2 : 8;
-        e->callNames = bsRealloc(e->callNames, e->callCap * sizeof(uint32_t));
+    if (e->cacheCount == e->cacheCap) {
+        e->cacheCap = e->cacheCap != 0 ? e->cacheCap * 2 : 8;
+        e->caches = bsRealloc(e->caches, e->cacheCap * sizeof(BSCallCache));
     }
-    e->callNames[e->callCount] = BS_OPERAND_INDEX(constant);
-    *site = (uint16_t) e->callCount++;
+    BSCallCache *cache = &e->caches[e->cacheCount];
+    memset(cache, 0, sizeof(*cache));
+    cache->nameIndex = BS_OPERAND_INDEX(constant);
+    *site = (uint16_t) e->cacheCount++;
     return true;
 }
 
@@ -583,11 +585,11 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
     while (changed) {
         changed = false;
         for (size_t ix = 0; ix < count; ix++) {
-            bool last = ix + 1 == count || starts[ix + 1];
+            uint32_t block = blockOf[ix];
+            bool last = ix + 1 == count || blockOf[ix + 1] != block;
             if (!last) {
                 continue;
             }
-            uint32_t block = blockOf[ix];
             const uint32_t *blockGen = &gen[block * words];
             const uint32_t *blockIn = &in[block * words];
             BSValue statement = bsArrayGet(statements, ix);
@@ -617,16 +619,10 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
 
     e->assignedWords = words;
     e->assigned = bsAlloc(words * sizeof(uint32_t));
-    e->blockStarts = starts;
-    e->blockIn = bsAlloc(count * words * sizeof(uint32_t));
-    for (size_t ix = 0; ix < count; ix++) {
-        if (starts[ix]) {
-            memcpy(&e->blockIn[ix * words], &in[blockOf[ix] * words], words * sizeof(uint32_t));
-        }
-    }
+    e->blockOf = blockOf;
+    e->blockIn = in;
     free(gen);
-    free(in);
-    free(blockOf);
+    free(starts);
     bsRelease(labelBlocks);
 }
 
@@ -634,11 +630,11 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
 static void bsAssignedFree(BSEmit *e)
 {
     free(e->assigned);
+    free(e->blockOf);
     free(e->blockIn);
-    free(e->blockStarts);
     e->assigned = NULL;
+    e->blockOf = NULL;
     e->blockIn = NULL;
-    e->blockStarts = NULL;
     e->assignedWords = 0;
 }
 
@@ -1162,8 +1158,9 @@ static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
 {
     size_t count = bsArrayCount(statementModels);
     for (size_t ix = 0; ix < count; ix++) {
-        if (e->assignedWords != 0 && e->blockStarts[ix]) {
-            memcpy(e->assigned, &e->blockIn[ix * e->assignedWords], e->assignedWords * sizeof(uint32_t));
+        if (e->assignedWords != 0 && (ix == 0 || e->blockOf[ix] != e->blockOf[ix - 1])) {
+            memcpy(e->assigned, &e->blockIn[e->blockOf[ix] * e->assignedWords],
+                   e->assignedWords * sizeof(uint32_t));
         }
         if (!bsEmitStatement(e, bsArrayGet(statementModels, ix))) {
             return false;
@@ -1239,34 +1236,15 @@ static void bsEmitFinish(BSEmit *e, BSCode *code)
     code->coverCount = e->coverCount;
     code->slotNames = e->slotNames;
     code->slotCount = e->slotCount;
-    if (e->callCount != 0) {
-        code->caches = bsAlloc(e->callCount * sizeof(BSCallCache));
-        memset(code->caches, 0, e->callCount * sizeof(BSCallCache));
-        for (size_t ix = 0; ix < e->callCount; ix++) {
-            code->caches[ix].nameIndex = e->callNames[ix];
-        }
-    }
-    free(e->callNames);
+    code->caches = e->caches;
 }
 
 
-/* Abandon a failed emit: the buffers built so far form a chunk that bsCodeFree releases */
+/* Abandon a failed emit: the chunk it would have made is finished and released */
 static void bsEmitDiscard(BSEmit *e)
 {
-    for (size_t ix = 0; ix < e->patchCount; ix++) {
-        bsRelease(e->patches[ix].label);
-    }
-    free(e->patches);
-    free(e->callNames);
-    bsRelease(e->labels);
-    bsRelease(e->slotMap);
-    bsRelease(e->constMap);
-    BSCode code = {
-        .inst = e->inst, .constants = e->constants, .constantCount = e->constCount,
-        .includes = e->includes, .includeCount = e->includeCount, .cover = e->cover,
-        .coverLines = e->coverLines, .coverPcs = e->coverPcs, .slotNames = e->slotNames,
-        .slotCount = e->slotCount
-    };
+    BSCode code;
+    bsEmitFinish(e, &code);
     bsCodeFree(&code);
 }
 
@@ -1370,6 +1348,37 @@ BSExpr *bsExprFromModel(BSValue model)
 }
 
 
+/* A new script with no name, no lines, and no model */
+static BSScript *bsScriptNew(void)
+{
+    BSScript *script = bsAlloc(sizeof(BSScript));
+    memset(script, 0, sizeof(*script));
+    script->refcount = 1;
+    script->startLineNumber = 1;
+    script->model = bsNull();
+    script->scriptName = bsNull();
+    script->scriptLines = bsArrayNew();
+    return script;
+}
+
+
+/* Take a script's name, lines, and system flag from its model's members; "scriptName" overrides the name */
+static void bsScriptInfo(BSScript *script, BSValue model, const char *scriptName)
+{
+    script->system = bsValueBoolean(bsObjectGetString(model, bsKeys.system));
+    BSValue modelName = bsObjectGetString(model, bsKeys.scriptName);
+    if (scriptName != NULL) {
+        bsAssign(&script->scriptName, bsStringNew(scriptName));
+    } else if (modelName.type == BS_STRING) {
+        bsAssign(&script->scriptName, bsRetain(modelName));
+    }
+    BSValue scriptLines = bsObjectGetString(model, bsKeys.scriptLines);
+    if (scriptLines.type == BS_ARRAY) {
+        bsAssign(&script->scriptLines, bsRetain(scriptLines));
+    }
+}
+
+
 BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
 {
     if (model.type != BS_OBJECT) {
@@ -1381,21 +1390,9 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
         return NULL;
     }
 
-    BSScript *script = bsAlloc(sizeof(BSScript));
-    memset(script, 0, sizeof(*script));
-    script->refcount = 1;
-    script->system = bsValueBoolean(bsObjectGetString(model, bsKeys.system));
-    script->startLineNumber = 1;
+    BSScript *script = bsScriptNew();
     script->model = bsRetain(model);
-
-    BSValue modelName = bsObjectGetString(model, bsKeys.scriptName);
-    if (scriptName != NULL) {
-        script->scriptName = bsStringNew(scriptName);
-    } else {
-        script->scriptName = modelName.type == BS_STRING ? bsRetain(modelName) : bsNull();
-    }
-    BSValue scriptLines = bsObjectGetString(model, bsKeys.scriptLines);
-    script->scriptLines = scriptLines.type == BS_ARRAY ? bsRetain(scriptLines) : bsArrayNew();
+    bsScriptInfo(script, model, scriptName);
 
     size_t functionCap = 0;
     BSEmit e;
@@ -1417,14 +1414,7 @@ static bool bsEmitStreamedStatement(BSValue statement, void *data)
 BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scriptName, const char **error)
 {
     bsModelKeysInit();
-    BSScript *script = bsAlloc(sizeof(BSScript));
-    memset(script, 0, sizeof(*script));
-    script->refcount = 1;
-    script->startLineNumber = 1;
-    script->model = bsNull();
-    script->scriptName = scriptName != NULL ? bsStringNew(scriptName) : bsNull();
-    script->scriptLines = bsArrayNew();
-
+    BSScript *script = bsScriptNew();
     size_t functionCap = 0;
     BSEmit e;
     bsEmitInit(&e, script, &functionCap);
@@ -1436,16 +1426,7 @@ BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scrip
     }
     bsEmitInst(&e, BS_OP_RETURN, e.nullConst, 0, 0);
     bsEmitFinish(&e, &script->code);
-
-    script->system = bsValueBoolean(bsObjectGetString(rest, bsKeys.system));
-    BSValue modelName = bsObjectGetString(rest, bsKeys.scriptName);
-    if (scriptName == NULL && modelName.type == BS_STRING) {
-        script->scriptName = bsRetain(modelName);
-    }
-    BSValue scriptLines = bsObjectGetString(rest, bsKeys.scriptLines);
-    if (scriptLines.type == BS_ARRAY) {
-        bsAssign(&script->scriptLines, bsRetain(scriptLines));
-    }
+    bsScriptInfo(script, rest, scriptName);
     bsRelease(rest);
 
     /* The statement models the chunks borrowed were released as they were compiled */
