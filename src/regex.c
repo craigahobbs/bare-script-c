@@ -1229,17 +1229,10 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
 }
 
 
-void bsRegexRetain(BSValue value)
+/* Called once the shared refcount reaches zero - see bsReleaseInline */
+void bsRegexDestroy(BSValue value)
 {
-    value.u.regex->refcount++;
-}
-
-
-void bsRegexRelease(BSValue value)
-{
-    if (--value.u.regex->refcount == 0) {
-        bsRegexFree(value.u.regex);
-    }
+    bsRegexFree(value.u.regex);
 }
 
 

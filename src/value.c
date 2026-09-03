@@ -2125,6 +2125,9 @@ void bsReleaseDestroyed(BSValue value)
         bsObjectRecycle(object);
         break;
     }
+    case BS_REGEX:
+        bsRegexDestroy(value);
+        break;
     default: {
         BSFunction *function = value.u.function;
         if (function->dataFree != NULL) {

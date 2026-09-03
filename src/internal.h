@@ -29,8 +29,7 @@ BSScript *bsIncludeScript(const char *name);
 
 
 /* Regex value reference counting - implemented by the regex engine */
-void bsRegexRetain(BSValue value);
-void bsRegexRelease(BSValue value);
+void bsRegexDestroy(BSValue value);
 
 /* Destroy a heap value whose refcount has reached zero */
 void bsReleaseDestroyed(BSValue value);
@@ -39,23 +38,27 @@ void bsReleaseDestroyed(BSValue value);
  * Fast-path retain/release for implementation files. Immediate values are a no-op the compiler
  * can see; the public functions in value.c remain the library ABI.
  */
+/*
+ * Every reference type - string, array, object, function, regex - begins with the same int32_t
+ * refcount, so one unsigned range test over the contiguous BS_STRING..BS_REGEX span decides
+ * whether a value is counted at all, and one decrement serves them all. The regex used to be
+ * counted through a call of its own, which cost the common non-reference value an extra compare
+ * on the hottest path in the runtime.
+ */
+#define BS_IS_REF(value) \
+    ((unsigned) (value).type - (unsigned) BS_STRING <= (unsigned) (BS_REGEX - BS_STRING))
+
 static inline BSValue bsRetainInline(BSValue value)
 {
-    if (value.type >= BS_STRING && value.type <= BS_FUNCTION) {
+    if (BS_IS_REF(value)) {
         (*(int32_t *) value.u.ref)++;
-    } else if (value.type == BS_REGEX) {
-        bsRegexRetain(value);
     }
     return value;
 }
 
 static inline void bsReleaseInline(BSValue value)
 {
-    if (value.type == BS_REGEX) {
-        bsRegexRelease(value);
-        return;
-    }
-    if (value.type < BS_STRING || value.type > BS_FUNCTION) {
+    if (!BS_IS_REF(value)) {
         return;
     }
     if (--(*(int32_t *) value.u.ref) != 0) {
