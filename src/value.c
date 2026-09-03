@@ -6,7 +6,6 @@
  */
 
 #include <ctype.h>
-#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,8 +13,6 @@
 #include <time.h>
 
 #include "barescript/json.h"
-#include "barescript/regex.h"
-#include "barescript/runtime.h"
 #include "barescript/value.h"
 
 #define BARESCRIPT_VALUE_IMPL
@@ -368,7 +365,6 @@ BSValue bsStringNewAscii(const char *text, size_t size)
     BSString *string = bsStringAlloc(size);
     memcpy(string->data, text, size);
     string->length = (uint32_t) size;
-    string->flags |= BS_STR_ASCII;
     return bsStringTake(string);
 }
 
@@ -378,7 +374,6 @@ static BSValue bsStringFinish(BSString *string, size_t size)
 {
     if (bsUtf8IsAscii(string->data, size)) {
         string->length = (uint32_t) size;
-        string->flags |= BS_STR_ASCII;
     } else {
         size_t length = bsUTF8Length(string->data, size);
         string->length = (uint32_t) (length != SIZE_MAX ? length : size);
@@ -498,9 +493,6 @@ BSValue bsStringConcat(BSValue left, BSValue right)
     memcpy(string->data, leftData, leftSize);
     memcpy(string->data + leftSize, rightData, rightSize);
     string->length = (uint32_t) (leftLength + rightLength);
-    if (leftLength == leftSize && rightLength == rightSize) {
-        string->flags |= BS_STR_ASCII;
-    }
 
     bsReleaseInline(leftText);
     bsReleaseInline(rightText);
@@ -1328,12 +1320,11 @@ static BSObjectNode *bsObjectLookupGet(const BSObject *object, BSString *interne
 }
 
 
-/* Tiny objects store up to four pairs in the object itself. Past that they become a list, and
- * past BS_OBJECT_SMALL they grow a treap. */
+/* Tiny objects store up to four pairs in the object itself. Past that they become a list. */
 #define BS_OBJECT_PACKED 4
 
-/* Small objects are faster to scan in insertion order than to chase treap pointers.
- * Insert stays on the insertion-order list until the object grows past this. */
+/* Past this, interned keys are indexed by pointer. The treap is built only for a sorted walk
+ * or a key that must be matched by content. */
 #define BS_OBJECT_SMALL 32
 
 static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *object);
@@ -1699,7 +1690,6 @@ static BSObjectNode *bsObjectFind(BSObjectNode *node, const char *key, size_t si
 static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t size,
                                      BSString *interned)
 {
-    interned = bsInternResolve(&key, &size, interned);
     if (object->count > BS_OBJECT_SMALL) {
         if (interned != NULL) {
             BSObjectNode *node = bsObjectLookupGet(object, interned);
@@ -2042,6 +2032,13 @@ static bool bsObjectCopyIter(BSValue key, BSValue item, void *data)
 }
 
 
+static bool bsObjectAppendIter(BSValue key, BSValue item, void *data)
+{
+    bsObjectAppend(*((BSValue *) data), key, bsRetainInline(item));
+    return true;
+}
+
+
 void bsObjectAssign(BSValue dest, BSValue src)
 {
     bsObjectIter(src, bsObjectCopyIter, &dest);
@@ -2050,8 +2047,8 @@ void bsObjectAssign(BSValue dest, BSValue src)
 
 BSValue bsObjectCopy(BSValue value)
 {
-    BSValue copy = bsObjectNew();
-    bsObjectAssign(copy, value);
+    BSValue copy = bsObjectNewCapacity(bsObjectCount(value));
+    bsObjectIter(value, bsObjectAppendIter, &copy);
     return copy;
 }
 

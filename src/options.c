@@ -5,7 +5,6 @@
  * BareScript runtime option function implementations
  */
 
-#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
