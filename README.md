@@ -108,6 +108,51 @@ gain) all land within build-to-build noise, which is about 1% between two builds
 configuration. Dead stripping has nothing left to strip after LTO with hidden visibility, and
 context-sensitive PGO is not available: Apple's linker does not instrument under LTO.
 
+A second pass went through the rest of the compiler, linker, and profile knobs. Each variant was
+built on the same profile as the baseline where the flag allows it, and measured as instructions
+retired and cycles over the performance suite, the include library test suite, a held-out
+word-count script that no training program resembles, and an empty script for startup - against
+two identical baseline builds, which differ from each other by 0.5% in cycles. Text is the
+`__text` section of the shared library, 196 KB in the release build.
+
+| Variant                                                        | Text      | Speed                    |
+| -------------------------------------------------------------- | --------: | ------------------------ |
+| `-O3`, re-measured on the current code                         | +6%       | noise                    |
+| inline threshold 500 / 100                                     | +17% / -2% | noise / noise           |
+| hot call-site threshold 6000                                   | +11%      | -0.5% instructions       |
+| **profile hot cutoff 99.9%** (default 99%)                     | **+34%**  | **-1% instructions, every test** |
+| profile hot cutoff 95% / 90% / 80%                             | -13% / -17% / -19% | +1.8% / +1.9% / +3.3% cycles |
+| profile cold cutoff 99% (default 99.9999%)                     | -12%      | +2.3% cycles             |
+| `minsize` on profile-cold functions (`-pgo-cold-func-opt`)     | -2%       | noise                    |
+| `-fno-unroll-loops`                                            | -7%       | +3.3% cycles             |
+| `-fno-vectorize -fno-slp-vectorize`                            | +0.4%     | +1.3% cycles             |
+| hot/cold splitting                                             | -2% (+4% file) | noise               |
+| function alignment 32 / no-fall-through block alignment 16    | +3% / +9% | noise                    |
+| `-fno-jump-tables`, ext-TSP block placement, GVN hoisting      | 0         | noise                    |
+| front-end instrumentation (`-fprofile-instr-generate`)         | +31%      | +4.6%                    |
+| pre-instrumentation inlining off (`-disable-preinline`)        | -5%       | +4.7%                    |
+| hot-first function order file from the profile (`-order_file`) | 0         | noise, startup included  |
+| `-Wl,-no_deduplicate`, `-Wl,-ld_classic`                       | 0         | noise                    |
+| the CLI and library as one statically linked binary            |           | noise, startup included  |
+
+`-falign-loops`, `-fmerge-all-constants`, loop flattening, DFA jump threading, 32 value-profile
+counters per site instead of 8, and promoting up to 8 indirect-call targets all produce the same
+binary, give or take a few hundred bytes. The cold-side knobs shrink the code by de-optimizing
+whatever the training touched lightly - `minsize` lands on the datetime accessors and the array
+fallbacks, for one - which is the benchmark-overfitting these builds are meant to avoid, so none
+is taken for a 2% saving. The one knob that moves the suite, the 99.9% hot cutoff, is `-O3`'s
+trade again with a worse ratio: a third more code for 1% fewer instructions and no wall-time
+change, so it is not taken either. Two mechanics worth knowing: under `-flto` an `-mllvm` option
+given at compile time shapes only the pre-link pipeline and never reaches the link-time code
+generator, which takes `-Wl,-mllvm,`; and the hot cutoff snaps to the profile summary's fixed
+percentiles, so 99.5% builds the same binary as 99.9%.
+
+The release also builds with `-DNDEBUG`, which is a convention rather than an effect - the
+sources contain no `assert`. And clang's default `-ffp-contract=on` fuses 13 multiply-adds in
+the library, all in the bitwise operators' 32-bit conversion and in radix digit accumulation,
+where every operand is an exact integer below 2^53; `-ffp-contract=off` would change no result the
+JavaScript and Python implementations could observe.
+
 The release static library keeps the profile but drops link-time optimization, so it stays an
 archive of ordinary object files rather than one of compiler intermediate code, which not every
 consumer's linker can read.
@@ -124,6 +169,14 @@ An earlier mix added a synthetic source-parse script, this project's language te
 static-analysis run instead of the test suite. Measured against a rebuilt identical configuration,
 none of the three moved either workload beyond build-to-build noise, while training on the test
 suite retires 3% fewer instructions on it and costs the performance suite nothing.
+
+The mix itself was then varied, measured the same way and on the held-out script as well.
+Training on the performance suite alone is 3% slower overall and 5% slower on the test suite;
+the test suite alone is 2% slower and 4% slower on `markdownParse`; weighting the performance
+suite 3:1 is 2% slower, weighting the test suite 3:1 is noise; and adding a third program that
+sweeps the built-in library - JSON, sorting, strings, regular expressions, objects, numbers,
+dates - grows the code 5% and moves nothing, the held-out script included. The two-program,
+equal-weight mix is the optimum.
 
 `make test` and `make cover` accept a `TEST` variable that filters test cases by name substring:
 
