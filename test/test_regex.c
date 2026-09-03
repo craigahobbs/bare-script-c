@@ -586,6 +586,46 @@ TEST(regex_final_coverage)
 }
 
 
+TEST(regex_program)
+{
+    /* Failing instructions: a folded literal, dot-all at the end, and both general lookarounds */
+    ASSERT_VALUE_STRING(bsTestMatch("abc", "ABD", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("a.", "a", BS_REGEX_DOTALL), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("(?=ab)a", "ac", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<=ab)c", "xbc", 0), "null");
+
+    /* A lookbehind body that matches but ends past the anchor */
+    ASSERT_VALUE_STRING(bsTestMatch("(?<=a+)c", "aabc", 0), "null");
+
+    /* A single-code-point lookaround at the end of a non-ASCII subject, and a class body */
+    ASSERT_VALUE_STRING(bsTestMatch("\xc3\xa9(?=a)", "\xc3\xa9", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<=[a-c])x", "bx", 0), "x");
+    ASSERT_VALUE_STRING(bsTestMatch("[ab]+?c", "abc", 0), "abc");
+    ASSERT_VALUE_STRING(bsTestMatch("a+?b", "AAB", BS_REGEX_IGNORECASE), "AAB");
+    ASSERT_VALUE_STRING(bsTestMatch(".+?b", "x\nb", BS_REGEX_DOTALL), "x\nb");
+
+    /* A greedy simple repeat giving back past positions that do not hold the following literal */
+    ASSERT_VALUE_STRING(bsTestMatch("a*bc", "aabab", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("a*bc", "aababc", 0), "abc");
+    ASSERT_VALUE_STRING(bsTestMatch("[ab]*bc", "abab", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("[ab]*bc", "ababbc", 0), "ababbc");
+
+    /* An alternation too wide to index backtracks through its alternatives one at a time */
+    BSStringBuilder sb;
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "(?:");
+    for (int ix = 0; ix < 35; ix++) {
+        bsSBAppendString(&sb, ix == 0 ? "a" : (ix % 2 == 0 ? "|a" : "|b"));
+    }
+    bsSBAppendString(&sb, ")c");
+    BSValue wide = bsSBToValue(&sb);
+    ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "ax", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "bx", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "bc", 0), "bc");
+    bsRelease(wide);
+}
+
+
 TEST(regex_alternation_index)
 {
     /* A wide alternation tries only the alternatives that can begin with the code point at hand */

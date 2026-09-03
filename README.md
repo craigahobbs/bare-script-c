@@ -569,9 +569,14 @@ unpaired surrogate in a `\uXXXX` escape becomes U+FFFD so every decoded string i
 
 ### Regular Expressions
 
-The engine compiles a pattern to a node tree and matches by backtracking with an explicit
-continuation list. It implements the subset of JavaScript regular expression syntax that
-BareScript's regex functions expose:
+The engine parses a pattern to a node tree, computes first sets and lookbehind bounds from it,
+compiles it to a linear program, and frees the tree. One loop runs the program with an explicit
+backtrack stack: an alternation's remaining alternatives, a repeat's remaining iterations, and a
+simple repeat's give-back are backtrack entries, and every capture and repeat-counter write is on
+an undo trail that a backtrack unwinds to the entry's mark. Matching costs no C recursion beyond
+one call per lookaround body, and a program is about a quarter the size of the tree it replaces.
+The engine implements the subset of JavaScript regular expression syntax that BareScript's regex
+functions expose:
 
 | Category   | Syntax                                                                    |
 | ---------- | ------------------------------------------------------------------------- |
@@ -591,18 +596,17 @@ because the parser is itself regex-driven:
   pattern the parser uses is anchored this way, so this is the difference between a linear and a
   quadratic scan of each line it parses.
 - An unanchored pattern computes the set of code points a match can begin with, and the search
-  skips every position whose code point is not in it.
-
+  skips every position whose code point is not in it. Each alternative of an alternation carries
+  its own first set, and a wide alternation indexes its alternatives by first code point, so an
+  alternation tries only the alternatives that can begin at a position - the markdown span
+  alternation has sixteen, and a position usually admits one or two.
 - A quantifier whose body matches exactly one code point - `\s*`, `[0-9]+`, `.*`, the overwhelming
-  majority of real patterns - matches **iteratively**, so the C stack stays bounded on long
-  subjects. So does one whose body is an alternation of fixed atom sequences with no captures -
-  `(?:\\.|[^'\\])*`, the body of every quoted string the parser reads - by keeping the branch each
-  iteration took on an explicit stack and backtracking through it in the recursive order, so a
-  string literal can be as long as the line that holds it.
+  majority of real patterns - scans its run in one loop and gives back one position at a time
+  through a single backtrack entry, skipping the positions that cannot hold a literal that follows.
 - Capture writes are recorded on an **undo trail**, so backtracking out of a lookaround restores
   state in time proportional to what changed rather than copying the capture array.
-- Recursion depth and backtracking steps are **budgeted**, so a pathological pattern gives up
-  rather than hanging the runtime or overflowing the stack.
+- Backtracking steps are **budgeted**, so a pathological pattern gives up rather than hanging the
+  runtime, and the backtrack stack lives on the heap, so no pattern can overflow the C stack.
 
 
 ### Threads

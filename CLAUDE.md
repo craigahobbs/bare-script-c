@@ -141,11 +141,13 @@ The library's functions open with the `BS_ARGS(model, failValue)` macro. Functio
 
 ### Regular expressions
 
-`src/regex.c` compiles to a node tree and backtracks with an explicit continuation list, over
-Unicode code points. It is **on the parser's hot path**, so its four performance properties are
-load-bearing, not decoration: anchored-pattern optimization, iterative matching of single-code-point
-and fixed-sequence-alternation quantifiers, a capture undo trail, and depth/step budgets. Syntax is
-the JavaScript subset BareScript exposes - see README's **Regular Expressions** table.
+`src/regex.c` parses to a node tree, compiles the tree to a linear program, frees the tree, and
+matches by running the program in one loop with an explicit backtrack stack, over Unicode code
+points. It is **on the parser's hot path**, so its performance properties are load-bearing, not
+decoration: anchored-pattern optimization, first sets per alternative (indexed by code point for
+wide alternations), single-code-point quantifiers that scan in one loop and give back through one
+backtrack entry, a capture and counter undo trail, and a step budget. Syntax is the JavaScript
+subset BareScript exposes - see README's **Regular Expressions** table.
 
 ## Source layout
 
