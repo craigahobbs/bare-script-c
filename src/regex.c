@@ -22,6 +22,19 @@
 #include "internal.h"
 
 
+/* Threaded dispatch for the matcher's program loop, where the compiler supports label addresses */
+#if defined(__GNUC__) || defined(__clang__)
+#define RX_THREADED_DISPATCH 1
+#endif
+
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wgnu-label-as-value"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+
 /*
  * The maximum backtracking steps per match start position
  *
@@ -1951,62 +1964,88 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
     uint32_t pc = startPc;
     size_t pos = startPos;
 
+#ifdef RX_THREADED_DISPATCH
+    /* Indexed by opcode - the order is the RxOp enumeration's */
+    static const void *const dispatch[] = {
+        &&op_CHAR, &&op_CHAR_FOLD, &&op_ANY, &&op_ANY_ALL, &&op_CLASS, &&op_ALT, &&op_JMP,
+        &&op_GROUP_BEGIN, &&op_GROUP_END, &&op_BOL, &&op_BOL_ML, &&op_EOL, &&op_EOL_ML, &&op_WB,
+        &&op_NWB, &&op_BACKREF, &&op_LOOK_ATOM, &&op_LOOKAHEAD, &&op_LOOKBEHIND, &&op_REPEAT_SIMPLE,
+        &&op_REPEAT_ENTER, &&op_REPEAT_LOOP, &&op_REPEAT_NEXT, &&op_MATCH, &&op_MATCH_SUB, &&op_MATCH_AT
+    };
+#define RX_CASE(name) op_##name:
+#define RX_NEXT() \
+    do { \
+        inst = &prog[pc]; \
+        goto *dispatch[inst->op]; \
+    } while (0)
+#else
+#define RX_CASE(name) case RXI_##name:
+#define RX_NEXT() continue
+#endif
+
+    const RxInst *inst;
     for (;;) {
-        const RxInst *inst = &prog[pc];
+        inst = &prog[pc];
+#ifdef RX_THREADED_DISPATCH
+        goto *dispatch[inst->op];
+#else
         switch (inst->op) {
+#endif
 
-        case RXI_CHAR:
-            if (pos < length && rxCode(state, pos) == inst->a) {
-                pos++;
-                pc++;
-                continue;
+        RX_CASE(CHAR)
+            if (pos >= length || rxCode(state, pos) != inst->a) {
+                goto backtrack;
             }
-            break;
+            pos++;
+            pc++;
+            RX_NEXT();
 
-        case RXI_CHAR_FOLD:
-            if (pos < length && rxFold(rxCode(state, pos)) == inst->a) {
-                pos++;
-                pc++;
-                continue;
+        RX_CASE(CHAR_FOLD)
+            if (pos >= length || rxFold(rxCode(state, pos)) != inst->a) {
+                goto backtrack;
             }
-            break;
+            pos++;
+            pc++;
+            RX_NEXT();
 
-        case RXI_ANY:
-            if (pos < length) {
-                uint32_t ch = rxCode(state, pos);
-                if (ch != '\n' && ch != '\r' && ch != 0x2028 && ch != 0x2029) {
-                    pos++;
-                    pc++;
-                    continue;
-                }
+        RX_CASE(ANY) {
+            if (pos >= length) {
+                goto backtrack;
             }
-            break;
-
-        case RXI_ANY_ALL:
-            if (pos < length) {
-                pos++;
-                pc++;
-                continue;
+            uint32_t ch = rxCode(state, pos);
+            if (ch == '\n' || ch == '\r' || ch == 0x2028 || ch == 0x2029) {
+                goto backtrack;
             }
-            break;
+            pos++;
+            pc++;
+        }
+        RX_NEXT();
 
-        case RXI_CLASS:
-            if (pos < length && rxClassMatch(state, &state->classes[inst->operand], rxCode(state, pos))) {
-                pos++;
-                pc++;
-                continue;
+        RX_CASE(ANY_ALL)
+            if (pos >= length) {
+                goto backtrack;
             }
-            break;
+            pos++;
+            pc++;
+            RX_NEXT();
 
-        case RXI_JMP:
+        RX_CASE(CLASS)
+            if (pos >= length || !rxClassMatch(state, &state->classes[inst->operand], rxCode(state, pos))) {
+                goto backtrack;
+            }
+            pos++;
+            pc++;
+            RX_NEXT();
+
+        RX_CASE(JMP)
             pc = inst->a;
-            continue;
+            RX_NEXT();
 
-        case RXI_ALT: {
+        RX_CASE(ALT) {
             const RxAlt *alt = &state->alts[inst->operand];
             size_t count = alt->count;
             if (++state->steps > RX_STEPS_MAX) {
-                break;
+                goto backtrack;
             }
             bool atEnd = pos >= length;
             uint32_t code = atEnd ? 0 : rxCode(state, pos);
@@ -2025,7 +2064,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                     }
                 }
                 if (mask == 0) {
-                    break;
+                    goto backtrack;
                 }
                 unsigned ix = rxLowestBit(mask);
                 mask &= mask - 1;
@@ -2033,126 +2072,122 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                     rxBtPush(state, RX_BT_ALT_MASK, pc, pos, mask);
                 }
                 pc = alt->branchPcs[ix];
-                continue;
+            } else {
+                size_t ix = 0;
+                while (ix < count && !rxAltViable(alt, ix, atEnd, code)) {
+                    ix++;
+                }
+                if (ix == count) {
+                    goto backtrack;
+                }
+                if (ix + 1 < count) {
+                    rxBtPush(state, RX_BT_ALT_INDEX, pc, pos, (uint32_t) (ix + 1));
+                }
+                pc = alt->branchPcs[ix];
             }
-            size_t ix = 0;
-            while (ix < count && !rxAltViable(alt, ix, atEnd, code)) {
-                ix++;
-            }
-            if (ix == count) {
-                break;
-            }
-            if (ix + 1 < count) {
-                rxBtPush(state, RX_BT_ALT_INDEX, pc, pos, (uint32_t) (ix + 1));
-            }
-            pc = alt->branchPcs[ix];
-            continue;
         }
+        RX_NEXT();
 
-        case RXI_GROUP_BEGIN:
+        RX_CASE(GROUP_BEGIN)
             rxTrailPush(state, inst->a);
             state->match->groups[inst->a].begin = pos;
             pc++;
-            continue;
+            RX_NEXT();
 
-        case RXI_GROUP_END:
+        RX_CASE(GROUP_END)
             rxTrailPush(state, inst->a);
             state->match->groups[inst->a].end = pos;
             state->match->matched[inst->a] = true;
             pc++;
-            continue;
+            RX_NEXT();
 
-        case RXI_BOL:
-            if (pos == 0) {
-                pc++;
-                continue;
+        RX_CASE(BOL)
+            if (pos != 0) {
+                goto backtrack;
             }
-            break;
+            pc++;
+            RX_NEXT();
 
-        case RXI_BOL_ML:
-            if (pos == 0 || rxCode(state, pos - 1) == '\n') {
-                pc++;
-                continue;
+        RX_CASE(BOL_ML)
+            if (pos != 0 && rxCode(state, pos - 1) != '\n') {
+                goto backtrack;
             }
-            break;
+            pc++;
+            RX_NEXT();
 
-        case RXI_EOL:
-            if (pos == length) {
-                pc++;
-                continue;
+        RX_CASE(EOL)
+            if (pos != length) {
+                goto backtrack;
             }
-            break;
+            pc++;
+            RX_NEXT();
 
-        case RXI_EOL_ML:
-            if (pos == length || rxCode(state, pos) == '\n') {
-                pc++;
-                continue;
+        RX_CASE(EOL_ML)
+            if (pos != length && rxCode(state, pos) != '\n') {
+                goto backtrack;
             }
-            break;
+            pc++;
+            RX_NEXT();
 
-        case RXI_WB:
-        case RXI_NWB: {
+        RX_CASE(WB)
+        RX_CASE(NWB) {
             bool before = pos > 0 && rxIsWordCode(rxCode(state, pos - 1));
             bool after = pos < length && rxIsWordCode(rxCode(state, pos));
-            if ((before != after) == (inst->op == RXI_WB)) {
-                pc++;
-                continue;
+            if ((before != after) != (inst->op == RXI_WB)) {
+                goto backtrack;
             }
-            break;
+            pc++;
         }
+        RX_NEXT();
 
-        case RXI_BACKREF: {
+        RX_CASE(BACKREF) {
             size_t group = inst->a;
-            if (group >= state->match->groupCount || !state->match->matched[group]) {
-                /* An unmatched backreference matches the empty string */
-                pc++;
-                continue;
-            }
-            BSRegexSpan span = state->match->groups[group];
-            size_t size = span.end - span.begin;
-            if (pos + size > length) {
-                break;
-            }
-            bool equal = true;
-            for (size_t ix = 0; ix < size && equal; ix++) {
-                uint32_t expected = rxCode(state, span.begin + ix);
-                uint32_t actual = rxCode(state, pos + ix);
-                equal = inst->aux != 0 ? rxFold(expected) == rxFold(actual) : expected == actual;
-            }
-            if (equal) {
+            if (group < state->match->groupCount && state->match->matched[group]) {
+                BSRegexSpan span = state->match->groups[group];
+                size_t size = span.end - span.begin;
+                if (pos + size > length) {
+                    goto backtrack;
+                }
+                for (size_t ix = 0; ix < size; ix++) {
+                    uint32_t expected = rxCode(state, span.begin + ix);
+                    uint32_t actual = rxCode(state, pos + ix);
+                    if (inst->aux != 0 ? rxFold(expected) != rxFold(actual) : expected != actual) {
+                        goto backtrack;
+                    }
+                }
                 pos += size;
-                pc++;
-                continue;
             }
-            break;
+            /* An unmatched backreference matches the empty string */
+            pc++;
         }
+        RX_NEXT();
 
-        case RXI_LOOK_ATOM: {
+        RX_CASE(LOOK_ATOM) {
             unsigned kind = inst->aux & RX_ATOM_KIND;
             bool matched = (inst->aux & RX_LOOK_BEHIND) == 0 ? rxAtomAt(state, kind, inst->operand, pos) :
                 (pos >= 1 && rxAtomAt(state, kind, inst->operand, pos - 1));
-            if (matched != ((inst->aux & RX_ATOM_FLAG) != 0)) {
-                pc++;
-                continue;
+            if (matched == ((inst->aux & RX_ATOM_FLAG) != 0)) {
+                goto backtrack;
             }
-            break;
+            pc++;
         }
+        RX_NEXT();
 
-        case RXI_LOOKAHEAD: {
+        RX_CASE(LOOKAHEAD) {
             size_t mark = state->trailCount;
             bool matched = rxRun(state, inst->a, pos, 0);
             bool negate = inst->aux != 0;
             if (negate || !matched) {
                 rxTrailUnwind(state, mark);
             }
-            if (matched != negate) {
-                pc = inst->b;
-                continue;
+            if (matched == negate) {
+                goto backtrack;
             }
-            break;
+            pc = inst->b;
         }
+        RX_NEXT();
 
-        case RXI_LOOKBEHIND: {
+        RX_CASE(LOOKBEHIND) {
             /*
              * Try every start position whose distance from "pos" is a possible body match length,
              * requiring the body to end exactly at "pos"
@@ -2171,14 +2206,14 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             if (negate) {
                 rxTrailUnwind(state, mark);
             }
-            if (matched != negate) {
-                pc = inst->b;
-                continue;
+            if (matched == negate) {
+                goto backtrack;
             }
-            break;
+            pc = inst->b;
         }
+        RX_NEXT();
 
-        case RXI_REPEAT_SIMPLE: {
+        RX_CASE(REPEAT_SIMPLE) {
             unsigned kind = inst->aux & RX_ATOM_KIND;
             uint32_t operand = inst->operand;
             size_t min = inst->a;
@@ -2195,14 +2230,14 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                     count++;
                 }
                 if (count < min) {
-                    break;
+                    goto backtrack;
                 }
                 if (max == RX_UNBOUNDED || count < max) {
                     rxBtPush(state, RX_BT_LAZY, next, end, (uint32_t) pos);
                 }
                 pos = end;
                 pc = next;
-                continue;
+                goto dispatch;
             }
 
             /* Consume as much as the body matches - an ASCII subject scans by the body's kind */
@@ -2241,7 +2276,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 }
             }
             if (end - pos < min) {
-                break;
+                goto backtrack;
             }
             size_t stop = pos + min;
 
@@ -2261,63 +2296,70 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             }
             pos = end;
             pc = next;
-            continue;
         }
+        RX_NEXT();
 
-        case RXI_REPEAT_ENTER:
+        RX_CASE(REPEAT_ENTER)
             rxTrailPushRepeat(state, inst->slot);
             state->repeats[inst->slot].count = 0;
             pc++;
-            continue;
+            RX_NEXT();
 
-        case RXI_REPEAT_LOOP: {
+        RX_CASE(REPEAT_LOOP) {
             uint32_t slot = inst->slot;
             size_t count = state->repeats[slot].count;
             if (++state->steps > RX_STEPS_MAX) {
-                break;
+                goto backtrack;
             }
+            bool enter = true;
             if (inst->b != RX_UNBOUNDED && count >= inst->b) {
                 pc = inst->a;
-                continue;
-            }
-            if (count >= inst->operand) {
+                enter = false;
+            } else if (count >= inst->operand) {
                 if (inst->aux == 0) {
                     /* Lazy: try the continuation first; the body is the alternative */
                     rxBtPush(state, RX_BT_REPEAT_BODY, pc, pos, 0);
                     pc = inst->a;
-                    continue;
+                    enter = false;
+                } else {
+                    rxBtPush(state, RX_BT_SPLIT, inst->a, pos, 0);
                 }
-                rxBtPush(state, RX_BT_SPLIT, inst->a, pos, 0);
             }
-            rxTrailPushRepeat(state, slot);
-            state->repeats[slot].start = pos;
-            state->repeats[slot].count = count + 1;
-            pc++;
-            continue;
+            if (enter) {
+                rxTrailPushRepeat(state, slot);
+                state->repeats[slot].start = pos;
+                state->repeats[slot].count = count + 1;
+                pc++;
+            }
         }
+        RX_NEXT();
 
-        case RXI_REPEAT_NEXT:
+        RX_CASE(REPEAT_NEXT)
             /* An iteration that consumed nothing ends the repetition */
             pc = pos == state->repeats[inst->slot].start ? inst->b : inst->a;
-            continue;
+            RX_NEXT();
 
-        case RXI_MATCH:
+        RX_CASE(MATCH)
             state->end = pos;
             state->btCount = btBase;
             return true;
 
-        case RXI_MATCH_SUB:
+        RX_CASE(MATCH_SUB)
             state->btCount = btBase;
             return true;
 
-        default:
-            /* RXI_MATCH_AT */
-            if (pos == anchor) {
-                state->btCount = btBase;
-                return true;
+        RX_CASE(MATCH_AT)
+            if (pos != anchor) {
+                goto backtrack;
             }
-            break;
+            state->btCount = btBase;
+            return true;
+
+#ifndef RX_THREADED_DISPATCH
         }
+#endif
+    dispatch:
+        RX_NEXT();
 
     backtrack:
         for (;;) {
@@ -2439,7 +2481,10 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             break;
         }
     }
+    return false; /* GCOV_EXCL_LINE - the loop leaves only by returning; this satisfies the compiler */
 }
+#undef RX_CASE
+#undef RX_NEXT
 
 void bsRegexSubjectInit(BSRegexSubject *subject, BSValue string)
 {
