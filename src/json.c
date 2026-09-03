@@ -427,6 +427,23 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
 }
 
 
+/* Decode an object member's key and the colon after it. Returns an owned key. */
+static bool bsJSONDecodeKey(BSJSONParser *parser, BSValue *key)
+{
+    bsJSONSkipSpace(parser);
+    if (!bsJSONDecodeString(parser, key, 1)) {
+        return false;
+    }
+    bsJSONSkipSpace(parser);
+    if (parser->offset >= parser->size || parser->text[parser->offset] != ':') {
+        bsRelease(*key);
+        return bsJSONError(parser, "Expecting ':' delimiter", parser->offset);
+    }
+    parser->offset++;
+    return true;
+}
+
+
 static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
 {
     parser->offset++;
@@ -438,19 +455,11 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
         return true;
     }
     while (true) {
-        bsJSONSkipSpace(parser);
         BSValue key;
-        if (!bsJSONDecodeString(parser, &key, 1)) {
+        if (!bsJSONDecodeKey(parser, &key)) {
             bsRelease(object);
             return false;
         }
-        bsJSONSkipSpace(parser);
-        if (parser->offset >= parser->size || parser->text[parser->offset] != ':') {
-            bsRelease(key);
-            bsRelease(object);
-            return bsJSONError(parser, "Expecting ':' delimiter", parser->offset);
-        }
-        parser->offset++;
         BSValue item;
         if (!bsJSONDecodeValue(parser, depth + 1, &item)) {
             bsRelease(key);
@@ -660,17 +669,10 @@ static bool bsJSONDecodeModel(BSJSONParser *parser, bool (*emit)(BSValue, void *
         parser->offset++;
     } else {
         while (true) {
-            bsJSONSkipSpace(parser);
             BSValue key;
-            if (!bsJSONDecodeString(parser, &key, 1)) {
+            if (!bsJSONDecodeKey(parser, &key)) {
                 return false;
             }
-            bsJSONSkipSpace(parser);
-            if (parser->offset >= parser->size || parser->text[parser->offset] != ':') {
-                bsRelease(key);
-                return bsJSONError(parser, "Expecting ':' delimiter", parser->offset);
-            }
-            parser->offset++;
             bsJSONSkipSpace(parser);
             bool isStatements = bsStringSize(key) == 10 && memcmp(bsStringData(key), "statements", 10) == 0;
             if (isStatements && parser->offset < parser->size && parser->text[parser->offset] == '[') {
