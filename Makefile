@@ -200,8 +200,9 @@ $(CLI_BIN): $(CLI_OBJS) $(LIB_SO)
 RELEASE_DIR := $(BUILD_DIR)/release
 RELEASE_OBJ_DIR := $(RELEASE_DIR)/obj
 PROFILE_DIR := $(BUILD_DIR)/profile
-# -O2 and -O3 are equal in speed here at every stage; under PGO and LTO, -O2 emits 10% less code
-RELEASE_CFLAGS ?= -O2 -DNDEBUG -flto
+# -O2 and -O3 are equal in speed here at every stage; under PGO and LTO, -O2 emits 10% less code.
+# -flto=auto avoids the lto-wrapper "serial compilation" note on GCC while preserving full LTO.
+RELEASE_CFLAGS ?= -O2 -DNDEBUG -flto=auto
 RELEASE_LIB_SO := $(RELEASE_DIR)/lib$(LIB_NAME).$(SO_EXT)
 RELEASE_LIB_A := $(RELEASE_DIR)/lib$(LIB_NAME).a
 RELEASE_CLI := $(RELEASE_DIR)/$(CLI_NAME)
@@ -224,7 +225,7 @@ ifneq '$(filter-out 0,$(CC_IS_CLANG))' ''
 else
     PROFILE_DATA := $(PROFILE_DIR)
     PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR) -fprofile-update=single
-    PROFILE_USE = -fprofile-use=$(PROFILE_DIR) -fprofile-correction -Wno-missing-profile
+    PROFILE_USE = -fprofile-use=$(PROFILE_DIR) -fprofile-correction -Wno-missing-profile -Wno-clobbered
     PROFILE_MERGE = :
 endif
 
