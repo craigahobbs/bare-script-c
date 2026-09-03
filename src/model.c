@@ -284,6 +284,10 @@ typedef struct {
     uint16_t tempTop;     /* the temporaries in use past the slots */
     uint16_t tempMax;
     BSOperand nullConst;  /* the null constant's operand, once allocated */
+    BSOperand trueConst;
+    BSOperand falseConst;
+    bool hasTrue;
+    bool hasFalse;
     bool overflow;        /* an operand space outgrew its index range, so the chunk is invalid */
     size_t assignedWords; /* the definite-assignment sets, slotCount bits each, or 0 for no analysis */
     uint32_t *assigned;   /* the slots definitely assigned at the statement being emitted */
@@ -382,6 +386,23 @@ static void bsEmitInit(BSEmit *e, BSScript *script, size_t *functionCap)
     e->script = script;
     e->functionCap = functionCap;
     e->nullConst = bsEmitConst(e, bsNull());
+}
+
+
+static BSOperand bsEmitBool(BSEmit *e, bool value)
+{
+    if (value) {
+        if (!e->hasTrue) {
+            e->trueConst = bsEmitConst(e, bsBoolean(true));
+            e->hasTrue = true;
+        }
+        return e->trueConst;
+    }
+    if (!e->hasFalse) {
+        e->falseConst = bsEmitConst(e, bsBoolean(false));
+        e->hasFalse = true;
+    }
+    return e->falseConst;
 }
 
 
@@ -719,7 +740,7 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
             return true;
         }
         if (strcmp(name, "true") == 0 || strcmp(name, "false") == 0) {
-            *operand = bsEmitConst(e, bsBoolean(name[0] == 't'));
+            *operand = bsEmitBool(e, name[0] == 't');
             return true;
         }
         BSValue interned = bsInternName(variable);
