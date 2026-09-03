@@ -17,6 +17,7 @@
 
 #ifdef BARESCRIPT_CURL
 #include <curl/curl.h>
+#include <dlfcn.h>
 #endif
 
 
@@ -138,6 +139,71 @@ void bsLogStdout(const char *text, void *data)
 
 #ifdef BARESCRIPT_CURL
 
+/*
+ * libcurl is loaded on the first HTTP fetch rather than linked. Linking it made every process map
+ * libcurl and its dependency tree at startup - several megabytes of resident memory and a third of
+ * an empty script's instructions - whether or not the script ever fetched a URL.
+ */
+typedef struct BSCurl {
+    bool tried;
+    void *handle;
+    CURL *(*easyInit)(void);
+    CURLcode (*easySetopt)(CURL *, CURLoption, ...);
+    CURLcode (*easyPerform)(CURL *);
+    CURLcode (*easyGetinfo)(CURL *, CURLINFO, ...);
+    void (*easyCleanup)(CURL *);
+    struct curl_slist *(*slistAppend)(struct curl_slist *, const char *);
+    void (*slistFreeAll)(struct curl_slist *);
+} BSCurl;
+
+static BSCurl bsCurl;
+
+#ifdef __APPLE__
+static const char *const bsCurlLibraries[] = {"libcurl.4.dylib", "libcurl.dylib"};
+#else
+static const char *const bsCurlLibraries[] = {"libcurl.so.4", "libcurl.so"};
+#endif
+
+
+/* Resolve a libcurl symbol into a function pointer (POSIX guarantees the two are convertible) */
+static bool bsCurlSymbol(void *handle, const char *name, void *function)
+{
+    void *symbol = dlsym(handle, name);
+    memcpy(function, &symbol, sizeof(symbol));
+    return symbol != NULL;
+}
+
+
+/* The loaded libcurl entry points, or NULL if libcurl is not available at runtime */
+static const BSCurl *bsCurlLoad(void)
+{
+    if (!bsCurl.tried) {
+        bsCurl.tried = true;
+        void *handle = NULL;
+        for (size_t ix = 0; handle == NULL && ix < sizeof(bsCurlLibraries) / sizeof(bsCurlLibraries[0]); ix++) {
+            handle = dlopen(bsCurlLibraries[ix], RTLD_LAZY | RTLD_LOCAL);
+        }
+        /* GCOV_EXCL_START - a libcurl that is missing or incomplete at runtime */
+        if (handle == NULL) {
+            return NULL;
+        }
+        if (!bsCurlSymbol(handle, "curl_easy_init", &bsCurl.easyInit) ||
+            !bsCurlSymbol(handle, "curl_easy_setopt", &bsCurl.easySetopt) ||
+            !bsCurlSymbol(handle, "curl_easy_perform", &bsCurl.easyPerform) ||
+            !bsCurlSymbol(handle, "curl_easy_getinfo", &bsCurl.easyGetinfo) ||
+            !bsCurlSymbol(handle, "curl_easy_cleanup", &bsCurl.easyCleanup) ||
+            !bsCurlSymbol(handle, "curl_slist_append", &bsCurl.slistAppend) ||
+            !bsCurlSymbol(handle, "curl_slist_free_all", &bsCurl.slistFreeAll)) {
+            dlclose(handle);
+            return NULL;
+        }
+        /* GCOV_EXCL_STOP */
+        bsCurl.handle = handle;
+    }
+    return bsCurl.handle != NULL ? &bsCurl : NULL;
+}
+
+
 typedef struct BSCurlBuffer {
     char *data;
     size_t size;
@@ -168,7 +234,7 @@ static bool bsCurlHeaderIter(BSValue key, BSValue item, void *data)
 {
     struct curl_slist **headers = data;
     BSValue header = bsStringNewFormat("%s: %s", bsStringData(key), bsStringData(item));
-    *headers = curl_slist_append(*headers, bsStringData(header));
+    *headers = bsCurl.slistAppend(*headers, bsStringData(header));
     bsRelease(header);
     return true;
 }
@@ -180,7 +246,8 @@ char *bsFetchHTTP(const BSFetchRequest *request, size_t *responseSize, void *dat
         return NULL;
     }
 
-    CURL *curl = curl_easy_init();
+    const BSCurl *lib = bsCurlLoad();
+    CURL *curl = lib != NULL ? lib->easyInit() : NULL;
     /* GCOV_EXCL_START */
     if (curl == NULL) {
         return NULL;
@@ -191,24 +258,24 @@ char *bsFetchHTTP(const BSFetchRequest *request, size_t *responseSize, void *dat
     struct curl_slist *headers = NULL;
     bsObjectIter(request->headers, bsCurlHeaderIter, &headers);
 
-    curl_easy_setopt(curl, CURLOPT_URL, request->url);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, bsCurlWrite);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "bare-script-c");
+    lib->easySetopt(curl, CURLOPT_URL, request->url);
+    lib->easySetopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    lib->easySetopt(curl, CURLOPT_WRITEFUNCTION, bsCurlWrite);
+    lib->easySetopt(curl, CURLOPT_WRITEDATA, &buffer);
+    lib->easySetopt(curl, CURLOPT_USERAGENT, "bare-script-c");
     if (request->body != NULL) {
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request->body);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long) request->bodySize);
+        lib->easySetopt(curl, CURLOPT_POSTFIELDS, request->body);
+        lib->easySetopt(curl, CURLOPT_POSTFIELDSIZE, (long) request->bodySize);
     }
     if (headers != NULL) {
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        lib->easySetopt(curl, CURLOPT_HTTPHEADER, headers);
     }
 
-    CURLcode status = curl_easy_perform(curl);
+    CURLcode status = lib->easyPerform(curl);
     long responseCode = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &responseCode);
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
+    lib->easyGetinfo(curl, CURLINFO_RESPONSE_CODE, &responseCode);
+    lib->slistFreeAll(headers);
+    lib->easyCleanup(curl);
 
     if (status != CURLE_OK || (responseCode != 0 && responseCode != 200)) {
         free(buffer.data);
@@ -227,7 +294,7 @@ char *bsFetchHTTP(const BSFetchRequest *request, size_t *responseSize, void *dat
 
 bool bsFetchHTTPAvailable(void)
 {
-    return true;
+    return bsCurlLoad() != NULL;
 }
 
 #else

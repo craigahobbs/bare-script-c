@@ -59,12 +59,16 @@ CC_SUPPORTS = $(shell echo 'int main(void){return 0;}' | \
 SO_CFLAGS := -fPIC -fvisibility=hidden $(call CC_SUPPORTS,-fno-semantic-interposition)
 
 
-# Optional libcurl support for the HTTP fetch function
+# Optional libcurl support for the HTTP fetch function. Only the headers are needed at build
+# time - the library is loaded with dlopen on the first HTTP fetch, so a process that never fetches
+# a URL never maps libcurl and its dependencies.
 CURL_CFLAGS := $(shell pkg-config --cflags libcurl 2>/dev/null || curl-config --cflags 2>/dev/null)
 CURL_LIBS := $(shell pkg-config --libs libcurl 2>/dev/null || curl-config --libs 2>/dev/null)
 ifneq '$(strip $(CURL_LIBS))' ''
     BASE_CFLAGS += -DBARESCRIPT_CURL $(CURL_CFLAGS)
-    LIBS += $(CURL_LIBS)
+    ifneq '$(UNAME_S)' 'Darwin'
+        LIBS += -ldl
+    endif
 endif
 
 

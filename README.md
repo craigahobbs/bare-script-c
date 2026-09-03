@@ -48,7 +48,8 @@ make compile
 ## Build
 
 The project builds with any C11 compiler and GNU Make, and has no required dependencies beyond
-libm. If libcurl is present, HTTP support is compiled in automatically.
+libm. If libcurl's headers are present, HTTP support is compiled in automatically; the library
+itself is loaded on the first HTTP fetch, so a script that never fetches a URL never pays for it.
 
 ```sh
 make                # show the available targets
@@ -389,8 +390,8 @@ Four options ship with the library:
 | `bsFetchHTTP`       | HTTP(S) URLs only, via libcurl                               |
 | *(none)*            | Leave `options->fetchFn` NULL to disable fetching entirely   |
 
-`bsFetchHTTPAvailable` reports whether libcurl was found at build time. Without it the file system
-fetch functions still work and URL fetches fail.
+`bsFetchHTTPAvailable` reports whether libcurl is available - compiled in, and loadable at runtime.
+Without it the file system fetch functions still work and URL fetches fail.
 
 
 ### The Parser and Linter
