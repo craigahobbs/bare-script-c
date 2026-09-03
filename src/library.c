@@ -1086,8 +1086,23 @@ static BSValue bsFnRegexEscape(const BSValue *args, size_t argCount, BSOptions *
 static BSValue bsMatchKeyIndex;
 static BSValue bsMatchKeyInput;
 static BSValue bsMatchKeyGroups;
-static BSValue bsMatchKeyDigit[10];
 static BSValue bsMatchEmpty;
+
+/* The group index keys "0", "1", ... - interned once and grown to the widest pattern matched */
+static BSValue *bsMatchKeyGroup;
+static size_t bsMatchKeyGroupCount;
+
+
+static void bsMatchKeyGroupGrow(size_t count)
+{
+    bsMatchKeyGroup = bsRealloc(bsMatchKeyGroup, count * sizeof(BSValue));
+    for (size_t ix = bsMatchKeyGroupCount; ix < count; ix++) {
+        char key[24];
+        int keySize = snprintf(key, sizeof(key), "%zu", ix);
+        bsMatchKeyGroup[ix] = bsStringIntern(key, (size_t) keySize);
+    }
+    bsMatchKeyGroupCount = count;
+}
 
 
 
@@ -1097,6 +1112,9 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
 {
     BSValue groups = bsObjectNew();
     bool uniqueNames = bsRegexGroupNamesUnique(regex);
+    if (match->groupCount > bsMatchKeyGroupCount) {
+        bsMatchKeyGroupGrow(match->groupCount);
+    }
     for (size_t ix = 0; ix < match->groupCount; ix++) {
         BSValue text = bsNull();
         if (match->matched[ix]) {
@@ -1110,15 +1128,7 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexSub
                 text = bsStringNewSize(bsStringData(string) + begin, end - begin);
             }
         }
-        if (ix < 10) {
-            bsObjectAppend(groups, bsMatchKeyDigit[ix], text);
-        } else {
-            char key[8];
-            int keySize = snprintf(key, sizeof(key), "%zu", ix);
-            BSValue keyValue = bsStringIntern(key, (size_t) keySize);
-            bsObjectAppend(groups, keyValue, text);
-            bsRelease(keyValue);
-        }
+        bsObjectAppend(groups, bsMatchKeyGroup[ix], text);
 
         /* A named group is keyed by both its number and its name - an interned string already. A
          * pattern that reuses a name across alternatives keys the last definition. */
@@ -2164,10 +2174,7 @@ static void bsLibraryInit(void)
     bsMatchKeyInput = bsStringIntern("input", 5);
     bsMatchKeyGroups = bsStringIntern("groups", 6);
     bsMatchEmpty = bsStringIntern("", 0);
-    for (int ix = 0; ix < 10; ix++) {
-        char digit = (char) ('0' + ix);
-        bsMatchKeyDigit[ix] = bsStringIntern(&digit, 1);
-    }
+    bsMatchKeyGroupGrow(10);
     for (int ix = 0; ix <= (int) BS_REGEX; ix++) {
         bsSystemTypeNames[ix] = bsStringIntern(bsTypeNames[ix], strlen(bsTypeNames[ix]));
     }
@@ -2213,9 +2220,12 @@ void bsLibraryCleanup(void)
     bsRelease(bsMatchKeyInput);
     bsRelease(bsMatchKeyGroups);
     bsRelease(bsMatchEmpty);
-    for (int ix = 0; ix < 10; ix++) {
-        bsRelease(bsMatchKeyDigit[ix]);
+    for (size_t ix = 0; ix < bsMatchKeyGroupCount; ix++) {
+        bsRelease(bsMatchKeyGroup[ix]);
     }
+    free(bsMatchKeyGroup);
+    bsMatchKeyGroup = NULL;
+    bsMatchKeyGroupCount = 0;
     for (int ix = 0; ix <= (int) BS_REGEX; ix++) {
         bsRelease(bsSystemTypeNames[ix]);
     }
