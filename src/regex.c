@@ -2159,7 +2159,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 }
                 pos = end;
                 pc = next;
-                RX_NEXT();
+                goto dispatch;
             }
 
             /* Consume as much as the body matches - an ASCII subject scans by the body's kind */
@@ -2272,8 +2272,9 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
 
 #ifndef RX_THREADED_DISPATCH
         }
-        RX_NEXT();
 #endif
+    dispatch:
+        RX_NEXT();
 
     backtrack:
         for (;;) {
