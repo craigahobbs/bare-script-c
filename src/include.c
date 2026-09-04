@@ -40,25 +40,20 @@ typedef struct {
 } BsBits;
 
 
-static int bsBitsNeed(BsBits *bits, int n)
+/* Fill the bit buffer to "n" bits where the input allows; bitCount is how many it then holds */
+static void bsBitsFill(BsBits *bits, int n)
 {
-    while (bits->bitCount < n) {
-        if (bits->offset >= bits->size) {
-            return -1;
-        }
+    while (bits->bitCount < n && bits->offset < bits->size) {
         bits->bitBuf |= (unsigned) bits->data[bits->offset++] << bits->bitCount;
         bits->bitCount += 8;
     }
-    return 0;
 }
 
 
 static int bsGetBits(BsBits *bits, int n)
 {
-    if (n == 0) {
-        return 0;
-    }
-    if (bsBitsNeed(bits, n) != 0) {
+    bsBitsFill(bits, n);
+    if (bits->bitCount < n) {
         return -1;
     }
     int value = (int) (bits->bitBuf & ((1u << n) - 1));
@@ -70,39 +65,66 @@ static int bsGetBits(BsBits *bits, int n)
 
 /*
  * The fixed Huffman code (RFC 1951, 3.2.6) - the only one the bundled models use, since gzip.bare
- * writes a single fixed-code block. A code's bits arrive most-significant first.
+ * writes a single fixed-code block. A code's bits arrive most-significant first, so the decode
+ * table is indexed by the next nine stream bits in stream order and holds each code's length and
+ * symbol; the code is complete, so every index has an entry.
  */
+#define BS_FIXED_TABLE_BITS 9
+#define BS_FIXED_TABLE_SIZE (1u << BS_FIXED_TABLE_BITS)
 
-/* Read "n" more bits of a code onto "code"; -1 at the end of the input */
-static int bsGetCodeBits(BsBits *bits, int code, int n)
+/* Build the literal/length table: 7 bits code 256-279, 8 bits 0-143 and 280-287, 9 bits 144-255 */
+static void bsFixedTable(uint16_t *table)
 {
-    for (int ix = 0; ix < n; ix++) {
-        int bit = bsGetBits(bits, 1);
-        if (bit < 0) {
-            return -1;
+    for (unsigned symbol = 0; symbol < 288; symbol++) {
+        unsigned code;
+        unsigned length;
+        if (symbol < 144) {
+            code = 0x30 + symbol;
+            length = 8;
+        } else if (symbol < 256) {
+            code = 0x190 + symbol - 144;
+            length = 9;
+        } else if (symbol < 280) {
+            code = symbol - 256;
+            length = 7;
+        } else {
+            code = 0xC0 + symbol - 280;
+            length = 8;
         }
-        code = (code << 1) | bit;
+        unsigned reversed = 0;
+        for (unsigned ix = 0; ix < length; ix++) {
+            reversed |= ((code >> ix) & 1u) << (length - 1 - ix);
+        }
+        for (unsigned index = reversed; index < BS_FIXED_TABLE_SIZE; index += 1u << length) {
+            table[index] = (uint16_t) ((length << BS_FIXED_TABLE_BITS) | symbol);
+        }
     }
-    return code;
 }
 
 
-/* Decode a literal/length symbol: 7 bits code 256-279, 8 bits 0-143 and 280-287, 9 bits 144-255 */
-static int bsFixedLiteral(BsBits *bits)
+/* Decode a literal/length symbol; -1 at the end of the input */
+static int bsFixedLiteral(BsBits *bits, const uint16_t *table)
 {
-    int code = bsGetCodeBits(bits, 0, 7);
-    if (code >= 0 && code < 24) {
-        return 256 + code;
+    bsBitsFill(bits, BS_FIXED_TABLE_BITS);
+    unsigned entry = table[bits->bitBuf & (BS_FIXED_TABLE_SIZE - 1)];
+    int length = (int) (entry >> BS_FIXED_TABLE_BITS);
+    if (length > bits->bitCount) {
+        return -1;
     }
-    code = bsGetCodeBits(bits, code, 1);
-    if (code >= 0 && code < 192) {
-        return code - 48;
+    bits->bitBuf >>= length;
+    bits->bitCount -= length;
+    return (int) (entry & (BS_FIXED_TABLE_SIZE - 1));
+}
+
+
+/* Decode a distance symbol - a five-bit code, most-significant bit first; -1 at the end of the input */
+static int bsFixedDistance(BsBits *bits)
+{
+    int value = bsGetBits(bits, 5);
+    if (value < 0) {
+        return -1;
     }
-    if (code >= 0 && code < 200) {
-        return 280 + code - 192;
-    }
-    code = bsGetCodeBits(bits, code, 1);
-    return code < 0 ? -1 : 144 + code - 400;
+    return ((value & 1) << 4) | ((value & 2) << 2) | (value & 4) | ((value & 8) >> 2) | ((value & 16) >> 4);
 }
 
 
@@ -124,8 +146,10 @@ static const unsigned short bsDistBase[30] = {
 
 static int bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap, size_t *outLen)
 {
+    uint16_t table[BS_FIXED_TABLE_SIZE];
+    bsFixedTable(table);
     for (;;) {
-        int symbol = bsFixedLiteral(bits);
+        int symbol = bsFixedLiteral(bits, table);
         if (symbol < 0) {
             return -1;
         }
@@ -147,7 +171,7 @@ static int bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap, size_
             return -1; /* GCOV_EXCL_LINE */
         }
         unsigned length = (unsigned) (bsLengthBase[symbol - 257] + extra);
-        int distSymbol = bsGetCodeBits(bits, 0, 5);
+        int distSymbol = bsFixedDistance(bits);
         if (distSymbol < 0 || distSymbol > 29) {
             return -1; /* GCOV_EXCL_LINE */
         }
@@ -160,8 +184,14 @@ static int bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap, size_
             return -1; /* GCOV_EXCL_LINE */
         }
         size_t src = *outLen - distance;
-        for (unsigned ix = 0; ix < length; ix++) {
-            out[(*outLen)++] = out[src + ix];
+        if (distance >= length) {
+            memcpy(out + *outLen, out + src, length);
+            *outLen += length;
+        } else {
+            /* The match overlaps its own output - it repeats the last "distance" bytes */
+            for (unsigned ix = 0; ix < length; ix++) {
+                out[(*outLen)++] = out[src + ix];
+            }
         }
     }
 }

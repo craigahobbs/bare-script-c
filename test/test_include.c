@@ -212,6 +212,7 @@ TEST(include_gzip_invalid)
         "H4sIAgAAAAAA/5DJAwAAAAAAAAAAAA==",             /* FHCRC */
         "H4sIAQAAAAAA/wMAAAAAAAAAAAA=",                 /* FTEXT */
         "H4sIAAAAAAAA/wAAAP//AwAAAAAAAAAAAA==",         /* two blocks */
+        "H4sIAAAAAAAA/ztxAggAAAAAAgAAAA==",                 /* the input ends inside a distance code */
         "H4sIAAAAAAAA/wcAAAAAAAAAAA==",
         "H4sIAAAAAAAA//UAAAAAAAAAAAAA",
         "H4sIIAAAAAAA/wMAAAAAAAAAAAA=",
