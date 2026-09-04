@@ -8,7 +8,7 @@ BareScript is a simple, lightweight, and portable programming language with a Py
 influenced by JavaScript, C, and the Unix shell.
 
 This is the fastest BareScript runtime by a wide margin, and a fast interpreter by any standard. A
-469 KB shared library with no dependency beyond libm runs the reference test suite 7x faster than
+486 KB shared library with no dependency beyond libm runs the reference test suite 7x faster than
 the JavaScript implementation on V8 and 30x faster than the Python one, outruns V8's own bytecode
 interpreter, and runs interpreted BareScript faster than CPython runs the equivalent
 Python. The measurements are under [Performance](#performance).
@@ -563,7 +563,7 @@ A compiled-out include keeps its registry entry and stub accessor, which return 
 `include <name.bare>` is served from the system include path when one is registered and fails
 otherwise. There is no dependency tracking: an include that an included script itself includes has
 to be listed with it - `markdownUp.bare` includes four scripts that include five more. The parser
-and linter alone make a 286 KB release library, against 469 KB with all thirty-two. A change to
+and linter alone make a 286 KB release library, against 486 KB with all thirty-two. A change to
 `INCLUDE` needs a `make clean` first, and the test suites need every include.
 
 
@@ -770,7 +770,7 @@ Milliseconds per run on the same machine - the Ruby and Perl rows are one-off po
 That is the neighborhood: 12x behind V8's JIT and 24x behind native C, 1.4x ahead of V8's own
 bytecode interpreter, 2.4x as fast as CPython, and 6x to 180x ahead of the other BareScript
 runtimes. It gets there as a plain bytecode interpreter - no JIT, no assembly, no dependencies -
-in 196 KB of code.
+in 198 KB of code.
 
 The release build is about 1.5x the default build, milliseconds per test run:
 
@@ -788,8 +788,8 @@ BareScript before it runs a single test:
 
 | Implementation            | Time  |
 | ------------------------- | -----:|
-| C (release)               | 0.25s |
-| C (`-O2`)                 | 0.31s |
+| C (release)               | 0.23s |
+| C (`-O2`)                 | 0.29s |
 | JavaScript                | 1.83s |
 | Python (with C extension) |  7.5s |
 | Python                    | 10.2s |
@@ -813,7 +813,7 @@ the release build:
 | urlDecode, ms per 2000 runs                   |     28 |     20 |
 | urlEncode, ms per 2000 runs                   |     21 |     15 |
 
-The shared library is 469 KB, of which 205 KB is the compressed include library and 196 KB is
+The shared library is 486 KB, of which 205 KB is the compressed include library and 198 KB is
 code.
 
 Memory is measured the same way, with `/usr/bin/time -l`. A script that does nothing runs in a
