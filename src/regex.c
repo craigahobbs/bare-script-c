@@ -1335,7 +1335,6 @@ typedef enum {
     RX_BT_ALT_MASK,         /* the alternation at pc; aux: the alternatives still to try */
     RX_BT_ALT_INDEX,        /* the alternation at pc; aux: the next alternative to try */
     RX_BT_GIVEBACK,         /* the simple repeat before pc, greedy: give back to aux */
-    RX_BT_GIVEBACK_LITERAL, /* the same, when a literal follows: only positions holding it */
     RX_BT_LAZY              /* the simple repeat before pc, lazy: take one more; aux: the start */
 } RxBtKind;
 
@@ -1384,7 +1383,6 @@ typedef struct RxState {
     const uint32_t *codes;
     const unsigned char *bytes;
     size_t length;
-    unsigned flags;
     BSRegexMatch *match;
     size_t end;
     long steps;
@@ -1489,19 +1487,6 @@ static bool rxClassMatchOne(const RxClass *cls, uint32_t ch)
 }
 
 
-static bool rxClassMatchSlow(const RxClass *cls, unsigned flags, uint32_t ch)
-{
-    bool matched = rxClassMatchOne(cls, ch);
-    if (!matched && (flags & BS_REGEX_IGNORECASE) != 0) {
-        uint32_t other = rxSwapCase(ch);
-        if (other != ch) {
-            matched = rxClassMatchOne(cls, other);
-        }
-    }
-    return cls->negate ? !matched : matched;
-}
-
-
 /*
  * Precompute a class's membership for the code points 0 - 127, with the case-insensitivity flag
  * and negation applied, so an ASCII subject tests one bit instead of walking the ranges
@@ -1510,19 +1495,22 @@ static void rxClassFinish(RxClass *cls, unsigned flags)
 {
     memset(cls->ascii, 0, sizeof(cls->ascii));
     for (uint32_t ch = 0; ch < 128; ch++) {
-        if (rxClassMatchSlow(cls, flags, ch)) {
+        bool matched = rxClassMatchOne(cls, ch) ||
+            ((flags & BS_REGEX_IGNORECASE) != 0 && rxClassMatchOne(cls, rxSwapCase(ch)));
+        if (matched != cls->negate) {
             cls->ascii[ch >> 3] |= (uint8_t) (1u << (ch & 7));
         }
     }
 }
 
 
-static inline bool rxClassMatch(const RxState *state, const RxClass *cls, uint32_t ch)
+static inline bool rxClassMatch(const RxClass *cls, uint32_t ch)
 {
     if (ch < 128) {
         return (cls->ascii[ch >> 3] >> (ch & 7)) & 1u;
     }
-    return rxClassMatchSlow(cls, state->flags, ch);
+    /* Case folding only maps ASCII letters, so past them the ranges alone decide */
+    return rxClassMatchOne(cls, ch) != cls->negate;
 }
 
 
@@ -1846,6 +1834,22 @@ static inline bool rxAltViable(const RxAlt *alt, size_t ix, bool atEnd, uint32_t
 }
 
 
+/*
+ * Give back a simple repeat, from "*end" down to "stop", until the literal "ch" that must follow it
+ * is found at "*end"; false if no position that far back holds it
+ */
+static inline bool rxGiveBackTo(const RxState *state, uint32_t ch, size_t stop, size_t *end)
+{
+    while (!(*end < state->length && rxCode(state, *end) == ch)) {
+        if (*end == stop) {
+            return false;
+        }
+        (*end)--;
+    }
+    return true;
+}
+
+
 /* Whether an encoded single-code-point atom matches at a position */
 static inline bool rxAtomAt(const RxState *state, unsigned kind, uint32_t operand, size_t pos)
 {
@@ -1863,7 +1867,7 @@ static inline bool rxAtomAt(const RxState *state, unsigned kind, uint32_t operan
     case RX_ATOM_ANY_ALL:
         return true;
     default:
-        return rxClassMatch(state, &state->classes[operand], ch);
+        return rxClassMatch(&state->classes[operand], ch);
     }
 }
 
@@ -1948,7 +1952,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             RX_NEXT();
 
         RX_CASE(CLASS)
-            if (pos >= length || !rxClassMatch(state, &state->classes[inst->operand], rxCode(state, pos))) {
+            if (pos >= length || !rxClassMatch(&state->classes[inst->operand], rxCode(state, pos))) {
                 goto backtrack;
             }
             pos++;
@@ -2155,7 +2159,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 }
                 pos = end;
                 pc = next;
-                goto dispatch;
+                RX_NEXT();
             }
 
             /* Consume as much as the body matches - an ASCII subject scans by the body's kind */
@@ -2199,18 +2203,11 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             size_t stop = pos + min;
 
             /* Give back one at a time. When a literal must follow, only positions holding it can go on. */
-            bool literal = prog[next].op == RXI_CHAR;
-            if (literal) {
-                uint32_t ch = prog[next].a;
-                while (!(end < length && rxCode(state, end) == ch)) {
-                    if (end == stop) {
-                        goto backtrack;
-                    }
-                    end--;
-                }
+            if (prog[next].op == RXI_CHAR && !rxGiveBackTo(state, prog[next].a, stop, &end)) {
+                goto backtrack;
             }
             if (end > stop) {
-                rxBtPush(state, literal ? RX_BT_GIVEBACK_LITERAL : RX_BT_GIVEBACK, next, end, (uint32_t) stop);
+                rxBtPush(state, RX_BT_GIVEBACK, next, end, (uint32_t) stop);
             }
             pos = end;
             pc = next;
@@ -2275,9 +2272,8 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
 
 #ifndef RX_THREADED_DISPATCH
         }
-#endif
-    dispatch:
         RX_NEXT();
+#endif
 
     backtrack:
         for (;;) {
@@ -2348,20 +2344,13 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 break;
             }
 
-            case RX_BT_GIVEBACK:
-            case RX_BT_GIVEBACK_LITERAL: {
+            case RX_BT_GIVEBACK: {
                 /* The entry is only kept while there is more to give back, so end is past stop */
                 size_t end = bt->pos - 1;
                 size_t stop = bt->aux;
-                if (bt->kind == RX_BT_GIVEBACK_LITERAL) {
-                    uint32_t ch = prog[bt->pc].a;
-                    while (!(end < length && rxCode(state, end) == ch)) {
-                        if (end == stop) {
-                            state->btCount--;
-                            goto backtrack;
-                        }
-                        end--;
-                    }
+                if (prog[bt->pc].op == RXI_CHAR && !rxGiveBackTo(state, prog[bt->pc].a, stop, &end)) {
+                    state->btCount--;
+                    goto backtrack;
                 }
                 pc = bt->pc;
                 pos = end;
@@ -2452,7 +2441,6 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     state.codes = subject->codes;
     state.bytes = subject->bytes;
     state.length = subject->length;
-    state.flags = compiled->flags;
     state.match = match;
     state.trail = state.trailInline;
     state.trailCapacity = sizeof(state.trailInline) / sizeof(state.trailInline[0]);
@@ -2462,7 +2450,6 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     state.looks = compiled->looks;
     state.bt = state.btInline;
     state.btCapacity = sizeof(state.btInline) / sizeof(state.btInline[0]);
-    state.btCount = 0;
     state.repeats = compiled->repeatCount <= sizeof(state.repeatsInline) / sizeof(state.repeatsInline[0]) ?
         state.repeatsInline : bsAlloc(compiled->repeatCount * sizeof(RxRepeat));
 
@@ -2480,12 +2467,7 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     for (size_t pos = start; pos <= last && !found; pos++) {
         /* Skip positions whose code point cannot begin a match */
         if (!compiled->first.any) {
-            while (pos < subject->length) {
-                uint32_t code = subject->codes != NULL ? subject->codes[pos] :
-                    (uint32_t) subject->bytes[pos];
-                if (rxFirstHas(&compiled->first, code)) {
-                    break;
-                }
+            while (pos < subject->length && !rxFirstHas(&compiled->first, rxCode(&state, pos))) {
                 pos++;
             }
             if (pos >= subject->length) {
