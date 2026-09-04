@@ -200,12 +200,10 @@ typedef struct BSScriptFunction {
 
 
 /*
- * Look up an object key. Returns true if the key is present; "*out" is then a borrowed value
- * (which may itself be null). Distinguishes a missing key from a key whose value is null.
+ * Look up an object key by a string value. Returns true if the key is present; "*out" is then a
+ * borrowed value (which may itself be null). Distinguishes a missing key from a key whose value is
+ * null. An interned key skips intern-table hashing.
  */
-bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out);
-
-/* Lookup by a string value. An interned key skips intern-table hashing. */
 bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out);
 
 /* Pointer to the stored value for key, or NULL if absent. Valid until a key is added or removed. */

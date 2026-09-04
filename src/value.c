@@ -1038,9 +1038,7 @@ static uint32_t bsInternHash(const char *data, size_t size, bool *ascii)
         hash ^= byte;
         hash *= 16777619u;
     }
-    if (ascii != NULL) {
-        *ascii = (high & 0x80808080u) == 0;
-    }
+    *ascii = (high & 0x80808080u) == 0;
     return hash;
 }
 
@@ -1097,7 +1095,8 @@ static BSString *bsInternLookupHash(const char *data, size_t size, uint32_t hash
 
 static BSString *bsInternLookup(const char *data, size_t size)
 {
-    return bsInternLookupHash(data, size, bsInternHash(data, size, NULL));
+    bool ascii;
+    return bsInternLookupHash(data, size, bsInternHash(data, size, &ascii));
 }
 
 BSValue bsStringIntern(const char *data, size_t size)
@@ -1112,13 +1111,13 @@ BSValue bsStringIntern(const char *data, size_t size)
         found->refcount++;
         return bsStringTake(found);
     }
+    BSValue value = ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
     if (bsTS.internCount >= BS_INTERN_COUNT_MAX) {
-        return ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
+        return value;
     }
     if ((bsTS.internCount + 1) * 4 >= (bsTS.internMask + 1) * 3) {
         bsInternGrow();
     }
-    BSValue value = ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
     value.u.string->flags |= BS_STR_INTERNED;
     value.u.string->refcount++;
     bsInternPut(value.u.string, hash);
@@ -1362,10 +1361,10 @@ static BSString *bsInternResolve(const char **key, size_t *size, BSString *inter
 {
     if (interned == NULL && *size <= BS_INTERN_MAX) {
         interned = bsInternLookup(*key, *size);
-    }
-    if (interned != NULL) {
-        *key = interned->data;
-        *size = interned->size;
+        if (interned != NULL) {
+            *key = interned->data;
+            *size = interned->size;
+        }
     }
     return interned;
 }
@@ -1729,31 +1728,29 @@ static void bsObjectNodeUnlink(BSObject *object, BSObjectNode *node)
 
 
 /* Remove a key known to be in the treap */
-static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t size, bool *removed,
-                                    BSObject *object)
+static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t size, BSObject *object)
 {
     int compare = bsKeyCompare(node->key, key, size);
     if (compare > 0) {
-        node->left = bsObjectRemove(node->left, key, size, removed, object);
+        node->left = bsObjectRemove(node->left, key, size, object);
         return node;
     }
     if (compare < 0) {
-        node->right = bsObjectRemove(node->right, key, size, removed, object);
+        node->right = bsObjectRemove(node->right, key, size, object);
         return node;
     }
 
     /* Rotate the node down until it is a leaf, then unlink it */
     if (node->left == NULL && node->right == NULL) {
         bsObjectNodeUnlink(object, node);
-        *removed = true;
         return NULL;
     }
     if (node->right == NULL || (node->left != NULL && node->left->priority > node->right->priority)) {
         node = bsObjectRotateRight(node);
-        node->right = bsObjectRemove(node->right, key, size, removed, object);
+        node->right = bsObjectRemove(node->right, key, size, object);
     } else {
         node = bsObjectRotateLeft(node);
-        node->left = bsObjectRemove(node->left, key, size, removed, object);
+        node->left = bsObjectRemove(node->left, key, size, object);
     }
     return node;
 }
@@ -1815,17 +1812,6 @@ BSValue *bsObjectValuePtrString(BSValue object, BSValue key)
 }
 
 
-bool bsObjectLookup(BSValue object, const char *key, size_t size, BSValue *out)
-{
-    BSValue *found = object.type == BS_OBJECT ? bsObjectValuePtr(object, key, size) : NULL;
-    if (found == NULL) {
-        return false;
-    }
-    *out = *found;
-    return true;
-}
-
-
 bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out)
 {
     BSValue *found = object.type == BS_OBJECT ? bsObjectValuePtrString(object, key) : NULL;
@@ -1846,8 +1832,8 @@ BSValue bsObjectGetString(BSValue value, BSValue key)
 
 BSValue bsObjectGet(BSValue value, const char *key)
 {
-    BSValue found;
-    return bsObjectLookup(value, key, strlen(key), &found) ? found : bsNull();
+    BSValue *found = value.type == BS_OBJECT ? bsObjectValuePtr(value, key, strlen(key)) : NULL;
+    return found != NULL ? *found : bsNull();
 }
 
 
@@ -1888,12 +1874,10 @@ bool bsObjectDelete(BSValue value, const char *key)
         return false;
     }
     if (object->u.tree.root != NULL) {
-        bool removed = false;
-        object->u.tree.root = bsObjectRemove(object->u.tree.root, node->key->data, node->key->size,
-                                             &removed, object);
-        return removed;
+        object->u.tree.root = bsObjectRemove(object->u.tree.root, node->key->data, node->key->size, object);
+    } else {
+        bsObjectNodeUnlink(object, node);
     }
-    bsObjectNodeUnlink(object, node);
     return true;
 }
 
@@ -2282,7 +2266,7 @@ size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
         size += (size_t) snprintf(text + size, sizeof(text) - size, "%d", n - 1 >= 0 ? n - 1 : -(n - 1));
     }
     text[size] = '\0';
-    return bsNumberEmit(buffer, bufferSize, text, strlen(text));
+    return bsNumberEmit(buffer, bufferSize, text, size);
 }
 
 
@@ -2709,9 +2693,6 @@ bool bsValueBoolean(BSValue value)
 
 bool bsValueIs(BSValue value1, BSValue value2)
 {
-    if (value1.type == BS_NUMBER && value2.type == BS_NUMBER) {
-        return value1.u.number == value2.u.number;
-    }
     if (value1.type != value2.type) {
         return false;
     }
@@ -2720,6 +2701,8 @@ bool bsValueIs(BSValue value1, BSValue value2)
         return true;
     case BS_BOOLEAN:
         return value1.u.boolean == value2.u.boolean;
+    case BS_NUMBER:
+        return value1.u.number == value2.u.number;
     case BS_DATETIME:
         return value1.u.datetime == value2.u.datetime;
     default:
@@ -2728,10 +2711,8 @@ bool bsValueIs(BSValue value1, BSValue value2)
 }
 
 
-static int bsCompareNumbers(double left, double right)
-{
-    return left < right ? -1 : (left == right ? 0 : 1);
-}
+/* The three-way comparison of two ordered operands; an unordered pair (a NaN) compares greater */
+#define BS_COMPARE(left, right) ((left) < (right) ? -1 : ((left) == (right) ? 0 : 1))
 
 
 int bsValueCompare(BSValue left, BSValue right)
@@ -2744,16 +2725,16 @@ int bsValueCompare(BSValue left, BSValue right)
     }
     if (left.type == BS_STRING && right.type == BS_STRING) {
         int compare = bsKeyCompare(left.u.string, right.u.string->data, right.u.string->size);
-        return compare < 0 ? -1 : (compare == 0 ? 0 : 1);
+        return BS_COMPARE(compare, 0);
     }
     if (left.type == BS_BOOLEAN && right.type == BS_BOOLEAN) {
-        return bsCompareNumbers(left.u.boolean ? 1 : 0, right.u.boolean ? 1 : 0);
+        return BS_COMPARE(left.u.boolean, right.u.boolean);
     }
     if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
-        return bsCompareNumbers(left.u.number, right.u.number);
+        return BS_COMPARE(left.u.number, right.u.number);
     }
     if (left.type == BS_DATETIME && right.type == BS_DATETIME) {
-        return left.u.datetime < right.u.datetime ? -1 : (left.u.datetime == right.u.datetime ? 0 : 1);
+        return BS_COMPARE(left.u.datetime, right.u.datetime);
     }
     if (left.type == BS_ARRAY && right.type == BS_ARRAY) {
         size_t leftCount = left.u.array->count;
@@ -2765,7 +2746,7 @@ int bsValueCompare(BSValue left, BSValue right)
                 return compare;
             }
         }
-        return leftCount < rightCount ? -1 : (leftCount == rightCount ? 0 : 1);
+        return BS_COMPARE(leftCount, rightCount);
     }
     if (left.type == BS_OBJECT && right.type == BS_OBJECT) {
         BSValue leftKeys = bsObjectKeysSorted(left);
@@ -2787,7 +2768,7 @@ int bsValueCompare(BSValue left, BSValue right)
         if (result != 0) {
             return result;
         }
-        return leftCount < rightCount ? -1 : (leftCount == rightCount ? 0 : 1);
+        return BS_COMPARE(leftCount, rightCount);
     }
 
     /* Values of different types compare by type name - the ranks are the names' sorted order */
