@@ -205,12 +205,8 @@ BSValue bsScriptReparse(const BSScript *script)
     args[0] = script->scriptLines;
     args[1] = bsNumber(script->startLineNumber);
     args[2] = script->scriptName;
-    BSParserError error;
-    memset(&error, 0, sizeof(error));
-    BSValue result = bsParserCall(&bsParserBootstrap, "barescriptParseScriptEx", args, 3, NULL, &error);
-    BSValue model = bsParserUnwrap(result, &error);
-    bsParserErrorFree(&error);
-    return model;
+    BSValue result = bsParserCall(&bsParserBootstrap, "barescriptParseScriptEx", args, 3, NULL, NULL);
+    return bsParserUnwrap(result, NULL);
 }
 
 

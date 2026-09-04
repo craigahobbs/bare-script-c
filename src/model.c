@@ -283,11 +283,9 @@ typedef struct {
     size_t cacheCap;
     uint16_t tempTop;     /* the temporaries in use past the slots */
     uint16_t tempMax;
-    BSOperand nullConst;  /* the null constant's operand, once allocated */
-    BSOperand trueConst;
+    BSOperand nullConst;  /* the null constant's operand - constant zero, so never itself zero */
+    BSOperand trueConst;  /* the true and false constants' operands, or zero until allocated */
     BSOperand falseConst;
-    bool hasTrue;
-    bool hasFalse;
     bool overflow;        /* an operand space outgrew its index range, so the chunk is invalid */
     size_t assignedWords; /* the definite-assignment sets, slotCount bits each, or 0 for no analysis */
     uint32_t *assigned;   /* the slots definitely assigned at the statement being emitted */
@@ -385,18 +383,11 @@ static void bsEmitInit(BSEmit *e, BSScript *script, size_t *functionCap)
 
 static BSOperand bsEmitBool(BSEmit *e, bool value)
 {
-    if (value) {
-        if (!e->hasTrue) {
-            e->trueConst = bsEmitConst(e, bsBoolean(true));
-            e->hasTrue = true;
-        }
-        return e->trueConst;
+    BSOperand *operand = value ? &e->trueConst : &e->falseConst;
+    if (*operand == 0) {
+        *operand = bsEmitConst(e, bsBoolean(value));
     }
-    if (!e->hasFalse) {
-        e->falseConst = bsEmitConst(e, bsBoolean(false));
-        e->hasFalse = true;
-    }
-    return e->falseConst;
+    return *operand;
 }
 
 
@@ -732,18 +723,13 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
             *operand = (BSOperand) slot;
             return true;
         }
-        if (slot >= 0) {
-            *operand = bsTempAlloc(e);
-            bsEmitInst(e, BS_OP_LOAD_SLOT, *operand, (uint16_t) slot, 0);
-            return true;
-        }
     }
 
     if (bsObjectHasString(model, bsKeys.group)) {
         return bsEmitExprOperand(e, bsObjectGetString(model, bsKeys.group), operand);
     }
 
-    /* A global variable loads into a temporary; a call or an operator computes into one */
+    /* A global or a possibly unset local loads into a temporary; a call or an operator computes into one */
     if (variable.type != BS_STRING && !bsExprComputes(model)) {
         return false;
     }
@@ -849,17 +835,16 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
          * evaluated, so when dst is a named local those operands might read the new value - they
          * accumulate in a temporary instead
          */
-        if (dst < e->slotCount) {
-            uint16_t base = e->tempTop;
-            uint16_t temp = bsTempAlloc(e);
-            if (!bsEmitIfTo(e, bsObjectGetString(function, bsKeys.args), temp)) {
-                return false;
-            }
-            bsEmitInst(e, BS_OP_MOVE, dst, temp, 0);
-            e->tempTop = base;
-            return true;
+        uint16_t base = e->tempTop;
+        uint16_t acc = dst < e->slotCount ? bsTempAlloc(e) : dst;
+        if (!bsEmitIfTo(e, bsObjectGetString(function, bsKeys.args), acc)) {
+            return false;
         }
-        return bsEmitIfTo(e, bsObjectGetString(function, bsKeys.args), dst);
+        if (acc != dst) {
+            bsEmitInst(e, BS_OP_MOVE, dst, acc, 0);
+            e->tempTop = base;
+        }
+        return true;
     }
 
     BSValue binary = bsObjectGetString(model, bsKeys.binary);
@@ -1107,7 +1092,7 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         for (size_t inc = 0; inc < includeCount; inc++) {
             BSValue include = bsArrayGet(includes, inc);
             BSValue url = bsObjectGetString(include, bsKeys.url);
-            if (include.type != BS_OBJECT || url.type != BS_STRING) {
+            if (url.type != BS_STRING) {
                 return false;
             }
             if (e->includeCount > BS_OPERAND_MAX) {
