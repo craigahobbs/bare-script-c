@@ -59,6 +59,13 @@ typedef struct BSScriptSource {
 } BSScriptSource;
 
 
+/* A "-v" argument - a global variable name and the expression that sets it */
+typedef struct BSVarArg {
+    const char *name;
+    const char *expr;
+} BSVarArg;
+
+
 static void bsPrintError(const char *text)
 {
     /* Runtime and parser error messages carry their own trailing newline handling */
@@ -75,8 +82,7 @@ int bsMain(int argc, char **argv)
     /* Three extra slots for the MarkdownUp preamble and postamble */
     BSScriptSource *sources = bsCliAlloc((size_t) (argc + 3) * sizeof(BSScriptSource));
     size_t sourceCount = 0;
-    const char **varNames = bsCliAlloc((size_t) (argc + 1) * sizeof(char *));
-    const char **varExprs = bsCliAlloc((size_t) (argc + 1) * sizeof(char *));
+    BSVarArg *vars = bsCliAlloc((size_t) (argc + 1) * sizeof(BSVarArg));
     size_t varCount = 0;
     bool debug = false;
     bool staticAnalysis = false;
@@ -135,9 +141,8 @@ int bsMain(int argc, char **argv)
                 statusCode = 2;
                 break;
             }
-            varNames[varCount] = argv[++ix];
-            varExprs[varCount] = argv[++ix];
-            varCount++;
+            vars[varCount++] = (BSVarArg) {argv[ix + 1], argv[ix + 2]};
+            ix += 2;
             continue;
         }
         if (arg[0] == '-' && arg[1] != '\0') {
@@ -173,19 +178,10 @@ int bsMain(int argc, char **argv)
         const char *includePath = getenv("BARESCRIPT_INCLUDE_PATH");
         if (includePath != NULL) {
             char *paths = bsCliStrdup(includePath);
-            char *begin = paths;
-            while (*begin != '\0') {
-                char *end = strchr(begin, ':');
-                if (end != NULL) {
-                    *end = '\0';
-                }
-                if (*begin != '\0') {
-                    bsSystemIncludePath(begin);
-                }
-                if (end == NULL) {
-                    break;
-                }
-                begin = end + 1;
+            char *state;
+            for (char *path = strtok_r(paths, ":", &state); path != NULL;
+                 path = strtok_r(NULL, ":", &state)) {
+                bsSystemIncludePath(path);
             }
             free(paths);
         }
@@ -207,7 +203,8 @@ int bsMain(int argc, char **argv)
         /* Evaluate the global variable expression arguments */
         for (size_t ix = 0; ix < varCount && statusCode == 0; ix++) {
             BSParserError parserError = {0};
-            BSExpr *expr = bsParseExpression(varExprs[ix], strlen(varExprs[ix]), 0, NULL, false, &parserError);
+            const char *exprText = vars[ix].expr;
+            BSExpr *expr = bsParseExpression(exprText, strlen(exprText), 0, NULL, false, &parserError);
             if (expr == NULL) {
                 bsPrintError(bsStringData(parserError.message));
                 bsParserErrorFree(&parserError);
@@ -216,25 +213,27 @@ int bsMain(int argc, char **argv)
             }
             BSValue value = bsEvaluateExpression(expr, options, NULL, true);
             bsExprFree(expr);
-            bsObjectSet(sharedGlobals, varNames[ix], value);
+            bsObjectSet(sharedGlobals, vars[ix].name, value);
         }
 
         /* Parse and execute each script source in order */
         size_t inlineCount = 0;
         for (size_t ix = 0; ix < sourceCount && (statusCode == 0 || staticAnalysis); ix++) {
-            char *text = NULL;
-            size_t size = 0;
+            const char *text = sources[ix].value;
+            char *loaded = NULL;
+            size_t size;
             char scriptNameBuffer[32];
             const char *scriptName;
             if (sources[ix].isFile) {
                 scriptName = sources[ix].value;
                 BSFetchRequest request = {.url = sources[ix].value, .headers = bsNull()};
-                text = bsFetchReadWrite(&request, &size, NULL);
-                if (text == NULL) {
+                loaded = bsFetchReadWrite(&request, &size, NULL);
+                if (loaded == NULL) {
                     fprintf(stderr, "Failed to load \"%s\"\n", sources[ix].value);
                     statusCode = 1;
                     break;
                 }
+                text = loaded;
             } else {
                 inlineCount++;
                 size_t inlineDisplay = inlineCount > ixUserScript ? inlineCount - ixUserScript : 0;
@@ -244,14 +243,13 @@ int bsMain(int argc, char **argv)
                     snprintf(scriptNameBuffer, sizeof(scriptNameBuffer), "<string>");
                 }
                 scriptName = scriptNameBuffer;
-                size = strlen(sources[ix].value);
-                text = bsCliStrdup(sources[ix].value);
+                size = strlen(text);
             }
 
             /* Parse the script source */
             BSParserError parserError = {0};
             BSScript *script = bsParseScript(text, size, 1, scriptName, &parserError);
-            free(text);
+            free(loaded);
             if (script == NULL) {
                 bsPrintError(bsStringData(parserError.message));
                 bsParserErrorFree(&parserError);
@@ -357,8 +355,7 @@ int bsMain(int argc, char **argv)
 
 done:
     free(sources);
-    free(varNames);
-    free(varExprs);
+    free(vars);
     bsParserCleanup();
     bsSystemIncludeClear();
     bsIncludeCleanup();
