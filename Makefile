@@ -470,7 +470,7 @@ test-language: compile
 #
 
 PERF_BARE_JS_DIR := ../bare-script
-#PERF_BARE_PY_DIR := ../bare-script-py
+PERF_BARE_PY_DIR := ../bare-script-py
 PERF_CSV := $(BUILD_DIR)/perf.csv
 PERF_CSV_TMP := $(BUILD_DIR)/perf-$$PPID.csv
 PERF_MERGE := 1
