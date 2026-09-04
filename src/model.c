@@ -526,39 +526,28 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
     }
 
     /* Blocks: the first statement, each label, and each statement after a jump or return start one */
-    uint8_t *starts = bsAlloc(count);
-    memset(starts, 0, count);
-    starts[0] = 1;
     BSValue labelBlocks = bsObjectNew(); /* label name -> the array of block indexes that define it */
+    uint32_t *blockOf = bsAlloc(count * sizeof(uint32_t));
+    size_t blockCount = 0;
+    bool starts = true;
     for (size_t ix = 0; ix < count; ix++) {
         BSValue statement = bsArrayGet(statements, ix);
-        if (bsObjectHasString(statement, bsKeys.label)) {
-            starts[ix] = 1;
-        } else if ((bsObjectHasString(statement, bsKeys.jump) || bsObjectHasString(statement, bsKeys.return_)) &&
-                   ix + 1 < count) {
-            starts[ix + 1] = 1;
-        }
-    }
-    size_t blockCount = 0;
-    uint32_t *blockOf = bsAlloc(count * sizeof(uint32_t));
-    for (size_t ix = 0; ix < count; ix++) {
-        if (starts[ix]) {
+        bool isLabel = bsObjectHasString(statement, bsKeys.label);
+        if (starts || isLabel) {
             blockCount++;
         }
         blockOf[ix] = (uint32_t) (blockCount - 1);
-    }
-    for (size_t ix = 0; ix < count; ix++) {
-        BSValue label = bsObjectGetString(bsArrayGet(statements, ix), bsKeys.label);
-        if (label.type == BS_OBJECT) {
-            BSValue name = bsObjectGetString(label, bsKeys.name);
-            if (name.type == BS_STRING) {
-                BSValue blocks = bsObjectGetString(labelBlocks, name);
-                if (blocks.type != BS_ARRAY) {
-                    blocks = bsArrayNew();
-                    bsObjectSetString(labelBlocks, name, blocks);
-                }
-                bsArrayPush(blocks, bsNumber((double) blockOf[ix]));
+        starts = !isLabel &&
+            (bsObjectHasString(statement, bsKeys.jump) || bsObjectHasString(statement, bsKeys.return_));
+        BSValue label = bsObjectGetString(statement, bsKeys.label);
+        BSValue name = label.type == BS_OBJECT ? bsObjectGetString(label, bsKeys.name) : bsNull();
+        if (name.type == BS_STRING) {
+            BSValue blocks = bsObjectGetString(labelBlocks, name);
+            if (blocks.type != BS_ARRAY) {
+                blocks = bsArrayNew();
+                bsObjectSetString(labelBlocks, name, blocks);
             }
+            bsArrayPush(blocks, bsNumber((double) blockOf[ix]));
         }
     }
 
@@ -620,7 +609,6 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
     e->blockOf = blockOf;
     e->blockIn = in;
     free(gen);
-    free(starts);
     bsRelease(labelBlocks);
 }
 
