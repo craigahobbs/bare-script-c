@@ -325,10 +325,7 @@ typedef struct {
 
 static uint32_t bsEmitInst(BSEmit *e, uint8_t op, uint16_t a, uint16_t b, uint16_t c)
 {
-    if (e->count == e->cap) {
-        e->cap = e->cap != 0 ? e->cap * 2 : 32;
-        e->inst = bsRealloc(e->inst, e->cap * sizeof(BSInst));
-    }
+    BS_GROW(e->inst, e->count, e->cap, 32);
     BSInst *inst = &e->inst[e->count];
     inst->op = op;
     inst->a = a;
@@ -370,10 +367,7 @@ static BSOperand bsEmitConst(BSEmit *e, BSValue value)
     if (e->constCount > BS_OPERAND_MAX) {
         e->overflow = true;
     }
-    if (e->constCount == e->constCap) {
-        e->constCap = e->constCap != 0 ? e->constCap * 2 : 16;
-        e->constants = bsRealloc(e->constants, e->constCap * sizeof(BSValue));
-    }
+    BS_GROW(e->constants, e->constCount, e->constCap, 16);
     e->constants[e->constCount] = bsRetain(value);
     return (BSOperand) (BS_OPERAND_CONST | (uint32_t) e->constCount++);
 }
@@ -439,10 +433,7 @@ static void bsSlotAdd(BSEmit *e, BSValue name)
     if (e->slotMap.type != BS_OBJECT) {
         e->slotMap = bsObjectNew();
     }
-    if (e->slotCount == e->slotCap) {
-        e->slotCap = e->slotCap != 0 ? e->slotCap * 2 : 8;
-        e->slotNames = bsRealloc(e->slotNames, e->slotCap * sizeof(BSValue));
-    }
+    BS_GROW(e->slotNames, e->slotCount, e->slotCap, 8);
     BSValue interned = bsInternName(name);
     bsObjectSetString(e->slotMap, interned, bsNumber((double) e->slotCount));
     e->slotNames[e->slotCount++] = interned;
@@ -455,10 +446,7 @@ static uint16_t bsEmitSite(BSEmit *e, BSValue name)
     if (e->cacheCount > BS_OPERAND_MAX) {
         e->overflow = true;
     }
-    if (e->cacheCount == e->cacheCap) {
-        e->cacheCap = e->cacheCap != 0 ? e->cacheCap * 2 : 8;
-        e->caches = bsRealloc(e->caches, e->cacheCap * sizeof(BSCallCache));
-    }
+    BS_GROW(e->caches, e->cacheCount, e->cacheCap, 8);
     BSCallCache *cache = &e->caches[e->cacheCount];
     memset(cache, 0, sizeof(*cache));
     cache->nameIndex = BS_OPERAND_INDEX(bsEmitConst(e, name));
@@ -487,10 +475,7 @@ static void bsEmitJump(BSEmit *e, uint8_t op, BSOperand cond, BSValue label)
         bsRelease(interned);
         return;
     }
-    if (e->patchCount == e->patchCap) {
-        e->patchCap = e->patchCap != 0 ? e->patchCap * 2 : 8;
-        e->patches = bsRealloc(e->patches, e->patchCap * sizeof(BSPatch));
-    }
+    BS_GROW(e->patches, e->patchCount, e->patchCap, 8);
     uint32_t at = bsEmitJumpInst(e, op, cond, 0xffffffffu);
     e->patches[e->patchCount].pc = at;
     e->patches[e->patchCount].label = interned;
@@ -1139,10 +1124,7 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
             if (e->includeCount > BS_OPERAND_MAX) {
                 e->overflow = true;
             }
-            if (e->includeCount == e->includeCap) {
-                e->includeCap = e->includeCap != 0 ? e->includeCap * 2 : 4;
-                e->includes = bsRealloc(e->includes, e->includeCap * sizeof(BSInclude));
-            }
+            BS_GROW(e->includes, e->includeCount, e->includeCap, 4);
             e->includes[e->includeCount].url = bsInternName(url);
             e->includes[e->includeCount].system = bsValueBoolean(bsObjectGetString(include, bsKeys.system));
             bsEmitInst(e, BS_OP_INCLUDE, (uint16_t) e->includeCount, 0, 0);
@@ -1285,10 +1267,7 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
         }
     }
 
-    if (e->script->functionCount == *e->functionCap) {
-        *e->functionCap = *e->functionCap != 0 ? *e->functionCap * 2 : 8;
-        e->script->functions = bsRealloc(e->script->functions, *e->functionCap * sizeof(BSFunctionDef *));
-    }
+    BS_GROW(e->script->functions, e->script->functionCount, *e->functionCap, 8);
     uint32_t index = (uint32_t) e->script->functionCount;
     e->script->functions[e->script->functionCount++] = def;
 

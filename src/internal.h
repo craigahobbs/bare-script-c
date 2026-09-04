@@ -21,6 +21,15 @@ void *bsAlloc(size_t size);
 void *bsRealloc(void *ptr, size_t size);
 char *bsStrdup(const char *text);
 
+/* Make room in "array" - "count" elements of "cap" allocated - for one more, doubling when it is full */
+#define BS_GROW(array, count, cap, initial) \
+    do { \
+        if ((count) == (cap)) { \
+            (cap) = (cap) != 0 ? (cap) * 2 : (initial); \
+            (array) = bsRealloc((array), (cap) * sizeof(*(array))); \
+        } \
+    } while (0)
+
 /* Inflate a bundled include model. Returns a NUL-terminated, malloc-allocated buffer, or NULL. */
 char *bsGzipUncompress(const unsigned char *src, size_t srcSize);
 

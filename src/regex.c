@@ -912,10 +912,7 @@ static RxNode *rxParseAlternation(RxCompiler *compiler)
             free(branches);
             return NULL;
         }
-        if (count == capacity) {
-            capacity = capacity != 0 ? capacity * 2 : 8;
-            branches = bsRealloc(branches, capacity * sizeof(RxNode *));
-        }
+        BS_GROW(branches, count, capacity, 8);
         branches[count++] = branch;
         if (compiler->offset >= compiler->size || compiler->pattern[compiler->offset] != '|') {
             break;
@@ -1550,10 +1547,7 @@ typedef struct RxEmit {
 static uint32_t rxEmit(RxEmit *e, uint8_t op, uint32_t a, uint32_t b, uint32_t operand, uint8_t aux,
                        uint32_t slot)
 {
-    if (e->count == e->capacity) {
-        e->capacity = e->capacity != 0 ? e->capacity * 2 : 32;
-        e->inst = bsRealloc(e->inst, e->capacity * sizeof(RxInst));
-    }
+    BS_GROW(e->inst, e->count, e->capacity, 32);
     RxInst *inst = &e->inst[e->count];
     inst->op = op;
     inst->aux = aux;
@@ -1574,10 +1568,7 @@ static uint32_t rxEmitOp(RxEmit *e, uint8_t op)
 /* Move a class node's data into the program's class table. Returns the class index. */
 static uint32_t rxEmitClass(RxEmit *e, RxNode *node)
 {
-    if (e->classCount == e->classCapacity) {
-        e->classCapacity = e->classCapacity != 0 ? e->classCapacity * 2 : 8;
-        e->classes = bsRealloc(e->classes, e->classCapacity * sizeof(RxClass));
-    }
+    BS_GROW(e->classes, e->classCount, e->classCapacity, 8);
     e->classes[e->classCount] = node->u.cls;
     node->u.cls.ranges = NULL;
     return (uint32_t) e->classCount++;
@@ -1668,10 +1659,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
                 rxEmitChain(e, node->u.alt.branches[0]);
                 break;
             }
-            if (e->altCount == e->altCapacity) {
-                e->altCapacity = e->altCapacity != 0 ? e->altCapacity * 2 : 8;
-                e->alts = bsRealloc(e->alts, e->altCapacity * sizeof(RxAlt));
-            }
+            BS_GROW(e->alts, e->altCount, e->altCapacity, 8);
             uint32_t altIndex = (uint32_t) e->altCount++;
             e->alts[altIndex].count = (uint32_t) count;
             rxEmitAltFirsts(&e->alts[altIndex], node, e->flags);
@@ -1756,10 +1744,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
             uint32_t lookIndex = 0;
             if (!ahead) {
                 /* A lookbehind's scan is bounded by its sub-pattern's match length */
-                if (e->lookCount == e->lookCapacity) {
-                    e->lookCapacity = e->lookCapacity != 0 ? e->lookCapacity * 2 : 4;
-                    e->looks = bsRealloc(e->looks, e->lookCapacity * sizeof(RxLook));
-                }
+                BS_GROW(e->looks, e->lookCount, e->lookCapacity, 4);
                 lookIndex = (uint32_t) e->lookCount++;
                 rxNodeLength(node->u.look.sub, &e->looks[lookIndex].minLength, &e->looks[lookIndex].maxLength);
             }
