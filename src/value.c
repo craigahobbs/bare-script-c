@@ -615,9 +615,15 @@ void bsSBInit(BSStringBuilder *sb)
 }
 
 
+/* The buffer is the data of a string allocation, so bsSBToValue finishes it in place */
+static BSString *bsSBString(const BSStringBuilder *sb)
+{
+    return sb->data != NULL ? (BSString *) (sb->data - offsetof(BSString, data)) : NULL;
+}
+
 void bsSBFree(BSStringBuilder *sb)
 {
-    free(sb->data);
+    free(bsSBString(sb));
     bsSBInit(sb);
 }
 
@@ -629,7 +635,8 @@ static void bsSBReserve(BSStringBuilder *sb, size_t size)
         while (capacity < sb->size + size + 1) {
             capacity *= 2;
         }
-        sb->data = bsRealloc(sb->data, capacity);
+        BSString *string = bsRealloc(bsSBString(sb), sizeof(BSString) + capacity);
+        sb->data = string->data;
         sb->capacity = capacity;
     }
 }
@@ -686,8 +693,19 @@ void bsSBAppendValue(BSStringBuilder *sb, BSValue value)
 
 BSValue bsSBToValue(BSStringBuilder *sb)
 {
-    BSValue value = bsStringNewSize(sb->data != NULL ? sb->data : "", sb->size);
-    bsSBFree(sb);
+    BSString *string = bsSBString(sb);
+    if (string == NULL) {
+        return bsStringNewSize("", 0);
+    }
+    /* The buffer becomes the string, uncopied; built this way it is freed rather than pooled */
+    string->refcount = 1;
+    string->flags = 0;
+    string->size = (uint32_t) sb->size;
+    string->offsets = NULL;
+    string->cursorIndex = 0;
+    string->cursorOffset = 0;
+    BSValue value = bsStringFinish(string, sb->size);
+    bsSBInit(sb);
     return value;
 }
 

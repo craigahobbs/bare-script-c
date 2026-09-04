@@ -276,14 +276,15 @@ char *bsFetchHTTP(const BSFetchRequest *request, size_t *responseSize, void *dat
         bsSBFree(&buffer);
         return NULL;
     }
-    if (buffer.data == NULL) {
-        buffer.data = bsAlloc(1);
-        buffer.data[0] = '\0';
-    }
+    /* The caller frees the response, so it leaves the builder's string block for a plain buffer */
+    char *text = bsAlloc(buffer.size + 1);
+    memcpy(text, buffer.data != NULL ? buffer.data : "", buffer.size);
+    text[buffer.size] = '\0';
     if (responseSize != NULL) {
         *responseSize = buffer.size;
     }
-    return buffer.data;
+    bsSBFree(&buffer);
+    return text;
 }
 
 
