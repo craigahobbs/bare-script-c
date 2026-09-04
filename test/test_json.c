@@ -210,6 +210,7 @@ TEST(json_decode_errors)
     bsTestJSONError("[1 2]", "Expecting ',' delimiter");
     bsTestJSONError("[1,]", "Illegal trailing comma before end of array");
     bsTestJSONError("{1:2}", "Expecting property name enclosed in double quotes");
+    bsTestJSONError("{\"a", "Unterminated string starting at");
     bsTestJSONError("{\"a\"}", "Expecting ':' delimiter");
     bsTestJSONError("{\"a\"", "Expecting ':' delimiter");
     bsTestJSONError("{\"a\":1", "Expecting ',' delimiter");

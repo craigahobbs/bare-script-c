@@ -267,13 +267,10 @@ static const char bsJSONUnescape[256] = {
 };
 
 
-static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, int asKey)
+/* Decode the string at the offset, which holds its opening quote */
+static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey)
 {
-    size_t begin = parser->offset;
-    if (begin >= parser->size || parser->text[begin] != '"') {
-        return bsJSONError(parser, "Expecting property name enclosed in double quotes", begin);
-    }
-    parser->offset++;
+    size_t begin = parser->offset++;
 
     /* Unescaped strings copy once from the input; escapes fall through to the builder */
     size_t ix = parser->offset;
@@ -372,7 +369,7 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result);
  * After a container item: the container's closing character ends it (1), a comma continues it
  * (0), and anything else - or a comma before the close - is an error, set on the parser (-1)
  */
-static int bsJSONSeparator(BSJSONParser *parser, char close, const char *trailingComma)
+static int bsJSONSeparator(BSJSONParser *parser, char close)
 {
     bsJSONSkipSpace(parser);
     if (parser->offset < parser->size && parser->text[parser->offset] == close) {
@@ -387,7 +384,8 @@ static int bsJSONSeparator(BSJSONParser *parser, char close, const char *trailin
     parser->offset++;
     bsJSONSkipSpace(parser);
     if (parser->offset < parser->size && parser->text[parser->offset] == close) {
-        bsJSONError(parser, trailingComma, commaOffset);
+        bsJSONError(parser, close == ']' ? "Illegal trailing comma before end of array" :
+                    "Illegal trailing comma before end of object", commaOffset);
         return -1;
     }
     return 0;
@@ -411,7 +409,7 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
             return false;
         }
         bsArrayPush(array, item);
-        int separator = bsJSONSeparator(parser, ']', "Illegal trailing comma before end of array");
+        int separator = bsJSONSeparator(parser, ']');
         if (separator < 0) {
             bsRelease(array);
             return false;
@@ -429,7 +427,10 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
 static bool bsJSONDecodeKey(BSJSONParser *parser, BSValue *key)
 {
     bsJSONSkipSpace(parser);
-    if (!bsJSONDecodeString(parser, key, 1)) {
+    if (parser->offset >= parser->size || parser->text[parser->offset] != '"') {
+        return bsJSONError(parser, "Expecting property name enclosed in double quotes", parser->offset);
+    }
+    if (!bsJSONDecodeString(parser, key, true)) {
         return false;
     }
     bsJSONSkipSpace(parser);
@@ -466,7 +467,7 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
         }
         bsObjectSetString(object, key, item);
         bsRelease(key);
-        int separator = bsJSONSeparator(parser, '}', "Illegal trailing comma before end of object");
+        int separator = bsJSONSeparator(parser, '}');
         if (separator < 0) {
             bsRelease(object);
             return false;
@@ -570,7 +571,7 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
         return bsJSONDecodeArray(parser, depth, result);
     }
     if (ch == '"') {
-        return bsJSONDecodeString(parser, result, 0);
+        return bsJSONDecodeString(parser, result, false);
     }
     if (ch == 't' && bsJSONLiteral(parser, "true")) {
         *result = bsBoolean(true);
@@ -643,7 +644,7 @@ static bool bsJSONDecodeStatementArray(BSJSONParser *parser, bool (*emit)(BSValu
         if (!emitted) {
             return bsJSONError(parser, "Invalid BareScript model", parser->offset);
         }
-        int separator = bsJSONSeparator(parser, ']', "Illegal trailing comma before end of array");
+        int separator = bsJSONSeparator(parser, ']');
         if (separator < 0) {
             return false;
         }
@@ -688,7 +689,7 @@ static bool bsJSONDecodeModel(BSJSONParser *parser, bool (*emit)(BSValue, void *
                 bsObjectSetString(rest, key, item);
                 bsRelease(key);
             }
-            int separator = bsJSONSeparator(parser, '}', "Illegal trailing comma before end of object");
+            int separator = bsJSONSeparator(parser, '}');
             if (separator < 0) {
                 return false;
             }

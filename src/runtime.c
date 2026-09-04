@@ -240,9 +240,10 @@ void bsSystemIncludeClear(void)
 #define BS_REGS_INLINE 48
 
 
+/* A JavaScript ToInt32 of a value bsIsInteger has passed */
 static int32_t bsToInt32(double value)
 {
-    double modulo = fmod(trunc(value), 4294967296.0);
+    double modulo = fmod(value, 4294967296.0);
     if (modulo < 0) {
         modulo += 4294967296.0;
     }
@@ -295,15 +296,6 @@ static int bsCodeLine(const BSCode *code, size_t pc)
  */
 
 
-static void bsCoverageReset(BSScript *script)
-{
-    free(script->coverageCounts);
-    script->coverageCounts = NULL;
-    script->coverageLineCap = 0;
-    script->coverageCovered = bsNull();
-}
-
-
 static void bsCoverageGrow(BSScript *script, int line)
 {
     int cap = script->coverageLineCap;
@@ -321,7 +313,10 @@ static void bsCoverageGrow(BSScript *script, int line)
 static void bsCoverageEnsure(BSScript *script, BSValue coverage)
 {
     if (script->coverageOwner != coverage.u.object) {
-        bsCoverageReset(script);
+        free(script->coverageCounts);
+        script->coverageCounts = NULL;
+        script->coverageLineCap = 0;
+        script->coverageCovered = bsNull();
         script->coverageOwner = coverage.u.object;
     }
     if (script->coverageCovered.type == BS_OBJECT) {
@@ -394,11 +389,10 @@ static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, B
      * covered script emits a STMT for its first statement, so every label it can jump back to sits
      * beyond it - and testing for it here is also what keeps the index below from underflowing.
      */
-    const BSInst *prev = target != 0 ? &code->inst[target - 1] : NULL;
-    if (prev == NULL || prev->op != BS_OP_STMT) {
+    if (target == 0 || code->inst[target - 1].op != BS_OP_STMT) {
         return;
     }
-    bsRecordCoverage(script, code, prev->a, coverage);
+    bsRecordCoverage(script, code, code->inst[target - 1].a, coverage);
 }
 
 
@@ -431,9 +425,8 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     scope.slots = regs;
     scope.slotCount = slotCount;
 
-    size_t ixArgLast = def->argCount != 0 ? def->argCount - 1 : 0;
     for (size_t ix = 0; ix < def->argCount; ix++) {
-        if (def->lastArgArray && ix == ixArgLast) {
+        if (def->lastArgArray && ix + 1 == def->argCount) {
             size_t restCount = argCount > ix ? argCount - ix : 0;
             regs[ix] = restCount != 0 ? bsArrayFromArgs(args + ix, restCount) : bsArrayNew();
         } else {
@@ -484,15 +477,19 @@ static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
     return true;
 }
 
+/* An intrinsic whose happy path is one condition and one expression; a miss falls to the function */
+#define BS_INTRIN(name, cond, expr) \
+    case BS_INTRIN_##name: \
+        if (cond) { \
+            *result = (expr); \
+            return true; \
+        } \
+        break;
+
 static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCount, BSValue *result)
 {
     switch (id) {
-    case BS_INTRIN_ARRAY_COPY:
-        if (argCount == 1 && args[0].type == BS_ARRAY) {
-            *result = bsArrayCopy(args[0]);
-            return true;
-        }
-        return false;
+    BS_INTRIN(ARRAY_COPY, argCount == 1 && args[0].type == BS_ARRAY, bsArrayCopy(args[0]))
     case BS_INTRIN_ARRAY_GET: {
         size_t index;
         if (argCount == 2 && args[0].type == BS_ARRAY && bsIntrinsicIndex(args[1], &index) &&
@@ -502,12 +499,8 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
         }
         return false;
     }
-    case BS_INTRIN_ARRAY_LENGTH:
-        if (argCount == 1 && args[0].type == BS_ARRAY) {
-            *result = bsNumber((double) args[0].u.array->count);
-            return true;
-        }
-        return false;
+    BS_INTRIN(ARRAY_LENGTH, argCount == 1 && args[0].type == BS_ARRAY,
+              bsNumber((double) args[0].u.array->count))
     case BS_INTRIN_ARRAY_POP:
         if (argCount == 1 && args[0].type == BS_ARRAY && args[0].u.array->count != 0) {
             size_t index = args[0].u.array->count - 1;
@@ -535,46 +528,15 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
         }
         return false;
     }
-    case BS_INTRIN_ARRAY_NEW:
-        *result = bsArrayFromArgs(args, argCount);
-        return true;
-    case BS_INTRIN_MATH_ABS:
-        if (argCount == 1 && args[0].type == BS_NUMBER) {
-            *result = bsNumber(fabs(args[0].u.number));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_MATH_CEIL:
-        if (argCount == 1 && args[0].type == BS_NUMBER) {
-            *result = bsNumber(ceil(args[0].u.number));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_MATH_FLOOR:
-        if (argCount == 1 && args[0].type == BS_NUMBER) {
-            *result = bsNumber(floor(args[0].u.number));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_MATH_SIGN:
-        if (argCount == 1 && args[0].type == BS_NUMBER) {
-            double x = args[0].u.number;
-            *result = bsNumber(x < 0 ? -1 : (x == 0 ? 0 : 1));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_MATH_SQRT:
-        if (argCount == 1 && args[0].type == BS_NUMBER && args[0].u.number >= 0) {
-            *result = bsNumber(sqrt(args[0].u.number));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_OBJECT_COPY:
-        if (argCount == 1 && args[0].type == BS_OBJECT) {
-            *result = bsObjectCopy(args[0]);
-            return true;
-        }
-        return false;
+    BS_INTRIN(ARRAY_NEW, true, bsArrayFromArgs(args, argCount))
+    BS_INTRIN(MATH_ABS, argCount == 1 && args[0].type == BS_NUMBER, bsNumber(fabs(args[0].u.number)))
+    BS_INTRIN(MATH_CEIL, argCount == 1 && args[0].type == BS_NUMBER, bsNumber(ceil(args[0].u.number)))
+    BS_INTRIN(MATH_FLOOR, argCount == 1 && args[0].type == BS_NUMBER, bsNumber(floor(args[0].u.number)))
+    BS_INTRIN(MATH_SIGN, argCount == 1 && args[0].type == BS_NUMBER,
+              bsNumber(args[0].u.number < 0 ? -1 : (args[0].u.number == 0 ? 0 : 1)))
+    BS_INTRIN(MATH_SQRT, argCount == 1 && args[0].type == BS_NUMBER && args[0].u.number >= 0,
+              bsNumber(sqrt(args[0].u.number)))
+    BS_INTRIN(OBJECT_COPY, argCount == 1 && args[0].type == BS_OBJECT, bsObjectCopy(args[0]))
     case BS_INTRIN_OBJECT_DELETE:
         if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
             bsObjectDelete(args[0], bsStringData(args[1]));
@@ -593,18 +555,9 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
             return true;
         }
         return false;
-    case BS_INTRIN_OBJECT_HAS:
-        if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
-            *result = bsBoolean(bsObjectHasString(args[0], args[1]));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_OBJECT_KEYS:
-        if (argCount == 1 && args[0].type == BS_OBJECT) {
-            *result = bsObjectKeys(args[0]);
-            return true;
-        }
-        return false;
+    BS_INTRIN(OBJECT_HAS, argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING,
+              bsBoolean(bsObjectHasString(args[0], args[1])))
+    BS_INTRIN(OBJECT_KEYS, argCount == 1 && args[0].type == BS_OBJECT, bsObjectKeys(args[0]))
     case BS_INTRIN_OBJECT_SET:
         if (argCount == 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
             bsObjectSetString(args[0], args[1], bsRetain(args[2]));
@@ -625,42 +578,16 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
         *result = object;
         return true;
     }
-    case BS_INTRIN_STRING_ENDS_WITH:
-        if (argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING) {
-            *result = bsBoolean(bsStringEndsWith(args[0], args[1]));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_STRING_LENGTH:
-        if (argCount == 1 && args[0].type == BS_STRING) {
-            *result = bsNumber((double) args[0].u.string->length);
-            return true;
-        }
-        return false;
-    case BS_INTRIN_STRING_STARTS_WITH:
-        if (argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING) {
-            *result = bsBoolean(bsStringStartsWith(args[0], args[1]));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_SYSTEM_BOOLEAN:
-        if (argCount == 1) {
-            *result = bsBoolean(bsValueBoolean(args[0]));
-            return true;
-        }
-        return false;
-    case BS_INTRIN_SYSTEM_TYPE:
-        if (argCount == 1) {
-            *result = bsSystemTypeName(args[0]);
-            return true;
-        }
-        return false;
-    case BS_INTRIN_REGEX_MATCH:
-        if (argCount == 2 && args[0].type == BS_REGEX && args[1].type == BS_STRING) {
-            *result = bsRegexMatchImpl(args[0], args[1]);
-            return true;
-        }
-        break;
+    BS_INTRIN(STRING_ENDS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
+              bsBoolean(bsStringEndsWith(args[0], args[1])))
+    BS_INTRIN(STRING_LENGTH, argCount == 1 && args[0].type == BS_STRING,
+              bsNumber((double) args[0].u.string->length))
+    BS_INTRIN(STRING_STARTS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
+              bsBoolean(bsStringStartsWith(args[0], args[1])))
+    BS_INTRIN(SYSTEM_BOOLEAN, argCount == 1, bsBoolean(bsValueBoolean(args[0])))
+    BS_INTRIN(SYSTEM_TYPE, argCount == 1, bsSystemTypeName(args[0]))
+    BS_INTRIN(REGEX_MATCH, argCount == 2 && args[0].type == BS_REGEX && args[1].type == BS_STRING,
+              bsRegexMatchImpl(args[0], args[1]))
     }
     return false;
 }
