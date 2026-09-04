@@ -70,8 +70,7 @@ static char *bsPathNormalize(const char *path)
             /* Pop the previous segment, unless it is itself ".." or the path escapes its root */
             if (segmentCount != 0) {
                 size_t previous = segments[segmentCount - 1];
-                bool isParent = (resultSize - previous == 3 && memcmp(result + previous, "../", 3) == 0) ||
-                    (resultSize - previous == 2 && memcmp(result + previous, "..", 2) == 0);
+                bool isParent = resultSize - previous == 2 && memcmp(result + previous, "..", 2) == 0;
                 if (!isParent) {
                     segmentCount--;
                     resultSize = previous;

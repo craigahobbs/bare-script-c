@@ -46,25 +46,10 @@ static void bsArgsError(BSOptions *options, const char *argName, BSValue argValu
 }
 
 
-static bool bsArgTypeMatch(BSArgType type, BSValue value)
-{
-    switch (type) {
-    case BS_ARG_NUMBER:
-        return value.type == BS_NUMBER;
-    case BS_ARG_STRING:
-        return value.type == BS_STRING;
-    case BS_ARG_ARRAY:
-        return value.type == BS_ARRAY;
-    case BS_ARG_OBJECT:
-        return value.type == BS_OBJECT;
-    case BS_ARG_DATETIME:
-        return value.type == BS_DATETIME;
-    case BS_ARG_REGEX:
-        return value.type == BS_REGEX;
-    default:
-        return value.type == BS_FUNCTION;
-    }
-}
+/* The value type each argument type requires, indexed by BSArgType; any and boolean never consult it */
+static const BSType bsArgValueTypes[] = {
+    BS_NULL, BS_NUMBER, BS_STRING, BS_ARRAY, BS_OBJECT, BS_DATETIME, BS_REGEX, BS_FUNCTION, BS_BOOLEAN
+};
 
 
 static bool bsArgLimit(double value, unsigned flags, double limit)
@@ -151,7 +136,7 @@ bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSVa
             continue;
         }
 
-        if (!bsArgTypeMatch(model->type, value)) {
+        if (value.type != bsArgValueTypes[model->type]) {
             return bsArgsInvalid(argModel, argModelCount, values, options, model->name, value);
         }
         if (model->type == BS_ARG_NUMBER) {
@@ -249,12 +234,14 @@ static bool bsArgSlice(BSValue startValue, BSValue endValue, size_t count, size_
 }
 
 
-/* Pop or shift: take the value at "index" and delete it. Fails if the array is empty. */
-static BSValue bsArrayTake(BSValue array, size_t index, BSOptions *options)
+/* Pop or shift: take the array's last or first value and delete it. Fails if the array is empty. */
+static BSValue bsArrayTake(BSValue array, bool last, BSOptions *options)
 {
-    if (bsArrayCount(array) == 0) {
+    size_t count = bsArrayCount(array);
+    if (count == 0) {
         return bsArgFail(options, "array", array, bsNull());
     }
+    size_t index = last ? count - 1 : 0;
     BSValue result = bsRetain(bsArrayGet(array, index));
     bsArrayDelete(array, index);
     return result;
@@ -466,8 +453,7 @@ static BSValue bsFnArrayNewSize(const BSValue *args, size_t argCount, BSOptions 
 static BSValue bsFnArrayPop(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(arrayArgs, bsNull());
-    size_t count = bsArrayCount(values[0]);
-    return bsArrayTake(values[0], count != 0 ? count - 1 : 0, options);
+    return bsArrayTake(values[0], true, options);
 }
 
 
@@ -522,7 +508,7 @@ static BSValue bsFnArraySet(const BSValue *args, size_t argCount, BSOptions *opt
 static BSValue bsFnArrayShift(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(arrayArgs, bsNull());
-    return bsArrayTake(values[0], 0, options);
+    return bsArrayTake(values[0], false, options);
 }
 
 
@@ -676,16 +662,15 @@ static BSValue bsFnDatetimeNew(const BSValue *args, size_t argCount, BSOptions *
 }
 
 
-static BSValue bsFnDatetimeNow(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsDatetime(bsDatetimeNow());
-}
+/* A library function of no arguments */
+#define BS_CONSTANT_FN(fnName, expression) \
+    static BSValue fnName(const BSValue *args, size_t argCount, BSOptions *options, void *data) \
+    { \
+        return expression; \
+    }
 
-
-static BSValue bsFnDatetimeToday(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsDatetime(bsDatetimeToday());
-}
+BS_CONSTANT_FN(bsFnDatetimeNow, bsDatetime(bsDatetimeNow()))
+BS_CONSTANT_FN(bsFnDatetimeToday, bsDatetime(bsDatetimeToday()))
 
 
 /*
@@ -772,16 +757,8 @@ static BSValue bsFnMathAtan2(const BSValue *args, size_t argCount, BSOptions *op
 }
 
 
-static BSValue bsFnMathE(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsNumber(2.718281828459045);
-}
-
-
-static BSValue bsFnMathPi(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsNumber(3.141592653589793);
-}
+BS_CONSTANT_FN(bsFnMathE, bsNumber(2.718281828459045))
+BS_CONSTANT_FN(bsFnMathPi, bsNumber(3.141592653589793))
 
 
 static const BSArgModel mathLnArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GT, 0, 0, 0, 0}};
@@ -1065,8 +1042,7 @@ static const BSArgModel objectGetArgs[] = {
 
 static BSValue bsFnObjectGet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    BSValue defaultValue = argCount >= 3 ? args[2] : bsNull();
-    BS_ARGS(objectGetArgs, bsRetain(defaultValue));
+    BS_ARGS(objectGetArgs, bsRetain(argCount >= 3 ? args[2] : bsNull()));
     BSValue found;
     if (!bsObjectLookupString(values[0], values[1], &found)) {
         return bsRetain(values[2]);
@@ -1527,9 +1503,6 @@ static size_t bsMemFind(const char *text, size_t size, const char *search, size_
     if (searchSize == 0) {
         return offset <= size ? offset : SIZE_MAX;
     }
-    if (searchSize > size) {
-        return SIZE_MAX;
-    }
     for (size_t ix = offset; ix + searchSize <= size; ix++) {
         if (text[ix] == search[0] && memcmp(text + ix, search, searchSize) == 0) {
             return ix;
@@ -1830,9 +1803,13 @@ static BSValue bsFnSystemCompare(const BSValue *args, size_t argCount, BSOptions
 }
 
 
-/* Validate a systemFetch request model - returns false if the model is invalid */
-static bool bsFetchRequestValidate(BSValue request)
+/* A fetch argument is a URL string or a request model: a url string, an optional body string, and
+   optional headers - an object of string values */
+static bool bsFetchValid(BSValue request)
 {
+    if (request.type != BS_OBJECT) {
+        return request.type == BS_STRING;
+    }
     BSValue url = bsObjectGet(request, "url");
     BSValue body = bsObjectGet(request, "body");
     BSValue headers = bsObjectGet(request, "headers");
@@ -1840,25 +1817,15 @@ static bool bsFetchRequestValidate(BSValue request)
         (headers.type != BS_NULL && headers.type != BS_OBJECT)) {
         return false;
     }
+    bool valid = true;
     if (headers.type == BS_OBJECT) {
         BSValue keys = bsObjectKeys(headers);
-        bool valid = true;
         for (size_t ix = 0; ix < bsArrayCount(keys) && valid; ix++) {
             valid = bsObjectGetString(headers, bsArrayGet(keys, ix)).type == BS_STRING;
         }
         bsRelease(keys);
-        if (!valid) {
-            return false;
-        }
     }
-    return true;
-}
-
-
-/* A fetch argument is a URL string or a valid request model */
-static bool bsFetchValid(BSValue request)
-{
-    return request.type == BS_STRING || (request.type == BS_OBJECT && bsFetchRequestValidate(request));
+    return valid;
 }
 
 
