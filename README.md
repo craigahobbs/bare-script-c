@@ -698,10 +698,9 @@ implementations also run.
 
 ### Cross-Language Benchmarks
 
-`make perfx` runs [perfx](perfx/README.md): an n-body simulation, web log analysis, a JSON
-pipeline, grid pathfinding, and a CSV sales report, each ported to BareScript, JavaScript (V8 with
-and without its JIT), Python, Lua, Ruby, and Perl, every port fed identical generated input and
-checked for the same result.
+`make perfx` runs an n-body simulation, web log analysis, a JSON pipeline, grid pathfinding, and
+a CSV sales report, each ported to BareScript, JavaScript (V8 with and without its JIT), Python,
+Lua, Ruby, and Perl, every port fed identical generated input and checked for the same result.
 
 ```sh
 make perfx
