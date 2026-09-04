@@ -156,7 +156,6 @@ void bsLog(BSOptions *options, const char *format, ...)
 void bsScopeInit(BSScope *scope)
 {
     scope->slots = NULL;
-    scope->slotCount = 0;
     scope->object = bsNull();
 }
 
@@ -416,7 +415,7 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     /* The registers: the slots, filled from the arguments, then the temporaries, nulled */
     BSValue regsInline[BS_REGS_INLINE];
     BSValue *regs = regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue));
-    BSScope scope = {regs, slotCount, bsNull()};
+    BSScope scope = {regs, bsNull()};
 
     for (size_t ix = 0; ix < def->argCount; ix++) {
         if (def->lastArgArray && ix + 1 == def->argCount) {
@@ -1021,7 +1020,6 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         switch (inst->op) {
 #endif
         BS_CASE(MOVE)
-            /* A temporary is dead once moved, so its value is taken; a slot's or constant's is shared */
             bsAssign(&regs[inst->a], bsOperandTake(code, regs, slotCount, inst->b));
             BS_NEXT();
 
@@ -1078,7 +1076,6 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         }
 
         BS_CASE(RETURN)
-            /* A temporary's value is taken; a constant's or a local's is shared */
             result = bsOperandTake(code, regs, slotCount, inst->a);
             goto done;
 
@@ -1243,7 +1240,7 @@ BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue
     if (expr == NULL) {
         return bsNull();
     }
-    BSScope scope = {NULL, 0, locals};
+    BSScope scope = {NULL, locals};
     BSValue result = bsRunCode(&expr->code, NULL, options, &scope, builtins);
     bsExprFree(expr);
     return result;

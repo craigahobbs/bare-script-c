@@ -291,13 +291,12 @@ static _Thread_local BSValueState bsTS = {.priorityState = 0x9E3779B9u};
 static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128};
 
 
-/* Set up a string allocation's header for "size" data bytes; the caller fills them, then bsStringFinish */
+/* Set up a string allocation's header for "size" data bytes; the caller fills them and sets the length */
 static void bsStringInit(BSString *string, size_t size, uint8_t flags)
 {
     string->refcount = 1;
     string->flags = flags;
     string->size = (uint32_t) size;
-    string->length = 0;
     string->offsets = NULL;
     string->cursorIndex = 0;
     string->cursorOffset = 0;

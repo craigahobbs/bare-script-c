@@ -99,7 +99,7 @@ static char *bsPathNormalize(const char *path)
 
 char *bsUrlFileRelative(const char *url, void *data)
 {
-    const char *file = data;
+    const char *file = data != NULL ? (const char *) data : "";
 
     /* An absolute URL or POSIX path resolves to itself */
     if (bsUrlIsURL(url) || url[0] == '/') {
@@ -107,14 +107,12 @@ char *bsUrlFileRelative(const char *url, void *data)
     }
 
     /* Replace the file's last path segment. A URL result stands; a file system path is normalized. */
-    bool fileIsURL = file != NULL && bsUrlIsURL(file);
-    const char *lastSlash = file != NULL ? strrchr(file, '/') : NULL;
+    bool fileIsURL = bsUrlIsURL(file);
+    const char *lastSlash = strrchr(file, '/');
     size_t prefixSize = lastSlash != NULL ? (size_t) (lastSlash - file) + 1 : (fileIsURL ? strlen(file) : 0);
     size_t urlSize = strlen(url);
     char *joined = bsAlloc(prefixSize + urlSize + 1);
-    if (prefixSize != 0) {
-        memcpy(joined, file, prefixSize);
-    }
+    memcpy(joined, file, prefixSize);
     memcpy(joined + prefixSize, url, urlSize + 1);
     if (fileIsURL) {
         return joined;

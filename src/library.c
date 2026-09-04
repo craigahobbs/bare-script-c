@@ -237,7 +237,7 @@ static bool bsArgIndex(BSValue indexValue, size_t count, size_t *index, BSOption
 }
 
 
-/* Slice bounds: start is required, end defaults to count. Both must be in [0, count]. */
+/* Slice bounds: start is required, end defaults to count. Both in [0, count]; a reversed range is empty. */
 static bool bsArgSlice(BSValue startValue, BSValue endValue, size_t count, size_t *start, size_t *end,
                        BSOptions *options)
 {
@@ -250,6 +250,9 @@ static bool bsArgSlice(BSValue startValue, BSValue endValue, size_t count, size_
     if (*end > count) {
         bsArgsError(options, "end", endValue);
         return false;
+    }
+    if (*end < *start) {
+        *end = *start;
     }
     return true;
 }
@@ -519,7 +522,7 @@ static BSValue bsFnArraySlice(const BSValue *args, size_t argCount, BSOptions *o
     if (!bsArgSlice(values[1], values[2], bsArrayCount(values[0]), &start, &end, options)) {
         return bsNull();
     }
-    BSValue result = bsArrayNewCapacity(end > start ? end - start : 0);
+    BSValue result = bsArrayNewCapacity(end - start);
     for (size_t ix = start; ix < end; ix++) {
         bsArrayPush(result, bsRetain(bsArrayGet(values[0], ix)));
     }
@@ -1615,9 +1618,6 @@ static BSValue bsFnStringSlice(const BSValue *args, size_t argCount, BSOptions *
     size_t end;
     if (!bsArgSlice(values[1], values[2], bsStringLength(values[0]), &start, &end, options)) {
         return bsNull();
-    }
-    if (end < start) {
-        return bsStringNewSize("", 0);
     }
     return bsStringSlice(values[0], start, end);
 }

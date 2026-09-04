@@ -105,8 +105,6 @@ static bool bsJSONEncodeMember(BSValue key, BSValue item, void *data)
 
 static void bsJSONEncodeValue(BSStringBuilder *sb, BSValue value, int indent, int depth)
 {
-    char buffer[64];
-
     /* Nesting deeper than the limit - or a value cycle - encodes as null */
     if (depth >= BS_JSON_DEPTH_MAX) {
         bsSBAppendString(sb, "null");
@@ -126,7 +124,7 @@ static void bsJSONEncodeValue(BSStringBuilder *sb, BSValue value, int indent, in
         if (!isfinite(value.u.number)) {
             bsSBAppendString(sb, "null");
         } else {
-            bsSBAppend(sb, buffer, bsNumberFormat(value.u.number, buffer, sizeof(buffer)));
+            bsSBAppendValue(sb, value);
         }
         break;
 

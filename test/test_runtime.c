@@ -419,7 +419,6 @@ TEST(runtime_scope_init)
     BSScope scope;
     bsScopeInit(&scope);
     ASSERT_NULL(scope.slots);
-    ASSERT_INT_EQ(scope.slotCount, 0);
     ASSERT_INT_EQ(scope.object.type, BS_NULL);
 }
 

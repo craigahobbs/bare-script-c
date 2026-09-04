@@ -154,7 +154,6 @@ BSValue bsExecuteScript(BSScript *script, BSOptions *options);
  */
 typedef struct BSScope {
     BSValue *slots;
-    size_t slotCount;
     BSValue object;
 } BSScope;
 

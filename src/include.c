@@ -144,53 +144,55 @@ static const unsigned short bsDistBase[30] = {
 };
 
 
-static int bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap, size_t *outLen)
+/* Decode one block's codes into "out". Returns the output length, or SIZE_MAX for a malformed stream. */
+static size_t bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap)
 {
+    size_t outLen = 0;
     uint16_t table[BS_FIXED_TABLE_SIZE];
     bsFixedTable(table);
     for (;;) {
         int symbol = bsFixedLiteral(bits, table);
         if (symbol < 0) {
-            return -1;
+            return SIZE_MAX;
         }
         if (symbol < 256) {
-            if (*outLen >= outCap) {
-                return -1;
+            if (outLen >= outCap) {
+                return SIZE_MAX;
             }
-            out[(*outLen)++] = (unsigned char) symbol;
+            out[outLen++] = (unsigned char) symbol;
             continue;
         }
         if (symbol == 256) {
-            return 0;
+            return outLen;
         }
         if (symbol > 285) {
-            return -1; /* GCOV_EXCL_LINE */
+            return SIZE_MAX; /* GCOV_EXCL_LINE */
         }
         int extra = bsGetBits(bits, bsLengthExtra[symbol - 257]);
         if (extra < 0) {
-            return -1; /* GCOV_EXCL_LINE */
+            return SIZE_MAX; /* GCOV_EXCL_LINE */
         }
         unsigned length = (unsigned) (bsLengthBase[symbol - 257] + extra);
         int distSymbol = bsFixedDistance(bits);
         if (distSymbol < 0 || distSymbol > 29) {
-            return -1; /* GCOV_EXCL_LINE */
+            return SIZE_MAX; /* GCOV_EXCL_LINE */
         }
         extra = bsGetBits(bits, bsDistExtra[distSymbol]);
         if (extra < 0) {
-            return -1; /* GCOV_EXCL_LINE */
+            return SIZE_MAX; /* GCOV_EXCL_LINE */
         }
         unsigned distance = (unsigned) (bsDistBase[distSymbol] + extra);
-        if (distance > *outLen || *outLen + length > outCap) {
-            return -1; /* GCOV_EXCL_LINE */
+        if (distance > outLen || outLen + length > outCap) {
+            return SIZE_MAX; /* GCOV_EXCL_LINE */
         }
-        size_t src = *outLen - distance;
+        size_t src = outLen - distance;
         if (distance >= length) {
-            memcpy(out + *outLen, out + src, length);
-            *outLen += length;
+            memcpy(out + outLen, out + src, length);
+            outLen += length;
         } else {
             /* The match overlaps its own output - it repeats the last "distance" bytes */
             for (unsigned ix = 0; ix < length; ix++) {
-                out[(*outLen)++] = out[src + ix];
+                out[outLen++] = out[src + ix];
             }
         }
     }
@@ -217,13 +219,12 @@ char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
     }
     uint32_t isize = bsReadU32LE(src + srcSize - 4);
     unsigned char *out = bsAlloc((size_t) isize + 1);
-    size_t outLen = 0;
     BsBits bits = {src + 10, srcSize - 18, 0, 0, 0};
-    if (bsGetBits(&bits, 3) != 3 || bsInflateCodes(&bits, out, isize, &outLen) != 0 || outLen != isize) {
+    if (bsGetBits(&bits, 3) != 3 || bsInflateCodes(&bits, out, isize) != isize) {
         free(out);
         return NULL;
     }
-    out[outLen] = '\0';
+    out[isize] = '\0';
     return (char *) out;
 }
 
