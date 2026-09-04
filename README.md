@@ -692,10 +692,9 @@ so it runs unchanged on all three implementations.
 
 On real-world code this runtime matches V8's bytecode interpreter and beats CPython, Lua, Ruby,
 and Perl, starts in 3 ms and 3 MB, and does it as a plain bytecode interpreter - no JIT - in
-196 KB of code. Two suites back that up: `make
-perfx`, real-world-like applications ported to six languages, and `make perf`, the include
-library's own suite, which the JavaScript and Python implementations also run. Both time the
-**release** build; the development build reads about 1.5x slower.
+196 KB of code. Two suites back that up: `make perfx`, real-world-like applications ported to six
+languages, and `make perf`, the include library's own suite, which the JavaScript and Python
+implementations also run.
 
 ### Cross-Language Benchmarks
 
