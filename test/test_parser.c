@@ -229,9 +229,7 @@ TEST(parser_expression_error_line_trim)
     }
     bsSBAppendChar(&sb, '+');
     BSValue text = bsSBToValue(&sb);
-    BSValue message = bsTestParseExpr(bsStringData(text), false);
-    ASSERT_STR_CONTAINS(bsStringData(message), "... ");
-    bsRelease(message);
+    bsTestParseExprContains(bsStringData(text), "... ");
     bsRelease(text);
 
     /* An error near the start trims only the end */
@@ -241,9 +239,7 @@ TEST(parser_expression_error_line_trim)
         bsSBAppendString(&sb, " abcd");
     }
     text = bsSBToValue(&sb);
-    message = bsTestParseExpr(bsStringData(text), false);
-    ASSERT_STR_CONTAINS(bsStringData(message), " ...");
-    bsRelease(message);
+    bsTestParseExprContains(bsStringData(text), " ...");
     bsRelease(text);
 
     /* An error in the middle trims both ends */
@@ -256,9 +252,7 @@ TEST(parser_expression_error_line_trim)
         bsSBAppendString(&sb, "abcd");
     }
     text = bsSBToValue(&sb);
-    message = bsTestParseExpr(bsStringData(text), false);
-    ASSERT_STR_CONTAINS(bsStringData(message), "... ");
-    bsRelease(message);
+    bsTestParseExprContains(bsStringData(text), "... ");
     bsRelease(text);
 }
 

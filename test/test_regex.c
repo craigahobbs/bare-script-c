@@ -70,12 +70,7 @@ static void bsTestRegexError(const char *pattern, const char *expectedError)
 {
     char error[BS_REGEX_ERROR_MAX];
     BSValue regex = bsRegexNew(pattern, strlen(pattern), 0, error, sizeof(error));
-    if (!bsTestStringEqual(error, expectedError)) {
-        bsTestFail(__FILE__, __LINE__, "bsRegexNew(%s)\n    actual:   %s\n    expected: %s", pattern,
-                   error, expectedError);
-    } else {
-        bsTestPass();
-    }
+    bsTestAssertEqual(__FILE__, __LINE__, pattern, error, expectedError);
     bsRelease(regex);
 }
 
@@ -425,14 +420,8 @@ TEST(regex_depth_limit)
         bsSBAppendChar(&sb, 'a');
     }
     BSValue subject = bsSBToValue(&sb);
-    BSValue regex = bsRegexNew("(a|aa)+$b", 9, 0, NULL, 0);
-    BSRegexSubject subjectCodes;
-    bsRegexSubjectInit(&subjectCodes, subject);
-    BSRegexMatch match;
-    ASSERT_FALSE(bsRegexSearch(regex, &subjectCodes, 0, &match));
-    bsRegexSubjectFree(&subjectCodes);
+    ASSERT_VALUE_STRING(bsTestMatch("(a|aa)+$b", bsStringData(subject), 0), "null");
     bsRelease(subject);
-    bsRelease(regex);
 
     /* A chain of alternations with no repeats, and nested repeats with no alternations */
     bsSBInit(&sb);
@@ -446,12 +435,8 @@ TEST(regex_depth_limit)
         bsSBAppendChar(&sb, 'a');
     }
     subject = bsSBToValue(&sb);
-    regex = bsRegexNew(bsStringData(chain), bsStringSize(chain), 0, NULL, 0);
-    bsRegexSubjectInit(&subjectCodes, subject);
-    ASSERT_FALSE(bsRegexSearch(regex, &subjectCodes, 0, &match));
-    bsRegexSubjectFree(&subjectCodes);
+    ASSERT_VALUE_STRING(bsTestMatch(bsStringData(chain), bsStringData(subject), 0), "null");
     bsRelease(subject);
-    bsRelease(regex);
     bsRelease(chain);
 
     bsSBInit(&sb);
@@ -459,12 +444,8 @@ TEST(regex_depth_limit)
         bsSBAppendString(&sb, "ab");
     }
     subject = bsSBToValue(&sb);
-    regex = bsRegexNew("(?:(?:ab)*)*c", 13, 0, NULL, 0);
-    bsRegexSubjectInit(&subjectCodes, subject);
-    ASSERT_FALSE(bsRegexSearch(regex, &subjectCodes, 0, &match));
-    bsRegexSubjectFree(&subjectCodes);
+    ASSERT_VALUE_STRING(bsTestMatch("(?:(?:ab)*)*c", bsStringData(subject), 0), "null");
     bsRelease(subject);
-    bsRelease(regex);
 
     /* A long simple repeat matches iteratively, without recursion */
     bsSBInit(&sb);
@@ -474,7 +455,9 @@ TEST(regex_depth_limit)
     bsSBAppendChar(&sb, 'y');
     BSValue longSubject = bsSBToValue(&sb);
     BSValue longRegex = bsRegexNew("x*y", 3, 0, NULL, 0);
+    BSRegexSubject subjectCodes;
     bsRegexSubjectInit(&subjectCodes, longSubject);
+    BSRegexMatch match;
     ASSERT_TRUE(bsRegexSearch(longRegex, &subjectCodes, 0, &match));
     ASSERT_INT_EQ(match.end, 20001);
     bsRegexSubjectFree(&subjectCodes);

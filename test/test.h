@@ -143,6 +143,9 @@ bool bsTestStringEqual(const char *actual, const char *expected);
 void bsTestAssertValue(const char *file, int line, const char *expr, BSValue value, const char *expectedJSON);
 void bsTestAssertValueString(const char *file, int line, const char *expr, BSValue value, const char *expected);
 
+/* Assert "actual" equals "expected", naming "subject" - the input or expression under test - on failure */
+void bsTestAssertEqual(const char *file, int line, const char *subject, const char *actual, const char *expected);
+
 
 /*
  * Test helpers
@@ -151,7 +154,7 @@ void bsTestAssertValueString(const char *file, int line, const char *expr, BSVal
 /* Execute script text and return its result. Log output is captured - see bsTestLogText. */
 BSValue bsTestExecute(const char *text);
 
-/* Execute script text with options and return its result */
+/* Execute script text with options and return its result. The captured log text is cleared first. */
 BSValue bsTestExecuteOptions(const char *text, BSOptions *options);
 
 /* Create test options with a capturing log function */

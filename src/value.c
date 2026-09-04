@@ -1980,7 +1980,6 @@ bool bsObjectIter(BSValue value, BSObjectIterFn iter, void *data)
 
 static bool bsObjectKeysIter(BSValue key, BSValue item, void *data)
 {
-    (void) item;
     bsArrayPush(*((BSValue *) data), bsRetainInline(key));
     return true;
 }

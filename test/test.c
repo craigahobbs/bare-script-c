@@ -58,13 +58,8 @@ void bsTestFail(const char *file, int line, const char *format, ...)
 
     /* Format the failure message */
     va_list args;
-    va_list argsCopy;
     va_start(args, format);
-    va_copy(argsCopy, args);
-    int size = vsnprintf(NULL, 0, format, argsCopy);
-    va_end(argsCopy);
-    char *message = malloc((size_t) size + 1);
-    vsnprintf(message, (size_t) size + 1, format, args);
+    BSValue message = bsStringNewVFormat(format, args);
     va_end(args);
 
     /* Report it now, under the test's line, or collect it for the end of a quiet run */
@@ -74,11 +69,11 @@ void bsTestFail(const char *file, int line, const char *format, ...)
         fflush(stdout);
         bsSBAppendFormat(&bsTestFailText,
                          "======================================================================\n"
-                         "FAIL: %s\n    %s:%d: %s\n", name, file, line, message);
+                         "FAIL: %s\n    %s:%d: %s\n", name, file, line, bsStringData(message));
     } else {
-        printf("FAIL\n    %s:%d: %s\n", file, line, message);
+        printf("FAIL\n    %s:%d: %s\n", file, line, bsStringData(message));
     }
-    free(message);
+    bsRelease(message);
 
     if (bsTestRunning) {
         longjmp(bsTestJump, 1);
@@ -104,16 +99,23 @@ bool bsTestStringEqual(const char *actual, const char *expected)
 }
 
 
+void bsTestAssertEqual(const char *file, int line, const char *subject, const char *actual, const char *expected)
+{
+    if (!bsTestStringEqual(actual, expected)) {
+        bsTestFail(file, line, "%s\n    actual:   %s\n    expected: %s", subject, actual != NULL ? actual : "(null)",
+                   expected);
+    } else {
+        bsTestPass();
+    }
+}
+
+
 /* Assert a value's rendering "text" (owned) against "expected"; the value and the text are released */
 static void bsTestAssertText(const char *file, int line, const char *expr, BSValue value, BSValue text,
                              const char *expected)
 {
     bsRelease(value);
-    if (!bsTestStringEqual(bsStringData(text), expected)) {
-        bsTestFail(file, line, "%s\n    actual:   %s\n    expected: %s", expr, bsStringData(text), expected);
-    } else {
-        bsTestPass();
-    }
+    bsTestAssertEqual(file, line, expr, bsStringData(text), expected);
     bsRelease(text);
 }
 
@@ -174,6 +176,7 @@ BSOptions *bsTestOptions(void)
 
 BSValue bsTestExecuteOptions(const char *text, BSOptions *options)
 {
+    bsTestLogClear();
     bsAssign(&bsTestError, bsNull());
     BSParserError parserError;
     memset(&parserError, 0, sizeof(parserError));
@@ -195,7 +198,6 @@ BSValue bsTestExecuteOptions(const char *text, BSOptions *options)
 
 BSValue bsTestExecute(const char *text)
 {
-    bsTestLogClear();
     BSOptions *options = bsTestOptions();
     BSValue result = bsTestExecuteOptions(text, options);
     bsOptionsFree(options);

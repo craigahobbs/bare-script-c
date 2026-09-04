@@ -320,7 +320,6 @@ TEST(value_array)
 
 static int bsTestCompareValues(BSValue value1, BSValue value2, void *data)
 {
-    (void) data;
     return bsValueCompare(value1, value2);
 }
 
@@ -937,8 +936,6 @@ TEST(value_retain_release)
 
 static BSValue bsTestFunctionFn(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
-    (void) options;
-    (void) data;
     return argCount != 0 ? bsRetain(args[0]) : bsNull();
 }
 
@@ -947,7 +944,6 @@ static int bsTestFunctionDataFreed = 0;
 
 static void bsTestFunctionDataFree(void *data)
 {
-    (void) data;
     bsTestFunctionDataFreed++;
 }
 
@@ -996,8 +992,6 @@ TEST(value_regex)
 
 static bool bsTestIterStop(BSValue key, BSValue item, void *data)
 {
-    (void) key;
-    (void) item;
     size_t *count = data;
     (*count)++;
     return false;
@@ -1101,7 +1095,6 @@ TEST(value_object_iterate)
 
 static bool bsTestIterStopDeep(BSValue key, BSValue item, void *data)
 {
-    (void) item;
     size_t *count = data;
     (*count)++;
     /* Stop on a key that sorts in the middle, so the sorted walk unwinds from a right subtree */

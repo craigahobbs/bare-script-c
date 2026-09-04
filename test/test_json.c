@@ -27,12 +27,7 @@ static void bsTestJSONError(const char *text, const char *expectedError)
 {
     const char *error = NULL;
     BSValue value = bsJSONDecode(text, strlen(text), &error);
-    if (!bsTestStringEqual(error, expectedError)) {
-        bsTestFail(__FILE__, __LINE__, "bsJSONDecode(%s)\n    actual:   %s\n    expected: %s", text,
-                   error != NULL ? error : "(null)", expectedError);
-    } else {
-        bsTestPass();
-    }
+    bsTestAssertEqual(__FILE__, __LINE__, text, error, expectedError);
     bsRelease(value);
 }
 
@@ -55,7 +50,7 @@ TEST(json_encode_deep_indent)
     needle[0] = '\n';
     memset(needle + 1, ' ', 84);
     memcpy(needle + 85, "1\n", 3);
-    ASSERT_NOT_NULL(strstr(bsStringData(json), needle));
+    ASSERT_STR_CONTAINS(bsStringData(json), needle);
     bsRelease(json);
     bsRelease(value);
 }
@@ -137,7 +132,7 @@ TEST(json_encode_depth)
         current = next;
     }
     BSValue json = bsJSONEncode(root, 0);
-    ASSERT_TRUE(strstr(bsStringData(json), "null") != NULL);
+    ASSERT_STR_CONTAINS(bsStringData(json), "null");
     bsRelease(json);
     bsRelease(root);
 }

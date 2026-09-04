@@ -600,7 +600,6 @@ TEST(runtime_globals)
 
 static char *bsTestFetchFn(const BSFetchRequest *request, size_t *responseSize, void *data)
 {
-    (void) data;
     if (strcmp(request->url, "fail.bare") == 0) {
         return NULL;
     }
@@ -949,7 +948,6 @@ TEST(runtime_call_non_function_debug)
     /* Calling a non-function value logs in debug mode and evaluates to null */
     BSOptions *options = bsTestOptions();
     options->debug = true;
-    bsTestLogClear();
     ASSERT_VALUE(bsTestExecuteOptions("x = 1\nreturn x()", options), "null");
     ASSERT_STR_EQ(bsTestLogText(),
                   "BareScript: Function \"x\" failed with error: not a function\n");
@@ -1022,19 +1020,17 @@ TEST(runtime_include_lint_debug)
     BSOptions *options = bsTestOptions();
     options->debug = true;
     options->fetchFn = bsTestFetchFn;
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("include 'lint.bare'", options));
     ASSERT_TRUE(strstr(bsTestLogText(), "BareScript: Include \"lint.bare\" static analysis...") != NULL);
-    ASSERT_TRUE(strstr(bsTestLogText(), "Unused variable") != NULL);
+    ASSERT_STR_CONTAINS(bsTestLogText(), "Unused variable");
     bsOptionsFree(options);
 
     /* An include with no warnings logs nothing */
     options = bsTestOptions();
     options->debug = true;
     options->fetchFn = bsTestFetchFn;
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("include 'a.bare'", options));
-    ASSERT_NULL(strstr(bsTestLogText(), "static analysis"));
+    ASSERT_STR_NOT_CONTAINS(bsTestLogText(), "static analysis");
     bsOptionsFree(options);
 }
 

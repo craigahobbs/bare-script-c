@@ -22,12 +22,7 @@ static void bsTestExpr(const char *expression, const char *expectedJSON)
     BSValue text = bsStringNewFormat("return %s", expression);
     BSValue result = bsTestExecute(bsStringData(text));
     BSValue json = bsJSONEncode(result, 0);
-    if (!bsTestStringEqual(bsStringData(json), expectedJSON)) {
-        bsTestFail(__FILE__, __LINE__, "%s\n    actual:   %s\n    expected: %s", expression,
-                   bsStringData(json), expectedJSON);
-    } else {
-        bsTestPass();
-    }
+    bsTestAssertEqual(__FILE__, __LINE__, expression, bsStringData(json), expectedJSON);
     bsRelease(json);
     bsRelease(result);
     bsRelease(text);
@@ -479,7 +474,6 @@ TEST(library_system)
 
     BSOptions *options = bsTestOptions();
     options->debug = true;
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("systemLogDebug('debug')", options));
     ASSERT_STR_EQ(bsTestLogText(), "debug\n");
     bsOptionsFree(options);
@@ -523,7 +517,6 @@ TEST(library_barescript_evaluate_expression)
 
 static char *bsTestLibraryFetchFn(const BSFetchRequest *request, size_t *responseSize, void *data)
 {
-    (void) data;
     if (strcmp(request->url, "fail") == 0) {
         return NULL;
     }
@@ -580,7 +573,6 @@ TEST(library_system_fetch)
     options = bsTestOptions();
     options->debug = true;
     options->fetchFn = bsTestLibraryFetchFn;
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("systemFetch('fail')", options));
     ASSERT_STR_EQ(bsTestLogText(), "BareScript: Function \"systemFetch\" failed for resource \"fail\"\n");
     bsOptionsFree(options);
@@ -601,51 +593,43 @@ TEST(library_argument_errors)
     /* An argument error is logged in debug mode, with the call site's location */
     BSOptions *options = bsTestOptions();
     options->debug = true;
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("arrayGet([1], 5)", options));
     ASSERT_STR_EQ(bsTestLogText(),
                   "test.bare:1: BareScript: Function \"arrayGet\" failed with error: "
                   "Invalid \"index\" argument value, 5\n");
 
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("arrayGet([1], 0, 2)", options));
     ASSERT_STR_EQ(bsTestLogText(),
                   "test.bare:1: BareScript: Function \"arrayGet\" failed with error: "
                   "Too many arguments (3)\n");
 
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("arrayGet()", options));
     ASSERT_STR_EQ(bsTestLogText(),
                   "test.bare:1: BareScript: Function \"arrayGet\" failed with error: "
                   "Invalid \"array\" argument value, null\n");
 
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("arrayGet(null, 0)", options));
     ASSERT_STR_EQ(bsTestLogText(),
                   "test.bare:1: BareScript: Function \"arrayGet\" failed with error: "
                   "Invalid \"array\" argument value, null\n");
 
     /* An invalid regex compile is logged in debug mode, with the call site's location */
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("regexNew('(')", options));
     ASSERT_STR_EQ(bsTestLogText(),
                   "test.bare:1: BareScript: Function \"regexNew\" failed with error: "
                   "missing ), unterminated subpattern at position 0\n");
 
     /* A jsonParse failure reports the decoder's error and its position */
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("jsonParse('BAD')", options));
     ASSERT_STR_EQ(bsTestLogText(),
                   "test.bare:1: BareScript: Function \"jsonParse\" failed with error: "
                   "Expecting value: line 1 column 1 (char 0)\n");
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("jsonParse('{\\n\\'a\\': }')", options));
-    ASSERT_TRUE(strstr(bsTestLogText(), "line 2 column 1") != NULL);
+    ASSERT_STR_CONTAINS(bsTestLogText(), "line 2 column 1");
     bsOptionsFree(options);
 
     /* Without debug mode nothing is logged */
     options = bsTestOptions();
-    bsTestLogClear();
     bsRelease(bsTestExecuteOptions("arrayGet([1], 5)\nregexNew('(')", options));
     ASSERT_STR_EQ(bsTestLogText(), "");
     bsOptionsFree(options);
@@ -730,7 +714,6 @@ TEST(library_repeated_argument_error)
      */
     BSOptions *options = bsTestOptions();
     options->debug = true;
-    bsTestLogClear();
     ASSERT_VALUE(bsTestExecuteOptions("return arraySort([3, 1, 2], mathAbs)", options), "[3,1,2]");
     ASSERT_STR_EQ(bsTestLogText(),
                   "test.bare:1: BareScript: Function \"arraySort\" failed with error: "

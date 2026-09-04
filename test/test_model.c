@@ -34,6 +34,15 @@ static void bsTestInvalidModel(const char *json)
 }
 
 
+/* Assert a model built in a string builder is rejected; the builder is consumed */
+static void bsTestInvalidModelSB(BSStringBuilder *sb)
+{
+    BSValue json = bsSBToValue(sb);
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
+}
+
+
 TEST(model_script_round_trip)
 {
     /* A parsed script converts to a model and back to an equivalent script */
@@ -134,9 +143,7 @@ TEST(model_operand_limits)
         bsSBAppendString(&sb, statement);
     }
     bsSBAppendString(&sb, "]}");
-    BSValue json = bsSBToValue(&sb);
-    bsTestInvalidModel(bsStringData(json));
-    bsRelease(json);
+    bsTestInvalidModelSB(&sb);
 
     bsSBInit(&sb);
     bsSBAppendString(&sb, "{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[");
@@ -144,9 +151,7 @@ TEST(model_operand_limits)
         bsSBAppendString(&sb, ix == 0 ? "{\"variable\":\"x\"}" : ",{\"variable\":\"x\"}");
     }
     bsSBAppendString(&sb, "]}}}}]}");
-    json = bsSBToValue(&sb);
-    bsTestInvalidModel(bsStringData(json));
-    bsRelease(json);
+    bsTestInvalidModelSB(&sb);
 
     /* 32768 live temporaries - a call's arguments hold theirs until the call, and a nested call adds more */
     static const char *binary = "{\"binary\":{\"op\":\"+\",\"left\":{\"string\":\"a\"},\"right\":{\"string\":\"a\"}}}";
@@ -163,9 +168,7 @@ TEST(model_operand_limits)
     bsSBAppendChar(&sb, ',');
     bsSBAppendString(&sb, binary);
     bsSBAppendString(&sb, "]}}]}}}}]}");
-    json = bsSBToValue(&sb);
-    bsTestInvalidModel(bsStringData(json));
-    bsRelease(json);
+    bsTestInvalidModelSB(&sb);
 
     /* A chunk holds at most 32768 includes */
     bsSBInit(&sb);
@@ -174,9 +177,7 @@ TEST(model_operand_limits)
         bsSBAppendString(&sb, ix == 0 ? "{\"url\":\"a.bare\"}" : ",{\"url\":\"a.bare\"}");
     }
     bsSBAppendString(&sb, "]}}]}");
-    json = bsSBToValue(&sb);
-    bsTestInvalidModel(bsStringData(json));
-    bsRelease(json);
+    bsTestInvalidModelSB(&sb);
 
     /* A script defines at most 65536 functions */
     static const char *functionJSON = "{\"function\":{\"name\":\"f\",\"args\":[],\"statements\":[]}}";
@@ -200,7 +201,7 @@ TEST(model_operand_limits)
         bsSBAppendString(&sb, statement);
     }
     bsSBAppendString(&sb, "]}");
-    json = bsSBToValue(&sb);
+    BSValue json = bsSBToValue(&sb);
     bsTestInvalidModel(bsStringData(json));
     bsTestInvalidModelJSON(bsStringData(json), "Invalid BareScript model");
     bsRelease(json);
