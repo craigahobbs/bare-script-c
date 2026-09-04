@@ -101,12 +101,7 @@ TEST(options_fetch_file)
     ASSERT_NULL(bsFetchReadWrite(&request, &size, NULL));
 
     /* A large file exercises the read buffer growth */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 10000; ix++) {
-        bsSBAppendString(&sb, "0123456789");
-    }
-    BSValue big = bsSBToValue(&sb);
+    BSValue big = bsTestRepeat(NULL, "0123456789", 10000, NULL);
     const char *bigPath = bsTestTempFile("big.txt", bsStringData(big));
     request.url = bigPath;
     text = bsFetchReadOnly(&request, &size, NULL);
@@ -258,15 +253,15 @@ static void bsTestHTTPWait(pid_t child)
  * Serve one HTTP response from a child process and point "request" at it. Returns false when the
  * library has no HTTP support, in which case the test has nothing to check.
  */
-static bool bsTestHTTPRequest(pid_t *child, BSFetchRequest *request, char *url, size_t urlSize,
-                              const char *status, const char *body)
+static bool bsTestHTTPRequest(pid_t *child, BSFetchRequest *request, const char *status, const char *body)
 {
+    static char url[64];
     if (!bsFetchHTTPAvailable()) {
         return false; /* GCOV_EXCL_LINE */
     }
     int port = bsTestHTTPServe(child, status, body);
     ASSERT_TRUE(port != 0);
-    snprintf(url, urlSize, "http://127.0.0.1:%d/x", port);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", port);
     *request = (BSFetchRequest) {.url = url, .headers = bsNull()};
     return true;
 }
@@ -276,8 +271,7 @@ TEST(options_fetch_http_get)
 {
     pid_t child = 0;
     BSFetchRequest request;
-    char url[64];
-    if (!bsTestHTTPRequest(&child, &request, url, sizeof(url), "200 OK", "hello from http")) {
+    if (!bsTestHTTPRequest(&child, &request, "200 OK", "hello from http")) {
         return; /* GCOV_EXCL_LINE */
     }
     size_t size = 0;
@@ -294,8 +288,7 @@ TEST(options_fetch_http_post)
 {
     pid_t child = 0;
     BSFetchRequest request;
-    char url[64];
-    if (!bsTestHTTPRequest(&child, &request, url, sizeof(url), "200 OK", "posted")) {
+    if (!bsTestHTTPRequest(&child, &request, "200 OK", "posted")) {
         return; /* GCOV_EXCL_LINE */
     }
     BSValue headers = bsObjectNew();
@@ -317,8 +310,7 @@ TEST(options_fetch_http_empty_and_error)
     /* An empty response body */
     pid_t child = 0;
     BSFetchRequest request;
-    char url[64];
-    if (!bsTestHTTPRequest(&child, &request, url, sizeof(url), "200 OK", "")) {
+    if (!bsTestHTTPRequest(&child, &request, "200 OK", "")) {
         return; /* GCOV_EXCL_LINE */
     }
     size_t size = 1;
@@ -330,7 +322,7 @@ TEST(options_fetch_http_empty_and_error)
     free(text);
 
     /* A non-200 status is a failed fetch */
-    bsTestHTTPRequest(&child, &request, url, sizeof(url), "404 Not Found", "missing");
+    bsTestHTTPRequest(&child, &request, "404 Not Found", "missing");
     ASSERT_NULL(bsFetchHTTP(&request, NULL, NULL));
     bsTestHTTPWait(child);
 }
@@ -339,17 +331,11 @@ TEST(options_fetch_http_empty_and_error)
 TEST(options_fetch_http_large)
 {
     /* A response larger than the initial buffer exercises the buffer growth */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 600; ix++) {
-        bsSBAppendString(&sb, "0123456789");
-    }
-    BSValue body = bsSBToValue(&sb);
+    BSValue body = bsTestRepeat(NULL, "0123456789", 600, NULL);
 
     pid_t child = 0;
     BSFetchRequest request;
-    char url[64];
-    if (!bsTestHTTPRequest(&child, &request, url, sizeof(url), "200 OK", bsStringData(body))) {
+    if (!bsTestHTTPRequest(&child, &request, "200 OK", bsStringData(body))) {
         bsRelease(body); /* GCOV_EXCL_LINE */
         return; /* GCOV_EXCL_LINE */
     }

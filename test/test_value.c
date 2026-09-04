@@ -185,12 +185,7 @@ TEST(value_string_unicode)
     bsRelease(formatted);
 
     /* A long non-ASCII string builds a sparse index on a backward lookup */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 40; ix++) {
-        bsSBAppendString(&sb, "\xc3\xa9");
-    }
-    BSValue longUnicode = bsSBToValue(&sb);
+    BSValue longUnicode = bsTestRepeat(NULL, "\xc3\xa9", 40, NULL);
     ASSERT_INT_EQ(bsStringOffset(longUnicode, 0), 0);
     ASSERT_INT_EQ(bsStringOffset(longUnicode, 1), 2);
     ASSERT_INT_EQ(bsStringOffset(longUnicode, 39), 78);
@@ -267,11 +262,7 @@ TEST(value_string_builder)
     ASSERT_VALUE_STRING(bsSBToValue(&sb), "");
 
     /* Growth past the initial capacity */
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 200; ix++) {
-        bsSBAppendChar(&sb, 'x');
-    }
-    BSValue value = bsSBToValue(&sb);
+    BSValue value = bsTestRepeat(NULL, "x", 200, NULL);
     ASSERT_INT_EQ(bsStringSize(value), 200);
     bsRelease(value);
 
@@ -426,11 +417,7 @@ TEST(value_object_new_capacity)
     ASSERT_INT_EQ(object.u.object->packed, 0);
     ASSERT_NOT_NULL(object.u.object->u.tree.lookup);
     ASSERT_INT_EQ(object.u.object->u.tree.lookupMask + 1, 256);
-    char key[16];
-    for (int ix = 0; ix < 100; ix++) {
-        snprintf(key, sizeof(key), "cap%d", ix);
-        bsObjectSet(object, key, bsNumber(ix));
-    }
+    bsTestObjectFill(object, "cap%d", 0, 100);
     ASSERT_INT_EQ(bsObjectCount(object), 100);
     ASSERT_INT_EQ(object.u.object->u.tree.lookupMask + 1, 256);
     ASSERT_VALUE(bsRetain(bsObjectGet(object, "cap99")), "99");

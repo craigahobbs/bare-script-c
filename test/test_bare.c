@@ -184,12 +184,7 @@ TEST(bare_files)
 TEST(bare_includes)
 {
     bsTestTempFile("lib.bare", "function libFn():\n    return 'from lib'\nendfunction\n");
-    char mainPath[512];
-    snprintf(mainPath, sizeof(mainPath), "%s/main.bare", bsTestTempDir());
-    FILE *file = fopen(mainPath, "w");
-    ASSERT_NOT_NULL(file);
-    fputs("include 'lib.bare'\nsystemLog(libFn())\n", file);
-    fclose(file);
+    const char *mainPath = bsTestTempFile("main.bare", "include 'lib.bare'\nsystemLog(libFn())\n");
 
     ASSERT_INT_EQ(bsTestBare(mainPath, NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "from lib\n");
@@ -206,10 +201,7 @@ TEST(bare_debug_and_static)
     ASSERT_INT_EQ(bsTestBare("--debug", "-c", "systemLogDebug('debug long')", NULL), 0);
     ASSERT_STR_CONTAINS(bsTestMainText(), "debug long\n");
 
-    /* Static analysis parses without executing */
-    ASSERT_INT_EQ(bsTestBare("-s", "-c", "systemLog('never runs')", NULL), 0);
-    ASSERT_STR_EQ(bsTestMainText(), "BareScript static analysis \"<string>\" ... OK\n");
-
+    /* The static analysis long option, on a parse failure */
     ASSERT_INT_EQ(bsTestBare("--static", "-c", "a = 1 +", NULL), 1);
     ASSERT_STR_CONTAINS(bsTestMainText(), "Syntax error");
 }
@@ -232,7 +224,6 @@ TEST(bare_include_path)
     unsetenv("BARESCRIPT_INCLUDE_PATH");
     ASSERT_INT_EQ(bsTestBare("-c", "systemLog('ok')", NULL), 0);
 
-    bsAssign(&bsTestMainOutput, bsNull());
 }
 
 
@@ -246,7 +237,6 @@ TEST(bare_multiple_files)
 
     ASSERT_INT_EQ(bsTestBare(firstPath, second, NULL), 0);
     ASSERT_STR_EQ(bsTestMainText(), "first\nsecond\n");
-    bsAssign(&bsTestMainOutput, bsNull());
 }
 
 
@@ -288,7 +278,6 @@ TEST(bare_static_analysis)
     ASSERT_INT_EQ(bsTestBare("-s", "-c", "1 + 2", "-c", "return 1", NULL), 1);
     ASSERT_STR_CONTAINS(bsTestMainText(), "<string2>");
 
-    bsAssign(&bsTestMainOutput, bsNull());
 }
 
 
@@ -323,7 +312,6 @@ TEST(bare_markdownup)
     ASSERT_STR_CONTAINS(bsTestMainText(), "\"<string2>\" ... OK");
     ASSERT_STR_NOT_CONTAINS(bsTestMainText(), "markdownUp.bare");
 
-    bsAssign(&bsTestMainOutput, bsNull());
 }
 
 

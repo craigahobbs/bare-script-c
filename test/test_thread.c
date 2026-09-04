@@ -73,8 +73,7 @@ static void *bsThreadRun(void *data)
              task->index, task->index, 100 + task->index, task->index);
 
     for (int round = 0; round < BS_THREAD_ROUNDS && task->error[0] == '\0'; round++) {
-        BSParserError error;
-        memset(&error, 0, sizeof(error));
+        BSParserError error = {0};
         BSScript *script = bsParseScript(text, strlen(text), 1, "thread.bare", &error);
         if (script == NULL) {
             bsThreadFail(task, "parse", bsStringData(error.message));
@@ -103,8 +102,7 @@ static void *bsThreadRun(void *data)
     }
 
     /* An expression, and a parse error */
-    BSParserError error;
-    memset(&error, 0, sizeof(error));
+    BSParserError error = {0};
     BSExpr *expr = bsParseExpression("1 + 2 * 3", 9, 1, NULL, false, &error);
     if (expr == NULL) {
         bsThreadFail(task, "parse expression", bsStringData(error.message));

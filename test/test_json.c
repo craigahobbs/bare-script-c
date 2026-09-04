@@ -230,12 +230,7 @@ TEST(json_decode_errors)
     bsRelease(bigValue);
 
     /* The nesting depth limit */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 1100; ix++) {
-        bsSBAppendChar(&sb, '[');
-    }
-    BSValue text = bsSBToValue(&sb);
+    BSValue text = bsTestRepeat(NULL, "[", 1100, NULL);
     error = NULL;
     bsRelease(bsJSONDecode(bsStringData(text), bsStringSize(text), &error));
     ASSERT_STR_EQ(error, "Maximum nesting depth exceeded");

@@ -184,5 +184,8 @@ char *bsTestStrdup(const char *text);
 /* Set the keys "format" makes of each index in [begin, end) to their index */
 void bsTestObjectFill(BSValue object, const char *format, int begin, int end);
 
+/* A string of "prefix", "text" repeated "count" times, and "suffix" - either end may be NULL */
+BSValue bsTestRepeat(const char *prefix, const char *text, size_t count, const char *suffix);
+
 
 #endif

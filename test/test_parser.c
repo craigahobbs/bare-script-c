@@ -14,8 +14,7 @@
 /* Parse script text and return its model as JSON, or the parse error message */
 static BSValue bsTestParse(const char *text)
 {
-    BSParserError error;
-    memset(&error, 0, sizeof(error));
+    BSParserError error = {0};
     BSScript *script = bsParseScript(text, strlen(text), 1, "test.bare", &error);
     if (script == NULL) {
         BSValue message = bsRetain(error.message);
@@ -68,8 +67,7 @@ static void bsTestParseContains(const char *text, const char *needle)
 /* Parse expression text and return its model as JSON, or the parse error message */
 static BSValue bsTestParseExpr(const char *text, bool arrayLiterals)
 {
-    BSParserError error;
-    memset(&error, 0, sizeof(error));
+    BSParserError error = {0};
     BSExpr *expr = bsParseExpression(text, strlen(text), 0, NULL, arrayLiterals, &error);
     if (expr == NULL) {
         BSValue message = bsRetain(error.message);
@@ -223,22 +221,12 @@ TEST(parser_expression_error_line_trim)
 {
     /* A long error line is trimmed around the error column */
     BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 100; ix++) {
-        bsSBAppendString(&sb, "1 + ");
-    }
-    bsSBAppendChar(&sb, '+');
-    BSValue text = bsSBToValue(&sb);
+    BSValue text = bsTestRepeat(NULL, "1 + ", 100, "+");
     bsTestParseExprContains(bsStringData(text), "... ");
     bsRelease(text);
 
     /* An error near the start trims only the end */
-    bsSBInit(&sb);
-    bsSBAppendChar(&sb, '+');
-    for (int ix = 0; ix < 100; ix++) {
-        bsSBAppendString(&sb, " abcd");
-    }
-    text = bsSBToValue(&sb);
+    text = bsTestRepeat("+", " abcd", 100, NULL);
     bsTestParseExprContains(bsStringData(text), " ...");
     bsRelease(text);
 
@@ -429,8 +417,7 @@ TEST(parser_structured_errors)
 
 TEST(parser_no_script_name)
 {
-    BSParserError error;
-    memset(&error, 0, sizeof(error));
+    BSParserError error = {0};
     BSScript *script = bsParseScript("a = 1", 5, 1, NULL, &error);
     ASSERT_NOT_NULL(script);
     ASSERT_INT_EQ(script->scriptName.type, BS_NULL);
@@ -628,8 +615,7 @@ TEST(parser_bootstrap_errors)
     BSValue text = bsSBToValue(&sb);
 
     /* Reported against the script being parsed, not against the parser */
-    BSParserError error;
-    memset(&error, 0, sizeof(error));
+    BSParserError error = {0};
     ASSERT_NULL(bsParseExpression(bsStringData(text), bsStringSize(text), 0, "deep.bare", false, &error));
     ASSERT_VALUE_STRING(bsRetain(error.message), "deep.bare: Maximum expression depth exceeded\n");
     ASSERT_VALUE_STRING(bsRetain(error.error), "Maximum expression depth exceeded");
@@ -652,8 +638,7 @@ TEST(parser_bootstrap_errors)
 TEST(parser_lint)
 {
     static const char *text = "function f():\n    unused = 1\n    return 2\nendfunction\n1 + 2\n";
-    BSParserError error;
-    memset(&error, 0, sizeof(error));
+    BSParserError error = {0};
     BSScript *script = bsParseScript(text, strlen(text), 1, "lint.bare", &error);
     ASSERT_NOT_NULL(script);
 

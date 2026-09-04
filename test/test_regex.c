@@ -309,13 +309,7 @@ TEST(regex_search_start)
 TEST(regex_subject_long)
 {
     /* ASCII subjects match the original bytes and do not allocate a code-point buffer */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 200; ix++) {
-        bsSBAppendChar(&sb, 'x');
-    }
-    bsSBAppendString(&sb, "target");
-    BSValue string = bsSBToValue(&sb);
+    BSValue string = bsTestRepeat(NULL, "x", 200, "target");
     BSRegexSubject subject;
     bsRegexSubjectInit(&subject, string);
     ASSERT_NULL(subject.codes);
@@ -331,12 +325,7 @@ TEST(regex_subject_long)
     bsRelease(regex);
 
     /* A long non-ASCII subject still widens into a heap code-point buffer */
-    BSStringBuilder unicode;
-    bsSBInit(&unicode);
-    for (int ix = 0; ix < 70; ix++) {
-        bsSBAppendString(&unicode, "\xc3\xa9");
-    }
-    BSValue unicodeString = bsSBToValue(&unicode);
+    BSValue unicodeString = bsTestRepeat(NULL, "\xc3\xa9", 70, NULL);
     BSRegexSubject unicodeSubject;
     bsRegexSubjectInit(&unicodeSubject, unicodeString);
     ASSERT_NOT_NULL(unicodeSubject.codes);
@@ -394,12 +383,7 @@ TEST(regex_compile_errors)
     bsTestRegexError("\\999", "invalid group reference 999 at position 1");
 
     /* Too many capture groups */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 130; ix++) {
-        bsSBAppendString(&sb, "(a)");
-    }
-    BSValue pattern = bsSBToValue(&sb);
+    BSValue pattern = bsTestRepeat(NULL, "(a)", 130, NULL);
     char error[BS_REGEX_ERROR_MAX];
     bsRelease(bsRegexNew(bsStringData(pattern), bsStringSize(pattern), 0, error, sizeof(error)));
     ASSERT_STR_EQ(error, "sorry, but this version only supports 127 groups at position 381");
@@ -414,46 +398,23 @@ TEST(regex_compile_errors)
 TEST(regex_depth_limit)
 {
     /* A pathological pattern gives up on its step budget rather than hanging */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 30; ix++) {
-        bsSBAppendChar(&sb, 'a');
-    }
-    BSValue subject = bsSBToValue(&sb);
+    BSValue subject = bsTestRepeat(NULL, "a", 30, NULL);
     ASSERT_VALUE_STRING(bsTestMatch("(a|aa)+$b", bsStringData(subject), 0), "null");
     bsRelease(subject);
 
     /* A chain of alternations with no repeats, and nested repeats with no alternations */
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 24; ix++) {
-        bsSBAppendString(&sb, "(?:a|a)");
-    }
-    bsSBAppendChar(&sb, 'b');
-    BSValue chain = bsSBToValue(&sb);
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 24; ix++) {
-        bsSBAppendChar(&sb, 'a');
-    }
-    subject = bsSBToValue(&sb);
+    BSValue chain = bsTestRepeat(NULL, "(?:a|a)", 24, "b");
+    subject = bsTestRepeat(NULL, "a", 24, NULL);
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(chain), bsStringData(subject), 0), "null");
     bsRelease(subject);
     bsRelease(chain);
 
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 30; ix++) {
-        bsSBAppendString(&sb, "ab");
-    }
-    subject = bsSBToValue(&sb);
+    subject = bsTestRepeat(NULL, "ab", 30, NULL);
     ASSERT_VALUE_STRING(bsTestMatch("(?:(?:ab)*)*c", bsStringData(subject), 0), "null");
     bsRelease(subject);
 
     /* A long simple repeat matches iteratively, without recursion */
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 20000; ix++) {
-        bsSBAppendChar(&sb, 'x');
-    }
-    bsSBAppendChar(&sb, 'y');
-    BSValue longSubject = bsSBToValue(&sb);
+    BSValue longSubject = bsTestRepeat(NULL, "x", 20000, "y");
     BSValue longRegex = bsRegexNew("x*y", 3, 0, NULL, 0);
     BSRegexSubject subjectCodes;
     bsRegexSubjectInit(&subjectCodes, longSubject);
@@ -693,23 +654,12 @@ TEST(regex_sequences_repeat)
     ASSERT_VALUE_STRING(bsTestMatch("(a|b)*?c", "abc", 0), "abc");
     ASSERT_VALUE_STRING(bsTestMatch("(a){1,}?b", "aab", 0), "aab");
     ASSERT_VALUE_STRING(bsTestMatch("(?:a|(b))*c", "abc", 0), "abc");
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "(?:a");
-    for (int ix = 0; ix < 255; ix++) {
-        bsSBAppendString(&sb, "|a");
-    }
-    bsSBAppendString(&sb, ")*b");
-    BSValue pattern = bsSBToValue(&sb);
+    BSValue pattern = bsTestRepeat("(?:a", "|a", 255, ")*b");
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(pattern), "aab", 0), "aab");
     bsRelease(pattern);
 
     /* A pathological body gives up on its step budget rather than hanging */
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 30; ix++) {
-        bsSBAppendChar(&sb, 'a');
-    }
-    BSValue subject = bsSBToValue(&sb);
+    BSValue subject = bsTestRepeat(NULL, "a", 30, NULL);
     ASSERT_VALUE_STRING(bsTestMatch("(?:a|aa)+$b", bsStringData(subject), 0), "null");
     bsRelease(subject);
 }
@@ -718,24 +668,11 @@ TEST(regex_sequences_repeat)
 TEST(regex_sequences_repeat_long_literal)
 {
     /* The parser's string literal body is such a repeat - a long literal costs no C stack */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "return stringLength('");
-    for (int ix = 0; ix < 20000; ix++) {
-        bsSBAppendChar(&sb, 'a');
-    }
-    bsSBAppendString(&sb, "\\'\xc3\xa9')");
-    BSValue script = bsSBToValue(&sb);
+    BSValue script = bsTestRepeat("return stringLength('", "a", 20000, "\\'\xc3\xa9')");
     ASSERT_VALUE(bsTestExecute(bsStringData(script)), "20002");
     bsRelease(script);
 
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "return stringLength(\"");
-    for (int ix = 0; ix < 20000; ix++) {
-        bsSBAppendString(&sb, "a\\\\");
-    }
-    bsSBAppendString(&sb, "\")");
-    script = bsSBToValue(&sb);
+    script = bsTestRepeat("return stringLength(\"", "a\\\\", 20000, "\")");
     ASSERT_VALUE(bsTestExecute(bsStringData(script)), "40000");
     bsRelease(script);
 }

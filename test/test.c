@@ -178,8 +178,7 @@ BSValue bsTestExecuteOptions(const char *text, BSOptions *options)
 {
     bsTestLogClear();
     bsAssign(&bsTestError, bsNull());
-    BSParserError parserError;
-    memset(&parserError, 0, sizeof(parserError));
+    BSParserError parserError = {0};
     BSScript *script = bsParseScript(text, strlen(text), 1, "test.bare", &parserError);
     if (script == NULL) {
         bsAssign(&bsTestError, bsRetain(parserError.message));
@@ -351,4 +350,21 @@ void bsTestObjectFill(BSValue object, const char *format, int begin, int end)
         snprintf(key, sizeof(key), format, ix);
         bsObjectSet(object, key, bsNumber(ix));
     }
+}
+
+
+BSValue bsTestRepeat(const char *prefix, const char *text, size_t count, const char *suffix)
+{
+    BSStringBuilder sb;
+    bsSBInit(&sb);
+    if (prefix != NULL) {
+        bsSBAppendString(&sb, prefix);
+    }
+    for (size_t ix = 0; ix < count; ix++) {
+        bsSBAppendString(&sb, text);
+    }
+    if (suffix != NULL) {
+        bsSBAppendString(&sb, suffix);
+    }
+    return bsSBToValue(&sb);
 }

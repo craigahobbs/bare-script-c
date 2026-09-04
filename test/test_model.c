@@ -62,8 +62,7 @@ TEST(model_script_round_trip)
         "x = 1 + f(2, 'three') * -y || (z) && !w\n"
         "outer(1)\n";
 
-    BSParserError error;
-    memset(&error, 0, sizeof(error));
+    BSParserError error = {0};
     BSScript *script = bsParseScript(text, strlen(text), 1, "round.bare", &error);
     ASSERT_NOT_NULL(script);
 
