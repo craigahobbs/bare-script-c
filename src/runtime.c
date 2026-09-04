@@ -650,9 +650,19 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
             return bsNull();
         }
         options->depth++;
-        fn->refcount++; /* the call may reassign the global that holds the function */
+        /*
+         * The call may reassign the global that holds the function. A closure's data must outlive
+         * the call, so the value is retained; a library function has none, and its value is held by
+         * the library table for the thread's lifetime.
+         */
+        bool retained = fn->data != NULL;
+        if (retained) {
+            fn->refcount++;
+        }
         result = fn->fn(args, argCount, options, fn->data);
-        bsRelease(function);
+        if (retained) {
+            bsRelease(function);
+        }
         options->depth--;
         if (options->argsError.type == BS_STRING) {
             if (options->debug) {
