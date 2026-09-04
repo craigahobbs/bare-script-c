@@ -73,10 +73,10 @@ static void bsPrintError(const char *text)
 int bsMain(int argc, char **argv)
 {
     /* Three extra slots for the MarkdownUp preamble and postamble */
-    BSScriptSource *sources = bsCliAlloc((size_t) (argc > 0 ? argc + 3 : 4) * sizeof(BSScriptSource));
+    BSScriptSource *sources = bsCliAlloc((size_t) (argc + 3) * sizeof(BSScriptSource));
     size_t sourceCount = 0;
-    const char **varNames = bsCliAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(char *));
-    const char **varExprs = bsCliAlloc((size_t) (argc > 0 ? argc : 1) * sizeof(char *));
+    const char **varNames = bsCliAlloc((size_t) (argc + 1) * sizeof(char *));
+    const char **varExprs = bsCliAlloc((size_t) (argc + 1) * sizeof(char *));
     size_t varCount = 0;
     bool debug = false;
     bool staticAnalysis = false;
@@ -126,9 +126,7 @@ int bsMain(int argc, char **argv)
                 statusCode = 2;
                 break;
             }
-            sources[sourceCount].isFile = false;
-            sources[sourceCount].value = argv[++ix];
-            sourceCount++;
+            sources[sourceCount++] = (BSScriptSource) {false, argv[++ix]};
             continue;
         }
         if (strcmp(arg, "-v") == 0 || strcmp(arg, "--var") == 0) {
@@ -147,9 +145,7 @@ int bsMain(int argc, char **argv)
             statusCode = 2;
             break;
         }
-        sources[sourceCount].isFile = true;
-        sources[sourceCount].value = arg;
-        sourceCount++;
+        sources[sourceCount++] = (BSScriptSource) {true, arg};
     }
 
     /*
@@ -161,17 +157,11 @@ int bsMain(int argc, char **argv)
     if (statusCode == 0 && sourceCount != 0 && markdownUp) {
         size_t extra = html ? 2 : 1;
         memmove(sources + extra, sources, sourceCount * sizeof(BSScriptSource));
-        sources[0].isFile = false;
-        sources[0].value = "include <markdownUp.bare>";
-        if (html) {
-            sources[1].isFile = false;
-            sources[1].value = "markdownUpHTMLBegin()";
-        }
         sourceCount += extra;
+        sources[0] = (BSScriptSource) {false, "include <markdownUp.bare>"};
         if (html) {
-            sources[sourceCount].isFile = false;
-            sources[sourceCount].value = "markdownUpHTMLEnd()";
-            sourceCount++;
+            sources[1] = (BSScriptSource) {false, "markdownUpHTMLBegin()"};
+            sources[sourceCount++] = (BSScriptSource) {false, "markdownUpHTMLEnd()"};
         }
         ixUserScript = extra;
     }
@@ -256,8 +246,7 @@ int bsMain(int argc, char **argv)
                 }
                 scriptName = scriptNameBuffer;
                 size = strlen(sources[ix].value);
-                text = bsCliAlloc(size + 1);
-                memcpy(text, sources[ix].value, size + 1);
+                text = bsCliStrdup(sources[ix].value);
             }
 
             /* Parse the script source */
