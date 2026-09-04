@@ -792,7 +792,6 @@ report footprint, where the CSV fields repeat.
 | Empty script, peak footprint            | 2.4 MB |
 | `make perf` test, peak                  |   6 MB |
 | Include library test suite, peak        |  35 MB |
-| ... recording coverage                  |  63 MB |
 
 The empty script's floor is the process itself: libcurl loads on the first HTTP fetch, the parser
 compiles from its model a statement at a time, and a script keeps its model only where lint or
