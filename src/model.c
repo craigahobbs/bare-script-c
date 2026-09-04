@@ -191,7 +191,6 @@ void bsScriptRelease(BSScript *script)
 static _Thread_local struct {
     BSValue args, binary, expr, function, group, include, includes, jump, label, lastArgArray, left, lineNumber, name, number, op, return_, right, scriptLines, scriptName, statements, string, system, unary, url, variable;
 } bsKeys;
-static _Thread_local bool bsKeysReady;
 
 
 void bsModelKeysInit(void)
@@ -200,7 +199,7 @@ void bsModelKeysInit(void)
      * Interned once per thread - and again after a runtime cleanup, which leaves the strings held
      * here as ordinary ones that no longer compare by pointer
      */
-    if (bsKeysReady) {
+    if (bsKeys.expr.type == BS_STRING) {
         if ((bsKeys.expr.u.string->flags & BS_STR_INTERNED) != 0) {
             return;
         }
@@ -239,7 +238,6 @@ void bsModelKeysInit(void)
     /* Parser-model keys the emitter does not read; intern so JSON decode reuses them */
     bsRelease(bsStringIntern("async", sizeof("async") - 1));
     bsRelease(bsStringIntern("lineCount", sizeof("lineCount") - 1));
-    bsKeysReady = true;
 }
 
 
@@ -528,14 +526,6 @@ static BSValue bsStatementAssignName(BSValue statement)
 }
 
 
-/* The slot a statement assigns, or -1 */
-static int bsStatementAssigns(const BSEmit *e, BSValue statement)
-{
-    BSValue name = bsStatementAssignName(statement);
-    return name.type == BS_STRING ? bsSlotFind(e, name) : -1;
-}
-
-
 static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
 {
     size_t count = bsArrayCount(statements);
@@ -579,7 +569,8 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
         in[ix / 32] |= (uint32_t) 1 << (ix % 32);
     }
     for (size_t ix = 0; ix < count; ix++) {
-        int slot = bsStatementAssigns(e, bsArrayGet(statements, ix));
+        BSValue name = bsStatementAssignName(bsArrayGet(statements, ix));
+        int slot = name.type == BS_STRING ? bsSlotFind(e, name) : -1;
         if (slot >= 0) {
             gen[blockOf[ix] * words + (size_t) slot / 32] |= (uint32_t) 1 << (slot % 32);
         }
@@ -951,8 +942,8 @@ static bool bsEmitExprDiscard(BSEmit *e, BSValue model)
 }
 
 
-/* Record a statement's model and line - "kind" is the statement's member object, which carries the line */
-static void bsEmitCover(BSEmit *e, BSValue statementModel, BSValue kind)
+/* Record a statement's model and line - "member" is the statement's member object, which carries the line */
+static void bsEmitCover(BSEmit *e, BSValue statementModel, BSValue member)
 {
     if (e->coverCount == e->coverCap) {
         e->coverCap = e->coverCap != 0 ? e->coverCap * 2 : 8;
@@ -961,7 +952,7 @@ static void bsEmitCover(BSEmit *e, BSValue statementModel, BSValue kind)
         e->coverPcs = bsRealloc(e->coverPcs, e->coverCap * sizeof(uint32_t));
     }
     e->cover[e->coverCount] = statementModel;
-    BSValue line = bsObjectGetString(kind, bsKeys.lineNumber);
+    BSValue line = bsObjectGetString(member, bsKeys.lineNumber);
     e->coverLines[e->coverCount] = line.type == BS_NUMBER ? (int) line.u.number : 0;
     e->coverPcs[e->coverCount] = (uint32_t) e->count;
     bsEmitInst(e, BS_OP_STMT, (uint16_t) e->coverCount, 0, 0);
@@ -980,9 +971,9 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
     if (value.type != BS_OBJECT) {
         return false;
     }
+    bsEmitCover(e, model, value);
 
     if (BS_KIND(kind, expr)) {
-        bsEmitCover(e, model, value);
         BSValue expr = bsObjectGetString(value, bsKeys.expr);
         BSValue name = bsObjectGetString(value, bsKeys.name);
         if (name.type != BS_STRING) {
@@ -1012,7 +1003,6 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         if (label.type != BS_STRING) {
             return false;
         }
-        bsEmitCover(e, model, value);
         if (!bsObjectHasString(value, bsKeys.expr)) {
             bsEmitJump(e, BS_OP_JUMP, 0, label);
             return true;
@@ -1039,7 +1029,6 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
     }
 
     if (BS_KIND(kind, return_)) {
-        bsEmitCover(e, model, value);
         uint16_t base = e->tempTop;
         BSOperand operand;
         if (bsObjectHasString(value, bsKeys.expr)) {
@@ -1059,13 +1048,11 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         if (name.type != BS_STRING) {
             return false;
         }
-        bsEmitCover(e, model, value);
         bsEmitLabel(e, name);
         return true;
     }
 
     if (BS_KIND(kind, function)) {
-        bsEmitCover(e, model, value);
         return bsEmitFunction(e, value);
     }
 
@@ -1075,7 +1062,6 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         if (includeCount == 0) {
             return false;
         }
-        bsEmitCover(e, model, value);
         for (size_t inc = 0; inc < includeCount; inc++) {
             BSValue include = bsArrayGet(includes, inc);
             BSValue url = bsObjectGetString(include, bsKeys.url);
@@ -1185,12 +1171,12 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
 
 
 /*
- * Emit a statement list as a chunk that returns null, into "code". Returns false - the chunk
- * released - for a malformed statement or an overflowed operand space.
+ * End a chunk whose statements were emitted with result "emitted": return null and finish it into
+ * "code". Returns false - the chunk released - for a malformed statement or an overflowed operand
+ * space.
  */
-static bool bsEmitBody(BSEmit *e, BSValue statements, BSCode *code)
+static bool bsEmitEnd(BSEmit *e, bool emitted, BSCode *code)
 {
-    bool emitted = bsEmitStatements(e, statements);
     bsEmitInst(e, BS_OP_RETURN, e->nullConst, 0, 0);
     bool finished = bsEmitFinish(e, code);
     if (!emitted || !finished) {
@@ -1240,7 +1226,7 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
         }
     }
     bsAssignedAnalyze(&body, statements, def->argCount);
-    bool emitted = bsEmitBody(&body, statements, &def->code);
+    bool emitted = bsEmitEnd(&body, bsEmitStatements(&body, statements), &def->code);
     bsAssignedFree(&body);
     if (!emitted) {
         return false;
@@ -1322,7 +1308,7 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
     size_t functionCap = 0;
     BSEmit e;
     bsEmitInit(&e, script, &functionCap);
-    if (!bsEmitBody(&e, statements, &script->code)) {
+    if (!bsEmitEnd(&e, bsEmitStatements(&e, statements), &script->code)) {
         bsScriptRelease(script);
         return NULL;
     }
@@ -1347,9 +1333,7 @@ BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scrip
     bsEmitInit(&e, script, &functionCap);
     BSValue rest;
     bool decoded = bsJSONDecodeStatements(text, size, bsEmitStreamedStatement, &e, &rest, error);
-    bsEmitInst(&e, BS_OP_RETURN, e.nullConst, 0, 0);
-    bool finished = bsEmitFinish(&e, &script->code);
-    if (!decoded || !finished) {
+    if (!bsEmitEnd(&e, decoded, &script->code)) {
         bsRelease(rest);
         if (error != NULL && *error == NULL) {
             *error = "Invalid BareScript model";
