@@ -709,7 +709,7 @@ Milliseconds per 1000 runs, best of five, on one machine - lower is better:
 | ---------------- | --------------:| ---------------:| ----------------:| ---------------:|
 | mandelbrot       |     **19,000** |         304,000 |          109,000 |       3,478,000 |
 | markdownElements |        **245** |             721 |              664 |           5,248 |
-| markdownParse    |      **1,388** |           2,852 |            7,152 |          20,820 |
+| markdownParse    |      **1,272** |           2,852 |            7,152 |          20,820 |
 | qrcodeMatrix     |      **1,233** |          12,833 |            9,100 |         124,633 |
 | schemaParse      |        **128** |           1,164 |            1,244 |           9,076 |
 | schemaValidate   |        **164** |           1,900 |            1,064 |          14,420 |
@@ -736,7 +736,7 @@ on the same machine, columns in speed order (the Python suite has no markdown te
 | ---------------- | ---------------:| --------------:| ----------------:|
 | mandelbrot       |           1,567 |         19,000 |           45,935 |
 | markdownElements |            32.3 |            245 |                  |
-| markdownParse    |             618 |          1,388 |                  |
+| markdownParse    |             618 |          1,272 |                  |
 | schemaParse      |            70.5 |            128 |            171.2 |
 | schemaValidate   |            55.6 |            164 |            204.6 |
 | urlDecode        |             4.7 |            8.0 |             11.7 |
@@ -745,7 +745,7 @@ on the same machine, columns in speed order (the Python suite has no markdown te
 Every row reads the same way: V8's JIT, then this runtime, then CPython. An interpreted BareScript
 program on this runtime runs the reference schema parser faster than CPython runs the pure-Python
 package it was ported from - and does it through a parser that is itself written in BareScript.
-Against the JIT it is 1.7x to 2.9x behind on the schema and URL tests and 2.2x behind on
+Against the JIT it is 1.7x to 2.9x behind on the schema and URL tests and 2.1x behind on
 `markdownParse`, which is almost entirely regular expression work against V8's compiled regex
 engine. The exception is `markdownElements`, which builds nested objects and arrays as fast as
 V8's hidden classes and inline caches can allocate them; there V8 is 7.6x ahead.
@@ -777,7 +777,7 @@ The release build is about 1.5x the default build, milliseconds per test run:
 | Test                        | C (`-O2`) | C (release) |
 | --------------------------- | ---------:| -----------:|
 | mandelbrot, 1 run           |        29 |          19 |
-| markdownParse, 250 runs     |       501 |         347 |
+| markdownParse, 250 runs     |       444 |         318 |
 | qrcodeMatrix, 30 runs       |        58 |          37 |
 | schemaValidate, 250 runs    |        61 |          41 |
 | urlDecode, 2000 runs        |        24 |          16 |
