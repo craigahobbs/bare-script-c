@@ -192,6 +192,7 @@ TEST(library_string)
     bsTestExpr("stringCharCodeAt('abc', 0)", "97");
     bsTestExpr("stringCharCodeAt('abc', 9)", "null");
     bsTestExpr("stringIndexOf('abcabc', 'b')", "1");
+    bsTestExpr("stringIndexOf('abcab', 'abc', 1)", "-1");
     bsTestExpr("stringIndexOf('abcabc', 'b', 2)", "4");
     bsTestExpr("stringIndexOf('abc', 'z')", "-1");
     bsTestExpr("stringIndexOf('abc', 'a', 9)", "-1");
@@ -231,6 +232,7 @@ TEST(library_string)
     bsTestExpr("stringSplit('abc', 'z')", "[\"abc\"]");
     bsTestExpr("stringSplit(1, ',')", "null");
     bsTestExpr("stringSplitLines('a\\nb\\r\\nc')", "[\"a\",\"b\",\"c\"]");
+    bsTestExpr("stringSplitLines('é\\nb')", "[\"é\",\"b\"]");
     bsTestExpr("stringSplitLines('')", "[\"\"]");
     bsTestExpr("stringSplitLines(1)", "null");
     bsTestExpr("stringNew(1)", "\"1\"");

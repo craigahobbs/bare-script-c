@@ -1430,9 +1430,14 @@ static size_t bsMemFind(const char *text, size_t size, const char *search, size_
     if (searchSize == 0) {
         return offset;
     }
-    for (size_t ix = offset; ix + searchSize <= size; ix++) {
-        if (text[ix] == search[0] && memcmp(text + ix, search, searchSize) == 0) {
-            return ix;
+    /* memchr finds each candidate first byte, so the scan is not a byte loop */
+    const char *end = text + size;
+    for (const char *at = text + offset; (at = memchr(at, search[0], (size_t) (end - at))) != NULL; at++) {
+        if ((size_t) (end - at) < searchSize) {
+            break;
+        }
+        if (memcmp(at, search, searchSize) == 0) {
+            return (size_t) (at - text);
         }
     }
     return SIZE_MAX;
@@ -1579,15 +1584,18 @@ static BSValue bsFnStringReplace(const BSValue *args, size_t argCount, BSOptions
         }
         return bsSBToValue(&sb);
     }
+    size_t found = bsMemFind(text, size, substr, substrSize, 0);
+    if (found == SIZE_MAX) {
+        /* Nothing to replace - the string is shared */
+        bsSBFree(&sb);
+        return bsRetain(values[0]);
+    }
     size_t position = 0;
-    while (true) {
-        size_t found = bsMemFind(text, size, substr, substrSize, position);
-        if (found == SIZE_MAX) {
-            break;
-        }
+    while (found != SIZE_MAX) {
         bsSBAppend(&sb, text + position, found - position);
         bsSBAppend(&sb, bsStringData(values[2]), bsStringSize(values[2]));
         position = found + substrSize;
+        found = bsMemFind(text, size, substr, substrSize, position);
     }
     bsSBAppend(&sb, text + position, size - position);
     return bsSBToValue(&sb);
@@ -1659,19 +1667,24 @@ static BSValue bsFnStringSplitLines(const BSValue *args, size_t argCount, BSOpti
     BS_ARGS(stringArgs, bsNull());
     const char *text = bsStringData(values[0]);
     size_t size = bsStringSize(values[0]);
+    bool ascii = bsStringLength(values[0]) == size;
     BSValue result = bsArrayNew();
     size_t position = 0;
-    for (size_t ix = 0; ix <= size; ix++) {
-        if (ix == size || text[ix] == '\n') {
-            size_t end = ix;
-            if (end > position && text[end - 1] == '\r') {
-                end--;
-            }
-            bsArrayPush(result, bsStringNewSize(text + position, end - position));
-            position = ix + 1;
+    while (true) {
+        const char *newline = memchr(text + position, '\n', size - position);
+        size_t next = newline != NULL ? (size_t) (newline - text) : size;
+        size_t end = next;
+        if (end > position && text[end - 1] == '\r') {
+            end--;
         }
+        /* A line of an ASCII string is ASCII */
+        bsArrayPush(result, ascii ? bsStringNewAscii(text + position, end - position) :
+                    bsStringNewSize(text + position, end - position));
+        if (newline == NULL) {
+            return result;
+        }
+        position = next + 1;
     }
-    return result;
 }
 
 
