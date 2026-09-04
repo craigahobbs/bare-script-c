@@ -259,9 +259,24 @@ ifneq '$(filter-out 0,$(CC_IS_CLANG))' ''
     # training: "Unable to track new values: Running out of static counters."
     # Eight is the smallest power of two that covers the training workload.
     PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR) -mllvm -vp-counters-per-site=8
-    PROFILE_USE = -fprofile-use=$(CURDIR)/$(PROFILE_DATA) -Wno-profile-instr-unprofiled \
-        -Wno-profile-instr-out-of-date
-    PROFILE_MERGE = xcrun llvm-profdata merge -output=$(PROFILE_DATA) $(PROFILE_DIR)/*.profraw
+    # Clang applies the profile function by function, matching each on a hash of its control
+    # flow, and reports a mismatch through -Wbackend-plugin, which -Werror makes fatal: a stale
+    # profile fails stage 3 rather than silently not applying. (The -Wprofile-instr-* groups
+    # belong to front-end PGO and mean nothing here.) A function with no record at all is not
+    # reported, and cannot be asked for: the training executable's LTO drops the 48 public
+    # functions the CLI never calls, so -pgo-warn-missing-function would fire on every build, and
+    # keeping them with -export_dynamic gives them zero counts, which compiles that API as cold
+    # code. So the check on merge below is what would catch a profile that is not this program's.
+    PROFILE_USE = -fprofile-use=$(CURDIR)/$(PROFILE_DATA)
+    PROFILE_CHECK := bsRunCode bsFunctionCall bsRelease
+    PROFILE_MERGE = set -e; \
+        xcrun llvm-profdata merge -output=$(PROFILE_DATA) $(PROFILE_DIR)/*.profraw; \
+        for fn in $(PROFILE_CHECK); do \
+            shown=$$(xcrun llvm-profdata show -function="$$fn" $(PROFILE_DATA) \
+                | awk '/^Functions shown:/ { print $$NF }'); \
+            [ "$${shown:-0}" -gt 0 ] || \
+                { echo "PGO: $(PROFILE_DATA) has no profile for $$fn" >&2; exit 1; }; \
+        done
 else
     PROFILE_DATA := $(PROFILE_DIR)
     PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR) -fprofile-update=single
@@ -308,6 +323,8 @@ release: $(RELEASE_CLI) $(RELEASE_LIB_A)
 # static-analysis run were measured and moved neither workload beyond build-to-build noise. %p so
 # each process writes its own profraw, then merge.
 # With includes compiled out, the training programs read them from lib/include instead.
+# A merge whose check fails must not leave its output behind: make would take it as up to date,
+# and the next run would go straight to stage 3, past the check.
 PROFILE_ENV = LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
     $(if $(INCLUDE_CFLAGS),BARESCRIPT_INCLUDE_PATH=$(CURDIR)/$(INCLUDE_LIB_DIR))
 $(PROFILE_DATA): $(LIB_SRCS) $(CLI_SRCS) $(PERF_DIR)/test.bare $(INCLUDE_LIB_SRCS) \
@@ -318,7 +335,7 @@ $(PROFILE_DATA): $(LIB_SRCS) $(CLI_SRCS) $(PERF_DIR)/test.bare $(INCLUDE_LIB_SRC
 	    $(LIB_SRCS) $(CLI_SRCS) $(LIBS)
 	$(PROFILE_ENV) $(BUILD_DIR)/pgo/$(CLI_NAME) $(PERF_DIR)/test.bare > /dev/null
 	$(PROFILE_ENV) $(BUILD_DIR)/pgo/$(CLI_NAME) -d -m $(INCLUDE_TEST_DIR)/runTests.bare > /dev/null
-	$(PROFILE_MERGE)
+	( $(PROFILE_MERGE) ) || { rm -rf $(PROFILE_DATA); exit 1; }
 
 # Stage 3 - rebuild with the profile
 $(RELEASE_LIB_SO): $(PROFILE_DATA)
