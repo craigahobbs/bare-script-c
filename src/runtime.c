@@ -452,7 +452,13 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
 
     BSValue result = bsRunCode(&def->code, scriptFunction->script, options, &scope, false);
     for (size_t ix = 0; ix < regCount; ix++) {
-        bsReleaseInline(regs[ix]); /* an unset slot is not a reference, so it releases as a no-op */
+        /*
+         * Most of a frame's registers are slots the call never assigned, so the test decides on
+         * the four-byte type alone and only a reference has its whole value read
+         */
+        if (BS_IS_REF(regs[ix])) {
+            bsReleaseInline(regs[ix]);
+        }
     }
     if (regs != regsInline) {
         free(regs);
