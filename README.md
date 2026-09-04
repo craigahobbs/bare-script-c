@@ -716,17 +716,19 @@ implementation running its C extension for the runtime core, so it is not a pure
 `mandelbrot`, and for the library tests the JavaScript and Python packages the include library was
 ported from, `schema-markdown` and `markdown-model`, JIT-compiled by V8 and interpreted by CPython
 3.14. The Python packages have no markdown tests and nothing has a native `qrcodeMatrix`. Time per
-1000 runs, best of five, on one machine (an Apple M3 Max), with the fastest on each test in bold
-and the geometric mean of each row's ratio to this runtime over the tests it has:
+1000 runs, best of five, on one machine (an Apple M3 Max), with the fastest on each test in bold.
+The columns show five of the eight tests - `schemaParse`, `qrcodeMatrix`, and `urlDecode` track
+`markdownParse`, `schemaValidate`, and `urlEncode` row for row - but the last column is the
+geometric mean of each row's ratio to this runtime over every test it has:
 
-| Language         | mandelbrot | markdownElements | markdownParse | qrcodeMatrix | schemaParse | schemaValidate |  urlDecode |  urlEncode | geomean vs BareScript (C) |
-| ---------------- | ---------: | ---------------: | ------------: | -----------: | ----------: | -------------: | ---------: | ---------: | ------------------------: |
-| JavaScript (V8)  | **1.57 s** |      **32.3 ms** |    **618 ms** |              | **70.5 ms** |    **55.6 ms** | **4.7 ms** | **2.2 ms** |                     0.31x |
-| BareScript (C)   |     19.0 s |           244 ms |        1.32 s |   **1.23 s** |      120 ms |         164 ms |     7.5 ms |     5.0 ms |                     1.00x |
-| Python (CPython) |     45.9 s |                  |               |              |      171 ms |         205 ms |    11.7 ms |    10.5 ms |                     1.70x |
-| BareScript (PyC) |      109 s |           664 ms |        7.15 s |       9.10 s |      1.24 s |         1.06 s |     132 ms |    57.0 ms |                     7.34x |
-| BareScript (JS)  |      304 s |           721 ms |        2.85 s |       12.8 s |      1.16 s |         1.90 s |    87.5 ms |    49.5 ms |                     7.81x |
-| BareScript (Py)  |    3,478 s |           5.25 s |        20.8 s |        125 s |      9.08 s |         14.4 s |     691 ms |     394 ms |                    64.59x |
+| Language         | mandelbrot | markdownElements | markdownParse | schemaValidate |  urlEncode | geomean vs BareScript (C) |
+| ---------------- | ---------: | ---------------: | ------------: | -------------: | ---------: | ------------------------: |
+| JavaScript (V8)  | **1.57 s** |      **32.3 ms** |    **618 ms** |    **55.6 ms** | **2.2 ms** |                     0.31x |
+| BareScript (C)   |     19.0 s |           244 ms |        1.32 s |         164 ms |     5.0 ms |                     1.00x |
+| Python (CPython) |     45.9 s |                  |               |         205 ms |    10.5 ms |                     1.70x |
+| BareScript (PyC) |      109 s |           664 ms |        7.15 s |         1.06 s |    57.0 ms |                     7.34x |
+| BareScript (JS)  |      304 s |           721 ms |        2.85 s |         1.90 s |    49.5 ms |                     7.81x |
+| BareScript (Py)  |    3,478 s |           5.25 s |        20.8 s |         14.4 s |     394 ms |                    64.59x |
 
 The C runtime is the fastest BareScript runtime on every test: 7.3x ahead of the Python
 implementation with its C extension and 7.8x ahead of the JavaScript implementation by the
