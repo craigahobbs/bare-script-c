@@ -690,13 +690,11 @@ so it runs unchanged on all three implementations.
 
 ## Performance
 
-Two suites measure the runtime. `make perfx` runs [perfx](perfx/README.md), a set of
-real-world-like applications ported to six languages. `make perf` runs the include library's
-performance suite, the same `perf/test.bare` the JavaScript and Python implementations run, so
-their results merge into one report. Both measure the **release** build, and build it first if
-needed. The implementations it is compared against are themselves optimized builds - Node ships
-as one, and CPython is built with profile-guided and link-time optimization - so timing the
-development build here would understate this runtime by about 1.5x against them.
+Two suites measure the runtime: `make perfx` runs [perfx](perfx/README.md), real-world-like
+applications ported to six languages, and `make perf` runs the include library's own suite, the
+same `perf/test.bare` the JavaScript and Python implementations run. Both time the **release**
+build, since the runtimes it is compared against are optimized builds too; the development build
+would read about 1.5x slower.
 
 ### The Cross-Language Benchmarks
 
