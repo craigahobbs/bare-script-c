@@ -1620,23 +1620,11 @@ static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
         bsObjectTreapInsert(object, key, item);
         return;
     }
-    if (object->count > BS_OBJECT_SMALL) {
-        /* Every key is interned, so the table is definitive */
-        BSObjectNode *node = bsObjectLookupGet(object, interned);
-        if (node != NULL) {
-            bsReleaseInline(node->value);
-            node->value = item;
-            return;
-        }
-        bsObjectNodeCreate(key, item, object);
+    BSObjectNode *node = bsObjectFindKey(object, keyData, keySize, interned);
+    if (node != NULL) {
+        bsReleaseInline(node->value);
+        node->value = item;
         return;
-    }
-    for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
-        if (bsObjectKeyEqual(node->key, keyData, keySize, interned)) {
-            bsReleaseInline(node->value);
-            node->value = item;
-            return;
-        }
     }
     bsObjectNodeCreate(key, item, object);
     bsObjectListGrew(object);
