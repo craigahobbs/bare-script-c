@@ -449,7 +449,9 @@ static uint16_t bsEmitSite(BSEmit *e, BSValue name)
     BS_GROW(e->caches, e->cacheCount, e->cacheCap, 8);
     BSCallCache *cache = &e->caches[e->cacheCount];
     memset(cache, 0, sizeof(*cache));
-    cache->nameIndex = BS_OPERAND_INDEX(bsEmitConst(e, name));
+    BSValue interned = bsInternName(name);
+    cache->nameIndex = BS_OPERAND_INDEX(bsEmitConst(e, interned));
+    bsRelease(interned);
     return (uint16_t) e->cacheCount++;
 }
 
@@ -459,26 +461,22 @@ static void bsEmitLabel(BSEmit *e, BSValue name)
     if (e->labels.type != BS_OBJECT) {
         e->labels = bsObjectNew();
     }
-    BSValue interned = bsInternName(name);
-    bsObjectSetString(e->labels, interned, bsNumber((double) e->count));
-    bsRelease(interned);
+    bsObjectSetString(e->labels, name, bsNumber((double) e->count));
 }
 
 
 /* Emit a jump to a label - patched when the chunk is finished if the label is not yet defined */
 static void bsEmitJump(BSEmit *e, uint8_t op, BSOperand cond, BSValue label)
 {
-    BSValue interned = bsInternName(label);
-    BSValue pc = e->labels.type == BS_OBJECT ? bsObjectGetString(e->labels, interned) : bsNull();
+    BSValue pc = e->labels.type == BS_OBJECT ? bsObjectGetString(e->labels, label) : bsNull();
     if (pc.type == BS_NUMBER) {
         bsEmitJumpInst(e, op, cond, (uint32_t) pc.u.number);
-        bsRelease(interned);
         return;
     }
     BS_GROW(e->patches, e->patchCount, e->patchCap, 8);
     uint32_t at = bsEmitJumpInst(e, op, cond, 0xffffffffu);
     e->patches[e->patchCount].pc = at;
-    e->patches[e->patchCount].label = interned;
+    e->patches[e->patchCount].label = bsRetain(label);
     e->patchCount++;
 }
 
@@ -512,18 +510,19 @@ static inline void bsAssignedSet(BSEmit *e, int slot)
 }
 
 
+/* The name a statement assigns - an expression statement with a name - or a null value */
+static BSValue bsStatementAssignName(BSValue statement)
+{
+    BSValue expr = bsObjectGetString(statement, bsKeys.expr);
+    return expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.name) : bsNull();
+}
+
+
 /* The slot a statement assigns, or -1 */
 static int bsStatementAssigns(const BSEmit *e, BSValue statement)
 {
-    BSValue expr = bsObjectGetString(statement, bsKeys.expr);
-    BSValue name = expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.name) : bsNull();
-    if (name.type != BS_STRING) {
-        return -1;
-    }
-    BSValue interned = bsInternName(name);
-    int slot = bsSlotFind(e, interned);
-    bsRelease(interned);
-    return slot;
+    BSValue name = bsStatementAssignName(statement);
+    return name.type == BS_STRING ? bsSlotFind(e, name) : -1;
 }
 
 
@@ -728,9 +727,7 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
             *operand = bsEmitBool(e, name[0] == 't');
             return true;
         }
-        BSValue interned = bsInternName(variable);
-        int slot = bsSlotFind(e, interned);
-        bsRelease(interned);
+        int slot = bsSlotFind(e, variable);
         if (slot >= 0 && bsAssignedTest(e, slot)) {
             *operand = (BSOperand) slot;
             return true;
@@ -812,14 +809,12 @@ static bool bsEmitCallTo(BSEmit *e, BSValue function, uint16_t dst)
     }
     if (ok) {
         e->tempTop = base;
-        BSValue interned = bsInternName(name);
-        int slot = bsSlotFind(e, interned);
+        int slot = bsSlotFind(e, name);
         if (slot >= 0) {
             bsEmitInst(e, BS_OP_CALL_SLOT, dst, (uint16_t) slot, (uint16_t) argCount);
         } else {
-            bsEmitInst(e, BS_OP_CALL_NAME, dst, bsEmitSite(e, interned), (uint16_t) argCount);
+            bsEmitInst(e, BS_OP_CALL_NAME, dst, bsEmitSite(e, name), (uint16_t) argCount);
         }
-        bsRelease(interned);
         for (size_t ix = 0; ix < argCount; ix += BS_OPERANDS_PER_DATA) {
             bsEmitInst(e, BS_OP_DATA, operands[ix],
                        ix + 1 < argCount ? operands[ix + 1] : 0,
@@ -937,14 +932,11 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
     if (variable.type == BS_STRING) {
         const char *name = bsStringData(variable);
         if (strcmp(name, "null") != 0 && strcmp(name, "true") != 0 && strcmp(name, "false") != 0) {
-            BSValue interned = bsInternName(variable);
-            int slot = bsSlotFind(e, interned);
+            int slot = bsSlotFind(e, variable);
             if (slot < 0) {
-                bsEmitInst(e, BS_OP_LOAD_NAME, dst, bsEmitSite(e, interned), 0);
-                bsRelease(interned);
+                bsEmitInst(e, BS_OP_LOAD_NAME, dst, bsEmitSite(e, variable), 0);
                 return true;
             }
-            bsRelease(interned);
             if (!bsAssignedTest(e, slot)) {
                 bsEmitInst(e, BS_OP_LOAD_SLOT, dst, (uint16_t) slot, 0);
                 return true;
@@ -1019,18 +1011,15 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         if (name.type != BS_STRING) {
             return bsEmitExprDiscard(e, expr);
         }
-        BSValue interned = bsInternName(name);
-        int slot = bsSlotFind(e, interned);
+        int slot = bsSlotFind(e, name);
         if (slot >= 0) {
-            bsRelease(interned);
             if (!bsEmitExprTo(e, expr, (uint16_t) slot)) {
                 return false;
             }
             bsAssignedSet(e, slot);
             return true;
         }
-        uint16_t site = bsEmitSite(e, interned);
-        bsRelease(interned);
+        uint16_t site = bsEmitSite(e, name);
         uint16_t base = e->tempTop;
         BSOperand operand;
         if (!bsEmitExprOperand(e, expr, &operand)) {
@@ -1278,13 +1267,9 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
     }
     size_t stmtCount = bsArrayCount(statements);
     for (size_t ix = 0; ix < stmtCount; ix++) {
-        BSValue stmt = bsArrayGet(statements, ix);
-        BSValue exprStmt = bsObjectGetString(stmt, bsKeys.expr);
-        if (exprStmt.type == BS_OBJECT) {
-            BSValue assign = bsObjectGetString(exprStmt, bsKeys.name);
-            if (assign.type == BS_STRING) {
-                bsSlotAdd(&body, assign);
-            }
+        BSValue assign = bsStatementAssignName(bsArrayGet(statements, ix));
+        if (assign.type == BS_STRING) {
+            bsSlotAdd(&body, assign);
         }
     }
     bsAssignedAnalyze(&body, statements, def->argCount);
