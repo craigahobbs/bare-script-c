@@ -214,12 +214,10 @@ static bool rxIsSimple(const RxNode *node)
 }
 
 
-/* The single-code-point node a sub-pattern reduces to, or NULL */
-static RxNode *rxSimpleAtom(RxNode *node)
+/* The single-code-point node a lookaround's sub-pattern - always an alternation - reduces to, or NULL */
+static RxNode *rxSimpleAtom(RxNode *alt)
 {
-    if (node != NULL && node->kind == RX_ALT && node->u.alt.count == 1 && node->next == NULL) {
-        node = node->u.alt.branches[0];
-    }
+    RxNode *node = alt->u.alt.count == 1 ? alt->u.alt.branches[0] : NULL;
     return (node != NULL && rxIsSimple(node)) ? node : NULL;
 }
 
@@ -399,24 +397,18 @@ static bool rxHex(RxCompiler *compiler, size_t count, char kind, size_t escapeOf
 
 
 /*
- * Append a digit to a "{n,m}" count, saturating at INT_MAX. JavaScript accepts any count, and a
- * count that large never matches anyway; CPython raises an OverflowError the Python
- * implementation does not catch.
+ * Accumulate the decimal digits at the offset into "*count"; returns how many there were. The count
+ * saturates at INT_MAX: JavaScript accepts any count, and a count that large never matches anyway;
+ * CPython raises an OverflowError the Python implementation does not catch.
  */
-static int rxRepeatDigit(int count, char digit)
-{
-    return count > (INT_MAX - 9) / 10 ? INT_MAX : count * 10 + (digit - '0');
-}
-
-
-/* Accumulate the decimal digits at the offset into "*count", saturating; returns how many there were */
 static size_t rxDigits(RxCompiler *compiler, int *count)
 {
     size_t digits = 0;
     *count = 0;
     while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] >= '0' &&
            compiler->pattern[compiler->offset] <= '9') {
-        *count = rxRepeatDigit(*count, compiler->pattern[compiler->offset]);
+        int digit = compiler->pattern[compiler->offset] - '0';
+        *count = *count > (INT_MAX - 9) / 10 ? INT_MAX : *count * 10 + digit;
         compiler->offset++;
         digits++;
     }
@@ -424,10 +416,10 @@ static size_t rxDigits(RxCompiler *compiler, int *count)
 }
 
 
-/* Step past the backslash at "escapeOffset": an escape needs a character after it */
-static bool rxEscapeBegin(RxCompiler *compiler, size_t escapeOffset)
+/* Step past the backslash at the offset: an escape needs a character after it */
+static bool rxEscapeBegin(RxCompiler *compiler)
 {
-    compiler->offset = escapeOffset + 1;
+    size_t escapeOffset = compiler->offset++;
     if (compiler->offset >= compiler->size) {
         rxError(compiler, escapeOffset, "bad escape (end of pattern)");
         return false;
@@ -500,7 +492,7 @@ static bool rxClassBound(RxCompiler *compiler, uint32_t *code, unsigned *classes
 {
     *classes = 0;
     if (compiler->pattern[compiler->offset] == '\\') {
-        if (!rxEscapeBegin(compiler, compiler->offset)) {
+        if (!rxEscapeBegin(compiler)) {
             return false;
         }
         if (compiler->pattern[compiler->offset] == 'b') {
@@ -706,7 +698,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
 
     if (ch == '\\') {
         size_t escapeOffset = compiler->offset;
-        if (!rxEscapeBegin(compiler, escapeOffset)) {
+        if (!rxEscapeBegin(compiler)) {
             return NULL;
         }
         char escape = compiler->pattern[compiler->offset];
@@ -1121,8 +1113,6 @@ static void rxChunksFree(RxCompiler *compiler)
         free(chunk);
         chunk = next;
     }
-    compiler->chunks = NULL;
-    compiler->root = NULL;
 }
 
 
@@ -1422,12 +1412,19 @@ static void rxTrailGrow(RxState *state)
 }
 
 
-static void rxTrailPush(RxState *state, size_t group)
+/* The next trail entry, to be filled in */
+static inline RxTrailEntry *rxTrailNext(RxState *state)
 {
     if (state->trailCount == state->trailCapacity) {
         rxTrailGrow(state);
     }
-    RxTrailEntry *entry = &state->trail[state->trailCount++];
+    return &state->trail[state->trailCount++];
+}
+
+
+static void rxTrailPush(RxState *state, size_t group)
+{
+    RxTrailEntry *entry = rxTrailNext(state);
     entry->group = (uint32_t) group;
     entry->span = state->match->groups[group];
     entry->matched = state->match->matched[group];
@@ -1813,10 +1810,7 @@ static void rxBtPush(RxState *state, uint32_t kind, uint32_t pc, size_t pos, uin
 
 static void rxTrailPushRepeat(RxState *state, uint32_t slot)
 {
-    if (state->trailCount == state->trailCapacity) {
-        rxTrailGrow(state);
-    }
-    RxTrailEntry *entry = &state->trail[state->trailCount++];
+    RxTrailEntry *entry = rxTrailNext(state);
     entry->group = slot | RX_TRAIL_REPEAT;
     entry->span.begin = state->repeats[slot].count;
     entry->span.end = state->repeats[slot].start;
