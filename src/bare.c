@@ -206,8 +206,7 @@ int bsMain(int argc, char **argv)
 
         /* Evaluate the global variable expression arguments */
         for (size_t ix = 0; ix < varCount && statusCode == 0; ix++) {
-            BSParserError parserError;
-            memset(&parserError, 0, sizeof(parserError));
+            BSParserError parserError = {0};
             BSExpr *expr = bsParseExpression(varExprs[ix], strlen(varExprs[ix]), 0, NULL, false, &parserError);
             if (expr == NULL) {
                 bsPrintError(bsStringData(parserError.message));
@@ -250,8 +249,7 @@ int bsMain(int argc, char **argv)
             }
 
             /* Parse the script source */
-            BSParserError parserError;
-            memset(&parserError, 0, sizeof(parserError));
+            BSParserError parserError = {0};
             BSScript *script = bsParseScript(text, size, 1, scriptName, &parserError);
             free(text);
             if (script == NULL) {

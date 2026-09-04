@@ -750,8 +750,7 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
         includeScript = bsScriptFromModel(model, bsStringData(includeUrl));
         bsRelease(model);
     } else {
-        BSParserError parserError;
-        memset(&parserError, 0, sizeof(parserError));
+        BSParserError parserError = {0};
         includeScript = bsParseScript(includeText, includeSize, 1, bsStringData(includeUrl),
                                       &parserError);
         free(includeOwned);

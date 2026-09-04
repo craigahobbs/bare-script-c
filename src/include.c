@@ -180,7 +180,7 @@ static int bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap, size_
             return -1; /* GCOV_EXCL_LINE */
         }
         unsigned distance = (unsigned) (bsDistBase[distSymbol] + extra);
-        if (distance < 1 || distance > *outLen || *outLen + length > outCap) {
+        if (distance > *outLen || *outLen + length > outCap) {
             return -1; /* GCOV_EXCL_LINE */
         }
         size_t src = *outLen - distance;
