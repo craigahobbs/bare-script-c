@@ -1359,7 +1359,7 @@ typedef struct RxState {
     RxTrailEntry *trail;
     size_t trailCount;
     size_t trailCapacity;
-    RxTrailEntry trailInline[32];
+    RxTrailEntry trailInline[64];
     const RxInst *prog;
     const RxClass *classes;
     const RxAlt *alts;
@@ -1367,9 +1367,9 @@ typedef struct RxState {
     RxBacktrack *bt;
     size_t btCount;
     size_t btCapacity;
-    RxBacktrack btInline[64];
+    RxBacktrack btInline[128];
     RxRepeat *repeats;
-    RxRepeat repeatsInline[16];
+    RxRepeat repeatsInline[48];
 } RxState;
 
 
