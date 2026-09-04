@@ -22,6 +22,7 @@ make cover          # C unit tests with line coverage; FAILS THE BUILD under 100
 make test-include   # the BareScript include library suite (1407 tests, 100% coverage)
 make test-language  # this project's own BareScript language tests
 make perf           # performance suite -> build/perf.csv
+make perf PERF_MERGE= PERF_RUNS=5   # this runtime only (no sibling suites), best of five
 make perfx          # cross-language application suite -> build/perfx/report.md (see perfx/README.md)
 make perfx-check    # verify every perfx port computes the same result
 make release        # three-stage PGO+LTO build in build/release
@@ -193,3 +194,117 @@ Coverage is gathered with `gcov`/`llvm-cov` and summarized by `test/coverage.awk
 `GCOV_EXCL_LINE` and `GCOV_EXCL_START`/`GCOV_EXCL_STOP`. Those markers are reserved for
 out-of-memory aborts, platform-specific fallbacks, and guards against a corrupted parser - prefer
 deleting genuinely unreachable code or writing the test that covers it.
+
+## Performance work
+
+Three recurring jobs share one measurement gate. Every figure comes from the **release** build,
+and nothing is committed on the strength of `make test` alone.
+
+### The measurement gate
+
+Before a pass, snapshot the baseline: copy `build/release/bare` and
+`build/release/libbarescript.dylib` to a scratch directory (`q0`), and record the four suite
+outputs -
+`bare -d -m lib/include/test/runTests.bare`, `bare -d -v vUnittestReport true
+lib/include/test/runTestsMarkdownUp.bare`, `bare -d -m test/include/runTests.bare`, and
+`bare -x -m lib/include/*.bare lib/include/test/test*.bare`. Then for each candidate change:
+
+1. `make test` while iterating; then the gate, chained with `if`, never `;` - a `;` chain once
+   masked three failing gates: `if make commit QUIET=1 > gate.log 2>&1; then ...; else grep -n
+   FAIL gate.log; fi`. Read the `OK`/`FAILED` line, not the tail.
+2. Snapshot the new release next to the others and diff its four suite outputs against the
+   baseline's, ignoring the `executed in` line. They must be byte-identical; a difference is a
+   bug, not a new baseline.
+3. Performance: run each `perf/test.bare` test (`-v vTest "'name'"`), the include suite, and an
+   empty script as separate processes under `/usr/bin/time -l`, three rounds interleaving the
+   baseline and the candidate, and compare the minimum **instructions retired**, cycles, and
+   maximum RSS. Instructions are stable to about ±0.3%; wall time drifts 5-10% across a day, so it
+   is never the deciding metric. Under `-d`, the suite's own `executed in` line is what a reader
+   compares by hand.
+4. Size: `size -m build/release/libbarescript.dylib` for `__text` (code) and `__const` (the
+   compressed includes). When `__text` moves more than a few hundred bytes, find out why:
+   `nm -n` both libraries, difference adjacent symbol addresses for per-function sizes, and join
+   the two lists. Slimming a function can make LTO inline it at every hot call site and grow the
+   binary by kilobytes (a 3-line trim of `bsObjectKeyIs` cost 1.8 KB, a 7-line rewrite of
+   `bsObjectSetString` 7.3 KB); the fix was to keep the larger body.
+5. Memory: `/usr/bin/time -l` on the empty script (maximum resident set and peak footprint), the
+   perf tests, and the suite plain (`-d`) and with coverage (`-d -m`).
+
+Keep every gated snapshot for the day; they bisect a reported regression in seconds. Commit each
+verified change on its own, with a one-line imperative message. Revert anything that is not
+clearly better on the axis it targets and neutral on the others; note what was tried and measured
+neutral so it is not retried.
+
+### The simplification loop
+
+Review, simplify, verify, measure, commit, repeat until the reviews come back thin:
+
+- Review the diff since the last pass and each source file group (value/json/options/include;
+  model/library/runtime/regex; parser/bare/tests). A repeated-window scan (normalized six-line
+  windows across `src/*.c`) and an unused-declaration scan (each name in `internal.h` and the
+  public headers counted across `src/`) find what reading misses.
+- A candidate is fewer lines for identical behavior: a shared helper for a repeated sequence, an
+  unread field or parameter, a special case a general path already covers, a flag that restates
+  state another value carries. Prefer deleting unreachable code to excluding it from coverage.
+- Apply in per-file batches, gate each batch, and measure. A simplification inside `bsRunCode`,
+  `rxRun`, or the emitter's dispatch is judged by the numbers, not the line count.
+- Threaded dispatch gotcha: a `}` after a threaded jump (`BS_NEXT()`, `RX_NEXT()`) is a line
+  coverage never reaches; keep the label and `goto dispatch` form that leaves no such brace.
+- A refcount change gets `leaks --atExit -- build/bare -c '...'` on the dev build as well as the
+  gate; a leak is invisible to every test.
+
+### The profile-driven optimization loop
+
+Profile first, change what the profile names, measure, keep or revert:
+
+- Build a symbolized release without LTO so `sample` sees real frames: `make release
+  RELEASE_DIR=build/relg PROFILE_DIR=build/relg/profile RELEASE_CFLAGS="-O2 -DNDEBUG -g"`, then
+  run the workload (`build/relg/bare -d -m lib/include/test/runTests.bare` in a loop, or one perf
+  test) and `sample $PID 3 1 -mayDie -file out.txt`; aggregate self time per function (a node's
+  count minus its children's). `sample` truncates deep stacks in the middle, so parser-recursion
+  samples show call-site lines as leaves: function-level self time is usable, line-level inside
+  `bsRunCode` is not. A `-fno-inline-functions` variant separates the call path; the LTO release
+  inlines `bsNull`/`bsRetain` completely, so frames for those in a profile are artifacts.
+- For counts rather than time, run the instrumented stage-2 build with `LLVM_PROFILE_FILE` set,
+  merge, and `llvm-profdata show -all-functions -counts`; the first "Block counts" entry is not
+  the entry count. Startup is profiled in-process: a harness that calls `bsMain` in a loop.
+- Take candidates from the top of the self-time list, one at a time. A keep needs a clear win in
+  instructions or cycles on the workload it targets with no regression elsewhere and no size
+  growth it cannot justify; an idea that moves nothing is reverted the same hour.
+- Measured neutral, do not retry as-is: PGO training mixes and `-O3`/inline-threshold flags; a
+  fused call instruction that loads simple arguments; an intrinsic express lane in the call path
+  (it did not replicate); a lazily built lookup table for large objects; caching the coverage
+  slot pointer per `bsRunCode` entry; a JSON needs-escape table; larger array free-list classes;
+  allocation-free object comparison.
+- The perfx suite (`make perfx`) is the yardstick for container-heavy code - `nbody` and
+  `pathfind` spend their time in `objectGet`/`arrayGet` calls - where the include suite is
+  parser-bound.
+
+### Updating README's Performance section
+
+The section has three parts - the include library benchmarks with the suite parse times, the
+cross-language perfx results, and memory and size - and every number in it is re-measured, not
+edited:
+
+1. `make perf PERF_RUNS=5` re-runs this runtime and, when the sibling checkouts are present, the
+   JavaScript and Python suites; `PERF_MERGE=` skips the siblings when only this runtime changed,
+   and their columns stay as they were.
+2. The include suite wall time, best of five, as `{ /usr/bin/time -p build/release/bare -d -m
+   lib/include/test/runTests.bare > /dev/null; } 2>&1 | awk '/^real/'`; redirecting stderr inside
+   the braces swallows the timer's report. The sibling rows come from `node bin/bare.js` in
+   `../bare-script` and the venv `bare` in `../bare-script-py` (pure Python needs
+   `BARESCRIPT_RUNTIME_PY=1`), and stay as they were when only this runtime changed.
+3. `make perfx` (best of three) for the Across Languages table, the startup table, and the memory
+   paragraph; `/usr/bin/time -l` for the empty script and suite figures; `ls -l` and `size -m` on
+   the release library for the sizes.
+4. Tables follow the perfx report's layout: languages as rows sorted by their geometric mean,
+   tests as columns, the fastest per column in bold, times as `s`/`ms` (no decimals from 100 s and
+   from 100 ms, one from 10 s and below 100 ms, two from 1 s), and a final `geomean vs fastest`
+   column over every test the row has. The include library table shows five representative
+   columns (`mandelbrot`, `mdElements`, `mdParse`, `schValidate`, `urlEncode`) but its mean covers
+   all eight tests; generate the cells with a script rather than by hand.
+5. `markdownParse` parses this README, so its figure moves when the file changes: measure it last,
+   after the edits, and update its cells and the means it feeds.
+
+The gate runs before the commit even for a documentation-only change.
+

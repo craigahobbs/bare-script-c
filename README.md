@@ -42,8 +42,7 @@ make compile
 - [Performance](#performance)
   - [The Include Library Benchmarks](#the-include-library-benchmarks)
   - [Across Languages](#across-languages)
-  - [The Release Build](#the-release-build)
-  - [Memory](#memory)
+  - [Memory and Size](#memory-and-size)
 - [Compatibility](#compatibility)
   - [jsonParse and regexNew messages](#jsonparse-and-regexnew-messages)
 - [License](#license)
@@ -732,6 +731,21 @@ through a parser that is itself written in BareScript. The widest gap is `markdo
 V8's hidden classes and inline caches allocate nested objects 7.6x faster. Native C runs
 `mandelbrot` in 0.79 ms, 24x ahead.
 
+Parsing is its own story, because the parser is an interpreted BareScript script in every
+implementation. Running the include library's full test suite, which parses about 2 MB of
+BareScript before it runs a single test:
+
+| Implementation            |  Time |
+| ------------------------- | ----: |
+| C                         | 0.22s |
+| JavaScript                | 1.83s |
+| Python (with C extension) |  7.5s |
+| Python                    | 10.2s |
+
+Most of that margin is the runtime optimization pass described under [Design](#design) - the
+emit-time stack sizing, per-site global caches, threaded dispatch, statement stripping, lazy
+treaps, and free lists - and the regular expression engine's compiled programs and first sets.
+
 ### Across Languages
 
 `make perfx` runs [perfx](perfx/README.md): five applications a working developer might write -
@@ -782,45 +796,15 @@ resident set:
 | JavaScript (V8 JIT)     | 26.9 ms |  38.2 MB |
 | Ruby                    | 44.1 ms |  27.6 MB |
 
-### The Release Build
-
-The release build is about 1.5x the default build, milliseconds per test run:
-
-| Test                        | C (`-O2`) | C (release) |
-| --------------------------- | ---------:| -----------:|
-| mandelbrot, 1 run           |        29 |          19 |
-| markdownParse, 250 runs     |       461 |         330 |
-| qrcodeMatrix, 30 runs       |        54 |          37 |
-| schemaValidate, 250 runs    |        60 |          41 |
-| urlDecode, 2000 runs        |        23 |          15 |
-
-And parsing is its own story, because the parser is an interpreted BareScript script in every
-implementation. Running the include library's full test suite, which parses about 2 MB of
-BareScript before it runs a single test:
-
-| Implementation            | Time  |
-| ------------------------- | -----:|
-| C (release)               | 0.22s |
-| C (`-O2`)                 | 0.28s |
-| JavaScript                | 1.83s |
-| Python (with C extension) |  7.5s |
-| Python                    | 10.2s |
-
-Most of that margin is the runtime optimization pass described under [Design](#design) - the
-emit-time stack sizing, per-site global caches, threaded dispatch, statement stripping, lazy
-treaps, and free lists - and the regular expression engine's compiled programs and first sets.
+### Memory and Size
 
 The shared library is 469 KB, of which 205 KB is the compressed include library and 196 KB is
-code.
-
-### Memory
-
-Memory is measured with `/usr/bin/time -l`. A script that does nothing runs in a 3.1 MB resident
-set with a 2.4 MB peak footprint, of which about 1.4 MB is the process itself before the runtime
-loads: libcurl is not mapped until the first HTTP fetch, the parser is compiled from its model a
-statement at a time, and a script keeps its parser model only where lint or coverage will read
-it. Each `make perf` test peaks at about 6 MB. The include library test suite peaks at 35 MB, or
-63 MB when it records coverage, which keeps every script's model.
+code. Memory is measured with `/usr/bin/time -l`. A script that does nothing runs in a 3.1 MB
+resident set with a 2.4 MB peak footprint, of which about 1.4 MB is the process itself before the
+runtime loads: libcurl is not mapped until the first HTTP fetch, the parser is compiled from its
+model a statement at a time, and a script keeps its parser model only where lint or coverage will
+read it. Each `make perf` test peaks at about 6 MB. The include library test suite peaks at 35 MB,
+or 63 MB when it records coverage, which keeps every script's model.
 
 Across languages, the perfx suite tells the same story as its startup table. BareScript has the
 lowest peak of any runtime on the JSON pipeline (139 MB, against 160 MB for V8 and 202 MB for
