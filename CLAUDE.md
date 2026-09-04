@@ -9,8 +9,9 @@ bare-script-c is a pure-C (C11) implementation of the
 library with the runtime exports plus the `bare` CLI. The only required dependency is libm;
 libcurl is used for HTTP if found at build time.
 
-`PROMPT.md` holds the original design requirements. `README.md` documents the design in depth -
-read its **Design** section before making non-trivial changes.
+`PROMPT.md` holds the original design requirements. `DESIGN.md` documents the design in depth -
+read it before making non-trivial changes. `README.md` is for users: building, the command line,
+embedding, and the measurements.
 
 ## Commands
 
@@ -75,7 +76,7 @@ bugs**.
 
 The bootstrap: the bundled parser is stored as its own parser-compiled JSON model, so loading it
 needs only a JSON decode - a streaming one, `bsScriptFromModelJSON`, which compiles each statement
-as it is decoded so the model is never whole in memory (README's **The Parser and Linter** draws
+as it is decoded so the model is never whole in memory (DESIGN.md's **The Parser and Linter** draws
 it).
 
 `src/model.c` compiles the model to bytecode. A script keeps its model only where something will
@@ -108,14 +109,14 @@ every statement in a cached include's code.
 
 `src/includeSource.c` is **generated and checked in** so a fresh clone builds with no bootstrap;
 `make includes` regenerates it by running `bin/includeSource.bare` - itself a BareScript program -
-under a CLI built from the *existing* generated source. README's **The Bundled Include Library**
+under a CLI built from the *existing* generated source. DESIGN.md's **The Bundled Include Library**
 describes the encoding. Any include but the parser and linter compiles out under its
 `NO_BARESCRIPT_INCLUDE_<NAME>` macro; the Makefile's `INCLUDE` list sets the macro for every include
 not named. There is no dependency tracking, so an include's own includes must be listed with it.
 
 ### Values and reference counting
 
-`BSValue` is a 16-byte tagged struct passed by value; README's **The Value System** gives the
+`BSValue` is a 16-byte tagged struct passed by value; DESIGN.md's **The Value System** gives the
 layout and the ownership rules (returns are owned, arguments and container accessors are borrowed),
 which are uniform and the single easiest thing to get wrong.
 
@@ -131,13 +132,13 @@ operations.
 All mutable runtime state is `_Thread_local` - the free lists, the intern table, the model keys, the
 library function values, the compiled parser, linter, and include caches, the system include
 registry, the RNG - so each thread is an isolated runtime, and values, scripts, and options never
-cross threads (README's **Threads**). Keep it so: a new file-scope variable is `_Thread_local` or
+cross threads (DESIGN.md's **Threads**). Keep it so: a new file-scope variable is `_Thread_local` or
 `const`. The one process-wide object is the libcurl loader, behind a C11 atomic once. The cleanups
 are per thread, `bsValueCleanup` last; `test/test_thread.c` runs eight runtimes at once.
 
 ### Library functions
 
-The function format is README's **The Function Format**: `args` is a borrowed slice of the
+The function format is DESIGN.md's **The Function Format**: `args` is a borrowed slice of the
 interpreter's borrowed reads of the call's operands, the return is owned. Two distinct error paths:
 
 - **Runtime error** (halts the script): `bsErrorSet` / `bsErrorSetStatement`.
@@ -158,7 +159,7 @@ points. It is **on the parser's hot path**, so its performance properties are lo
 decoration: anchored-pattern optimization, first sets per alternative (indexed by code point for
 wide alternations), single-code-point quantifiers that scan in one loop and give back through one
 backtrack entry, a capture and counter undo trail, and a step budget. Syntax is the JavaScript
-subset BareScript exposes - see README's **Regular Expressions** table.
+subset BareScript exposes - see DESIGN.md's **Regular Expressions** table.
 
 ## Source layout
 
@@ -297,13 +298,17 @@ edited:
 3. `make perfx` (best of three) for the Across Languages table, the startup table, and the memory
    paragraph; `/usr/bin/time -l` for the empty script and suite figures; `ls -l` and `size -m` on
    the release library for the sizes.
-4. Tables follow the perfx report's layout: languages as rows sorted by their geometric mean,
-   tests as columns, the fastest per column in bold, times as `s`/`ms` (no decimals from 100 s and
-   from 100 ms, one from 10 s and below 100 ms, two from 1 s), and a final `geomean vs fastest`
-   column over every test the row has. The include library table shows six representative
-   columns (`mandelbrot`, `mdElements`, `mdParse`, `schValidate`, `urlEncode`, and `testSuite`,
-   the suite's wall time scaled to the per-1000-run unit) but its mean covers all nine tests;
-   generate the cells with a script rather than by hand.
+4. Tables follow the perfx report's layout: languages as rows sorted by score, tests as columns,
+   the fastest per column in bold, times as `s`/`ms` (no decimals from 100 s and from 100 ms, one
+   from 10 s and below 100 ms, two from 1 s), and a final `vs best` column. The score is the one
+   `scores()` in `perfx/perfx.py` computes: the language effect of a multiplicative model fitted
+   by least squares on the log scale, relative to the best language - the plain geometric mean
+   of ratios when the table is complete, and unbiased by missing cells when it is not (the
+   include library table has them: no native `qrcodeMatrix` or `testSuite`, no Python markdown).
+   That table shows six representative columns (`mandelbrot`, `mdElements`, `mdParse`,
+   `schValidate`, `urlEncode`, and `testSuite`, the suite's wall time scaled to the per-1000-run
+   unit) but its score covers all nine tests. Generate the cells with a script that calls
+   `scores()` rather than by hand.
 5. `markdownParse` parses this README, so its figure moves when the file changes: measure it last,
    after the edits, and update its cells and the means it feeds.
 

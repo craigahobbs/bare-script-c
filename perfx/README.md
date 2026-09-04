@@ -104,16 +104,18 @@ processing.
 
 - **Interpreters** - the exact command and version behind every row, so a report is reproducible.
 - **Summary** - application time per language and application, with the fastest port in bold, and
-  each language's geometric mean of its ratio to the fastest port across applications. The geometric
-  mean weights every application equally, so one lopsided test cannot dominate the ranking. An ASCII
-  bar chart shows the same ratios at a glance.
+  a score per language: its geometric mean across the applications relative to the best language,
+  every application weighted equally, with each application's scale fitted from all the ports that
+  ran it so a failed port does not distort the rest. 1.00x is the best language. An ASCII bar chart
+  shows the scores at a glance.
 - **Startup** - the empty program's wall time, CPU time, and peak RSS per interpreter: the fixed
   cost of launching each runtime, and the memory floor the application tables subtract.
 - **Applications** - one table per application: app time, the ratio to the fastest port, wall time,
   wall minus app (startup, source loading, teardown), user and system CPU, peak RSS, and RSS above
   the interpreter's baseline. Below each table is the shared result, or the ports that failed to
   match it.
-- **Memory** - peak RSS per language and application in one table, next to each baseline.
+- **Memory** - peak RSS per language and application in one table, next to each baseline, scored
+  the same way against the smallest.
 
 The closing section explains how to read each column; in short, compare *app time* to rank the
 languages on the work itself, *wall minus app* and the *Startup* table for what a short-lived

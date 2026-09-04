@@ -273,6 +273,35 @@ def machine():
     return f'{cpu or platform.machine()}, {os.cpu_count()} cores, {platform.system()} {platform.release()}'
 
 
+def scores(table):
+    """
+    Score each row of a table of measurements (row name -> list of values, None where missing)
+    relative to the best row: the row effect of a multiplicative model, value = row x column,
+    fitted by least squares on the log scale, so a missing cell neither rewards nor penalizes a
+    row. For a complete table this is the geometric mean of each row's ratio to any fixed
+    reference. Returns row name -> score, 1.0 for the best row, inf for a row with no values.
+    """
+    rows = [name for name, values in table.items() if any(v is not None for v in values)]
+    if not rows:
+        return {name: float('inf') for name in table}
+    columns = range(len(table[rows[0]]))
+    effect = {name: 0.0 for name in rows}
+    scale = [0.0] * len(columns)
+    for _ in range(200):
+        for name in rows:
+            logs = [math.log(table[name][j]) - scale[j] for j in columns if table[name][j] is not None]
+            effect[name] = sum(logs) / len(logs)
+        for j in columns:
+            logs = [math.log(table[name][j]) - effect[name] for name in rows if table[name][j] is not None]
+            if logs:
+                scale[j] = sum(logs) / len(logs)
+    best = min(effect.values())
+    result = {name: math.exp(effect[name] - best) for name in rows}
+    for name in table:
+        result.setdefault(name, float('inf'))
+    return result
+
+
 def fmt_ms(value):
     if value >= 1000:
         return f'{value / 1000:,.2f} s'
@@ -316,25 +345,24 @@ def report(summary, apps, langs, versions, opt):
     lines.append(table(['Language', 'Command', 'Version'], rows, 'lll'))
     lines.append('')
 
-    # Summary: application time per language, geometric mean of the ratio to the fastest port
+    # Summary: application time per language, scored against the best language
     fastest = {app['name']: min(summary[app['name']][lang['key']]['app_ms'] for lang in langs
                                 if summary[app['name']][lang['key']]['ok']) for app in apps}
-    geomeans = {}
-    for lang in langs:
-        ratios = [summary[app['name']][lang['key']]['app_ms'] / fastest[app['name']] for app in apps
-                  if summary[app['name']][lang['key']]['ok']]
-        geomeans[lang['key']] = math.exp(sum(math.log(r) for r in ratios) / len(ratios)) if ratios else float('inf')
+    geomeans = scores({lang['key']: [summary[app['name']][lang['key']]['app_ms']
+                                     if summary[app['name']][lang['key']]['ok'] else None for app in apps]
+                       for lang in langs})
     order = sorted(langs, key=lambda lang: geomeans[lang['key']])
     slowest_geomean = max(g for g in geomeans.values() if g != float('inf'))
 
     lines.append('## Summary')
     lines.append('')
     lines.append('Application time is measured inside each program, from its first statement to its result, so it '
-                 'excludes interpreter startup. The last column is the geometric mean over the applications of '
-                 'each language\'s time relative to the fastest port of that application; 1.00 would be fastest '
-                 'on every application.')
+                 'excludes interpreter startup. The last column scores each language against the best one: its '
+                 'geometric mean across the applications, each application weighted equally, relative to the '
+                 'language with the lowest mean. 1.00x is the best language; differences under about 5% are '
+                 'within run-to-run drift.')
     lines.append('')
-    headers = ['Language'] + [app['name'] for app in apps] + ['geomean vs fastest']
+    headers = ['Language'] + [app['name'] for app in apps] + ['vs best']
     rows = []
     for lang in order:
         row = [lang['name']]
@@ -411,16 +439,21 @@ def report(summary, apps, langs, versions, opt):
     lines.append('')
     lines.append('Peak resident set size per application, in MB. The baseline is the empty program; the '
                  'difference between an application\'s peak and the baseline is the memory the application '
-                 'itself needed on that runtime, allocator overhead included.')
+                 'itself needed on that runtime, allocator overhead included. The last column scores each '
+                 'language against the smallest, the same way as the summary.')
     lines.append('')
-    headers = ['Language', 'Baseline'] + [app['name'] for app in apps]
+    memory = {lang['key']: [summary['empty'][lang['key']]['rss_mb']] +
+              [summary[app['name']][lang['key']]['rss_mb'] for app in apps] for lang in langs}
+    memory_scores = scores(memory)
+    headers = ['Language', 'Baseline'] + [app['name'] for app in apps] + ['vs best']
     rows = []
-    for lang in sorted(langs, key=lambda lang: summary['empty'][lang['key']]['rss_mb']):
+    for lang in sorted(langs, key=lambda lang: memory_scores[lang['key']]):
         row = [lang['name'], fmt_mb(summary['empty'][lang['key']]['rss_mb'])]
         for app in apps:
             row.append(fmt_mb(summary[app['name']][lang['key']]['rss_mb']))
+        row.append(f"{memory_scores[lang['key']]:.2f}x")
         rows.append(row)
-    lines.append(table(headers, rows, 'l' + 'r' * (len(apps) + 1)))
+    lines.append(table(headers, rows, 'l' + 'r' * (len(apps) + 2)))
     lines.append('')
 
     # How to read it
@@ -438,9 +471,12 @@ def report(summary, apps, langs, versions, opt):
                  'garbage on background threads). System time is kernel work: mapping memory, reading files.')
     lines.append('- **Peak RSS** is the largest resident set the process reached. **Above baseline** subtracts '
                  'the empty program\'s peak for the same runtime, isolating what the application\'s data cost.')
-    lines.append('- **vs fastest** divides a port\'s app time by the fastest port\'s for the same application. '
-                 'The summary\'s geometric mean of those ratios weights every application equally, so one '
-                 'lopsided test cannot dominate it.')
+    lines.append('- **vs fastest** in an application table divides a port\'s app time by the fastest port\'s '
+                 'for that application. **vs best** in the summary and memory tables is a score: each language\'s '
+                 'geometric mean across the tests relative to the best language, with every test weighted '
+                 'equally and each test\'s scale estimated from all the languages that ran it (a least-squares '
+                 'fit of measurement = language x test on the log scale), so a failed port does not distort '
+                 'the others. 1.00x is the best language.')
     lines.append('- Every port prints its computed result, and the report flags any port whose result differs '
                  'from the others - a timing is only meaningful when the ports did the same work.')
     lines.append('')
