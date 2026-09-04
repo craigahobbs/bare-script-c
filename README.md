@@ -710,44 +710,38 @@ make perf
 make perf TEST=mandelbrot PERF_RUNS=5
 ```
 
-Time per 1000 runs, best of five, on one machine (an Apple M3 Max), with the fastest runtime on
-each test in bold and the geometric mean of each runtime's ratio to the fastest across the tests:
-
-| Language         | mandelbrot | markdownElements | markdownParse | qrcodeMatrix | schemaParse | schemaValidate |  urlDecode |  urlEncode | geomean vs fastest |
-| ---------------- | ---------: | ---------------: | ------------: | -----------: | ----------: | -------------: | ---------: | ---------: | -----------------: |
-| BareScript (C)   | **19.0 s** |       **244 ms** |    **1.32 s** |   **1.23 s** |  **120 ms** |     **164 ms** | **7.5 ms** | **5.0 ms** |              1.00x |
-| BareScript (PyC) |      109 s |           664 ms |        7.15 s |       9.10 s |      1.24 s |         1.06 s |     132 ms |    57.0 ms |              7.34x |
-| BareScript (JS)  |      304 s |           721 ms |        2.85 s |       12.8 s |      1.16 s |         1.90 s |    87.5 ms |    49.5 ms |              7.81x |
-| BareScript (Py)  |    3,478 s |           5.25 s |        20.8 s |        125 s |      9.08 s |         14.4 s |     691 ms |     394 ms |             64.59x |
-
-The C runtime is the fastest BareScript runtime on every test: 7.4x ahead of the Python
-implementation with its C extension and 7.8x ahead of the JavaScript implementation by the
-geometric mean, and 65x ahead of pure Python. (`BareScript (PyC)` is the Python implementation
-running its C extension for the runtime core, so it is not a pure-Python baseline;
-`BareScript (Py)` is.) `markdownParse` is the closest race, at 2.2x, because it is almost entirely
-regular expression work against V8's JIT-compiled regex engine; it parses each project's own
-README, so its row moves when this file changes.
-
-`make perf` also times each host language doing the same work natively: `perf/test.c` for
+The rows are the three BareScript implementations - `BareScript (PyC)` is the Python
+implementation running its C extension for the runtime core, so it is not a pure-Python baseline;
+`BareScript (Py)` is - and the host languages doing the same work natively: `perf/test.c` for
 `mandelbrot`, and for the library tests the JavaScript and Python packages the include library was
-ported from - `schema-markdown` and `markdown-model` - JIT-compiled by V8 and interpreted by
-CPython 3.14. Time per 1000 runs; the Python suite has no markdown tests, so CPython's mean is
-over the five it has:
+ported from, `schema-markdown` and `markdown-model`, JIT-compiled by V8 and interpreted by CPython
+3.14. The Python packages have no markdown tests and nothing has a native `qrcodeMatrix`. Time per
+1000 runs, best of five, on one machine (an Apple M3 Max), with the fastest on each test in bold
+and the geometric mean of each row's ratio to this runtime over the tests it has:
 
-| Language         | mandelbrot | markdownElements | markdownParse | schemaParse | schemaValidate |  urlDecode |  urlEncode | geomean vs fastest |
-| ---------------- | ---------: | ---------------: | ------------: | ----------: | -------------: | ---------: | ---------: | -----------------: |
-| JavaScript (V8)  | **1.57 s** |      **32.3 ms** |    **618 ms** | **70.5 ms** |    **55.6 ms** | **4.7 ms** | **2.2 ms** |              1.00x |
-| BareScript (C)   |     19.0 s |           244 ms |        1.32 s |      120 ms |         164 ms |     7.5 ms |     5.0 ms |              3.22x |
-| Python (CPython) |     45.9 s |                  |               |      171 ms |         205 ms |    11.7 ms |    10.5 ms |              5.00x |
+| Language         | mandelbrot | markdownElements | markdownParse | qrcodeMatrix | schemaParse | schemaValidate |  urlDecode |  urlEncode | geomean vs BareScript (C) |
+| ---------------- | ---------: | ---------------: | ------------: | -----------: | ----------: | -------------: | ---------: | ---------: | ------------------------: |
+| JavaScript (V8)  | **1.57 s** |      **32.3 ms** |    **618 ms** |              | **70.5 ms** |    **55.6 ms** | **4.7 ms** | **2.2 ms** |                     0.31x |
+| BareScript (C)   |     19.0 s |           244 ms |        1.32 s |   **1.23 s** |      120 ms |         164 ms |     7.5 ms |     5.0 ms |                     1.00x |
+| Python (CPython) |     45.9 s |                  |               |              |      171 ms |         205 ms |    11.7 ms |    10.5 ms |                     1.70x |
+| BareScript (PyC) |      109 s |           664 ms |        7.15 s |       9.10 s |      1.24 s |         1.06 s |     132 ms |    57.0 ms |                     7.34x |
+| BareScript (JS)  |      304 s |           721 ms |        2.85 s |       12.8 s |      1.16 s |         1.90 s |    87.5 ms |    49.5 ms |                     7.81x |
+| BareScript (Py)  |    3,478 s |           5.25 s |        20.8 s |        125 s |      9.08 s |         14.4 s |     691 ms |     394 ms |                    64.59x |
 
-Every column reads the same way: V8's JIT, then this runtime, then CPython. An interpreted
-BareScript program on this runtime runs the reference schema parser faster than CPython runs the
-pure-Python package it was ported from - and does it through a parser that is itself written in
-BareScript. Against the JIT it is 1.6x to 3x behind on the schema and URL tests, 2.1x behind on
-`markdownParse`, and 3.2x behind by the geometric mean. The exception is `markdownElements`, which
-builds nested objects and arrays as fast as V8's hidden classes and inline caches can allocate
-them; there V8 is 7.6x ahead. Native C runs `mandelbrot` in 0.79 ms, 24x ahead of this runtime's
-19 ms.
+The C runtime is the fastest BareScript runtime on every test: 7.3x ahead of the Python
+implementation with its C extension and 7.8x ahead of the JavaScript implementation by the
+geometric mean, and 65x ahead of pure Python. `markdownParse` is the closest race, at 2.2x,
+because it is almost entirely regular expression work against V8's JIT-compiled regex engine; it
+parses each project's own README, so its row moves when this file changes.
+
+Against the host languages, every column reads the same way: V8's JIT, then this runtime, then
+CPython. An interpreted BareScript program on this runtime runs the reference schema parser
+faster than CPython runs the pure-Python package it was ported from - and does it through a
+parser that is itself written in BareScript. Against the JIT it is 1.6x to 3x behind on the
+schema and URL tests, 2.1x behind on `markdownParse`, and 3.2x behind by the geometric mean. The
+exception is `markdownElements`, which builds nested objects and arrays as fast as V8's hidden
+classes and inline caches can allocate them; there V8 is 7.6x ahead. Native C runs `mandelbrot`
+in 0.79 ms, 24x ahead of this runtime's 19 ms.
 
 ### Across Languages
 
