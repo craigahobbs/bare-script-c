@@ -763,9 +763,8 @@ mean covers all eight:
 
 The closest race is `markdownParse`, regular expressions against V8's JIT-compiled regex engine;
 the widest is `markdownElements`, V8's inline caches allocating nested objects 7.6x faster. Native
-C runs `mandelbrot` in 0.79 ms, 24x ahead. The parser is a BareScript script in every
-implementation, so parsing the 2 MB of it that the include library's test suite loads is a
-benchmark of its own:
+C runs `mandelbrot` in 0.79 ms, 24x ahead. The include library's test suite, which parses about
+2 MB of BareScript before its first test runs:
 
 | Implementation            |  Time |
 | ------------------------- | ----: |
