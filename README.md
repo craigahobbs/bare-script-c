@@ -816,6 +816,11 @@ the release build:
 The shared library is 469 KB, of which 205 KB is the compressed include library and 196 KB is
 code.
 
+A second suite, `make perfx`, measures real-world-like applications - an n-body simulation, web
+log analysis, a JSON pipeline, grid pathfinding, and a CSV sales report - each ported to
+BareScript, JavaScript (with and without V8's JIT), Python, Lua, Ruby, and Perl, and reports
+application time, startup, CPU time, and peak memory per language. See [perfx/README.md](perfx/README.md).
+
 Memory is measured the same way, with `/usr/bin/time -l`. A script that does nothing runs in a
 2.9 MB resident set with a 2.3 MB peak footprint, of which about 1.4 MB is the process itself
 before the runtime loads: libcurl is not mapped until the first HTTP fetch, the parser is compiled

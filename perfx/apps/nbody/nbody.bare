@@ -1,0 +1,132 @@
+# nbody - the five-body Jovian planet simulation (compute-heavy)
+#
+# Advances the solar system's outer planets n steps with the symplectic Euler integrator, then
+# reports the system's energy before and after, scaled to an integer.
+
+PI = 3.141592653589793
+SOLAR_MASS = 4 * PI * PI
+DAYS_PER_YEAR = 365.24
+
+
+function body(x, y, z, vx, vy, vz, mass):
+    return {'x': x, 'y': y, 'z': z, 'vx': vx, 'vy': vy, 'vz': vz, 'mass': mass}
+endfunction
+
+
+function makeBodies():
+    return [ \
+        body(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, SOLAR_MASS), \
+        body(4.84143144246472090e+00, -1.16032004402742839e+00, -1.03622044471123109e-01, \
+             1.66007664274403694e-03 * DAYS_PER_YEAR, 7.69901118419740425e-03 * DAYS_PER_YEAR, \
+             -6.90460016972063023e-05 * DAYS_PER_YEAR, 9.54791938424326609e-04 * SOLAR_MASS), \
+        body(8.34336671824457987e+00, 4.12479856412430479e+00, -4.03523417114321381e-01, \
+             -2.76742510726862411e-03 * DAYS_PER_YEAR, 4.99852801234917238e-03 * DAYS_PER_YEAR, \
+             2.30417297573763929e-05 * DAYS_PER_YEAR, 2.85885980666130812e-04 * SOLAR_MASS), \
+        body(1.28943695621391310e+01, -1.51111514016986312e+01, -2.23307578892655734e-01, \
+             2.96460137564761618e-03 * DAYS_PER_YEAR, 2.37847173959480950e-03 * DAYS_PER_YEAR, \
+             -2.96589568540237556e-05 * DAYS_PER_YEAR, 4.36624404335156298e-05 * SOLAR_MASS), \
+        body(1.53796971148509165e+01, -2.59193146099879641e+01, 1.79258772950371181e-01, \
+             2.68067772490389322e-03 * DAYS_PER_YEAR, 1.62824170038242295e-03 * DAYS_PER_YEAR, \
+             -9.51592254519715870e-05 * DAYS_PER_YEAR, 5.15138902046611451e-05 * SOLAR_MASS) \
+    ]
+endfunction
+
+
+function offsetMomentum(bodies):
+    px = 0.0
+    py = 0.0
+    pz = 0.0
+    for b in bodies:
+        mass = objectGet(b, 'mass')
+        px = px + objectGet(b, 'vx') * mass
+        py = py + objectGet(b, 'vy') * mass
+        pz = pz + objectGet(b, 'vz') * mass
+    endfor
+    sun = arrayGet(bodies, 0)
+    objectSet(sun, 'vx', -px / SOLAR_MASS)
+    objectSet(sun, 'vy', -py / SOLAR_MASS)
+    objectSet(sun, 'vz', -pz / SOLAR_MASS)
+endfunction
+
+
+function energy(bodies):
+    e = 0.0
+    count = arrayLength(bodies)
+    i = 0
+    while i < count:
+        b = arrayGet(bodies, i)
+        bvx = objectGet(b, 'vx')
+        bvy = objectGet(b, 'vy')
+        bvz = objectGet(b, 'vz')
+        bmass = objectGet(b, 'mass')
+        e = e + 0.5 * bmass * (bvx * bvx + bvy * bvy + bvz * bvz)
+        j = i + 1
+        while j < count:
+            b2 = arrayGet(bodies, j)
+            dx = objectGet(b, 'x') - objectGet(b2, 'x')
+            dy = objectGet(b, 'y') - objectGet(b2, 'y')
+            dz = objectGet(b, 'z') - objectGet(b2, 'z')
+            e = e - (bmass * objectGet(b2, 'mass')) / mathSqrt(dx * dx + dy * dy + dz * dz)
+            j = j + 1
+        endwhile
+        i = i + 1
+    endwhile
+    return e
+endfunction
+
+
+function advance(bodies, dt):
+    count = arrayLength(bodies)
+    i = 0
+    while i < count:
+        b = arrayGet(bodies, i)
+        bx = objectGet(b, 'x')
+        by = objectGet(b, 'y')
+        bz = objectGet(b, 'z')
+        bmass = objectGet(b, 'mass')
+        j = i + 1
+        while j < count:
+            b2 = arrayGet(bodies, j)
+            dx = bx - objectGet(b2, 'x')
+            dy = by - objectGet(b2, 'y')
+            dz = bz - objectGet(b2, 'z')
+            d2 = dx * dx + dy * dy + dz * dz
+            mag = dt / (d2 * mathSqrt(d2))
+            b2mass = objectGet(b2, 'mass')
+            objectSet(b, 'vx', objectGet(b, 'vx') - dx * b2mass * mag)
+            objectSet(b, 'vy', objectGet(b, 'vy') - dy * b2mass * mag)
+            objectSet(b, 'vz', objectGet(b, 'vz') - dz * b2mass * mag)
+            objectSet(b2, 'vx', objectGet(b2, 'vx') + dx * bmass * mag)
+            objectSet(b2, 'vy', objectGet(b2, 'vy') + dy * bmass * mag)
+            objectSet(b2, 'vz', objectGet(b2, 'vz') + dz * bmass * mag)
+            j = j + 1
+        endwhile
+        i = i + 1
+    endwhile
+    for b in bodies:
+        objectSet(b, 'x', objectGet(b, 'x') + dt * objectGet(b, 'vx'))
+        objectSet(b, 'y', objectGet(b, 'y') + dt * objectGet(b, 'vy'))
+        objectSet(b, 'z', objectGet(b, 'z') + dt * objectGet(b, 'vz'))
+    endfor
+endfunction
+
+
+function main():
+    n = systemGlobalGet('vN', 200000)
+    t0 = datetimeNow()
+    bodies = makeBodies()
+    offsetMomentum(bodies)
+    e0 = energy(bodies)
+    i = 0
+    while i < n:
+        advance(bodies, 0.01)
+        i = i + 1
+    endwhile
+    e1 = energy(bodies)
+    t1 = datetimeNow()
+    systemLog('result: ' + mathFloor(e0 * 1e9) + ',' + mathFloor(e1 * 1e9))
+    systemLog('time: ' + (t1 - t0))
+endfunction
+
+
+main()

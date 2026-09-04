@@ -1,0 +1,231 @@
+# salesreport - CSV parsing, per-group statistics, and a fixed-width text report
+#
+# Generates n rows of sales records as CSV text (with a quoted field), parses it with a
+# character-level CSV reader, computes revenue, mean, standard deviation, and the top product and
+# sales rep per region, and renders an aligned text report with formatted money amounts.
+
+REGIONS = ['North', 'South', 'East', 'West', 'Central', 'Overseas']
+PRODUCTS = ['Anvil', 'Bolt Kit', 'Cable Tie', 'Drill', 'Epoxy', 'Fan Belt', 'Gasket', 'Hinge', 'Impeller', 'Jack', \
+            'Kettle', 'Lamp', 'Motor', 'Nozzle', 'O-Ring', 'Pump', 'Quill', 'Rivet', 'Spring', 'Valve']
+FIRSTS = ['Ada', 'Ben', 'Cleo', 'Dev', 'Eve', 'Finn', 'Gus', 'Hana']
+LASTS = ['Ng', 'Ortiz', 'Patel', 'Quinn', 'Rossi']
+REPS = []
+k = 0
+while k < 40:
+    arrayPush(REPS, arrayGet(LASTS, k % 5) + ', ' + arrayGet(FIRSTS, mathFloor(k / 5)))
+    k = k + 1
+endwhile
+
+QUOTE = 34
+COMMA = 44
+NEWLINE = 10
+
+seed = 42
+
+
+function randInt(n):
+    systemGlobalSet('seed', (seed * 48271) % 2147483647)
+    return seed % n
+endfunction
+
+
+function pad2(n):
+    return if(n < 10, '0' + n, '' + n)
+endfunction
+
+
+function generateCsv(count):
+    lines = ['id,date,region,product,units,price_cents,rep']
+    i = 0
+    while i < count:
+        month = 1 + randInt(12)
+        day = 1 + randInt(28)
+        region = arrayGet(REGIONS, randInt(6))
+        product = arrayGet(PRODUCTS, randInt(20))
+        units = 1 + randInt(50)
+        priceCents = 500 + randInt(49500)
+        rep = arrayGet(REPS, randInt(40))
+        arrayPush(lines, (i + 1) + ',2026-' + pad2(month) + '-' + pad2(day) + ',' + region + ',' + product + ',' + \
+                  units + ',' + priceCents + ',"' + rep + '"')
+        i = i + 1
+    endwhile
+    return arrayJoin(lines, '\n')
+endfunction
+
+
+function parseCsv(text):
+    rows = []
+    fields = []
+    field = ''
+    inQuotes = false
+    size = stringLength(text)
+    i = 0
+    while i < size:
+        code = stringCharCodeAt(text, i)
+        if inQuotes:
+            if code == QUOTE:
+                if i + 1 < size && stringCharCodeAt(text, i + 1) == QUOTE:
+                    field = field + '"'
+                    i = i + 1
+                else:
+                    inQuotes = false
+                endif
+            else:
+                field = field + stringSlice(text, i, i + 1)
+            endif
+        elif code == QUOTE:
+            inQuotes = true
+        elif code == COMMA:
+            arrayPush(fields, field)
+            field = ''
+        elif code == NEWLINE:
+            arrayPush(fields, field)
+            arrayPush(rows, fields)
+            fields = []
+            field = ''
+        else:
+            field = field + stringSlice(text, i, i + 1)
+        endif
+        i = i + 1
+    endwhile
+    if field != '' || arrayLength(fields) > 0:
+        arrayPush(fields, field)
+        arrayPush(rows, fields)
+    endif
+    return rows
+endfunction
+
+
+function padLeft(text, width):
+    text = '' + text
+    length = stringLength(text)
+    return if(length < width, stringRepeat(' ', width - length) + text, text)
+endfunction
+
+
+function padRight(text, width):
+    text = '' + text
+    length = stringLength(text)
+    return if(length < width, text + stringRepeat(' ', width - length), text)
+endfunction
+
+
+function money(cents):
+    dollars = '' + mathFloor(cents / 100)
+    out = ''
+    count = 0
+    i = stringLength(dollars) - 1
+    while i >= 0:
+        out = stringSlice(dollars, i, i + 1) + out
+        count = count + 1
+        if count % 3 == 0 && i > 0:
+            out = ',' + out
+        endif
+        i = i - 1
+    endwhile
+    return '$' + out + '.' + pad2(cents % 100)
+endfunction
+
+
+function topEntry(counts):
+    best = null
+    bestValue = -1
+    for key in objectKeys(counts):
+        value = objectGet(counts, key)
+        if value > bestValue || (value == bestValue && key < best):
+            best = key
+            bestValue = value
+        endif
+    endfor
+    return best
+endfunction
+
+
+function report(rows):
+    stats = {}
+    for region in REGIONS:
+        objectSet(stats, region, {'rows': 0, 'units': 0, 'revenue': 0, 'revenues': [], 'products': {}, 'reps': {}})
+    endfor
+    dataRows = 0
+    ix = 1
+    rowCount = arrayLength(rows)
+    while ix < rowCount:
+        fields = arrayGet(rows, ix)
+        region = arrayGet(fields, 2)
+        product = arrayGet(fields, 3)
+        units = numberParseInt(arrayGet(fields, 4))
+        priceCents = numberParseInt(arrayGet(fields, 5))
+        rep = arrayGet(fields, 6)
+        revenue = units * priceCents
+        s = objectGet(stats, region)
+        objectSet(s, 'rows', objectGet(s, 'rows') + 1)
+        objectSet(s, 'units', objectGet(s, 'units') + units)
+        objectSet(s, 'revenue', objectGet(s, 'revenue') + revenue)
+        arrayPush(objectGet(s, 'revenues'), revenue)
+        products = objectGet(s, 'products')
+        objectSet(products, product, objectGet(products, product, 0) + revenue)
+        reps = objectGet(s, 'reps')
+        objectSet(reps, rep, objectGet(reps, rep, 0) + revenue)
+        dataRows = dataRows + 1
+        ix = ix + 1
+    endwhile
+
+    lines = ['Sales report: ' + dataRows + ' rows', '', \
+             padRight('Region', 10) + padLeft('Rows', 7) + padLeft('Units', 8) + padLeft('Revenue', 16) + \
+             padLeft('Mean', 12) + padLeft('Std dev', 12) + '  ' + padRight('Top product', 12) + 'Top rep']
+    totalRows = 0
+    totalUnits = 0
+    totalRevenue = 0
+    for region in REGIONS:
+        s = objectGet(stats, region)
+        sRows = objectGet(s, 'rows')
+        if sRows == 0:
+            continue
+        endif
+        sRevenue = objectGet(s, 'revenue')
+        meanF = sRevenue / sRows
+        variance = 0.0
+        for revenue in objectGet(s, 'revenues'):
+            diff = revenue - meanF
+            variance = variance + diff * diff
+        endfor
+        variance = variance / sRows
+        std = mathFloor(mathSqrt(variance))
+        mean = mathFloor(sRevenue / sRows)
+        arrayPush(lines, padRight(region, 10) + padLeft(sRows, 7) + padLeft(objectGet(s, 'units'), 8) + \
+                  padLeft(money(sRevenue), 16) + padLeft(money(mean), 12) + padLeft(money(std), 12) + '  ' + \
+                  padRight(topEntry(objectGet(s, 'products')), 12) + topEntry(objectGet(s, 'reps')))
+        totalRows = totalRows + sRows
+        totalUnits = totalUnits + objectGet(s, 'units')
+        totalRevenue = totalRevenue + sRevenue
+    endfor
+    arrayPush(lines, padRight('Total', 10) + padLeft(totalRows, 7) + padLeft(totalUnits, 8) + padLeft(money(totalRevenue), 16))
+    return arrayJoin(lines, '\n')
+endfunction
+
+
+function hashText(text):
+    h = 5381
+    size = stringLength(text)
+    i = 0
+    while i < size:
+        h = (h * 33 + stringCharCodeAt(text, i)) % 4294967296
+        i = i + 1
+    endwhile
+    return h
+endfunction
+
+
+function main():
+    n = systemGlobalGet('vN', 100000)
+    t0 = datetimeNow()
+    text = generateCsv(n)
+    rows = parseCsv(text)
+    output = report(rows)
+    t1 = datetimeNow()
+    systemLog('result: ' + (arrayLength(rows) - 1) + ',' + hashText(output) + ',' + stringLength(output))
+    systemLog('time: ' + (t1 - t0))
+endfunction
+
+
+main()

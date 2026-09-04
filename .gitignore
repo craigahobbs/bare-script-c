@@ -2,3 +2,4 @@ build/
 *.gcov
 *.gcda
 *.gcno
+__pycache__/

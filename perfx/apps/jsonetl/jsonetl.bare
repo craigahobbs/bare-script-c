@@ -1,0 +1,126 @@
+# jsonetl - JSON extract, transform, load (JSON encode and decode, nested containers, grouping)
+#
+# Builds n customer orders with nested item lists, serializes them to JSON, parses the text back,
+# then groups the parsed orders by customer and by SKU to rank revenue and demand.
+
+NOTES = ['', 'Leave at door', 'Gift wrap', 'Call on arrival']
+
+seed = 42
+
+
+function randInt(n):
+    systemGlobalSet('seed', (seed * 48271) % 2147483647)
+    return seed % n
+endfunction
+
+
+function pad2(n):
+    return if(n < 10, '0' + n, '' + n)
+endfunction
+
+
+function pad3(n):
+    if n < 10:
+        return '00' + n
+    elif n < 100:
+        return '0' + n
+    endif
+    return '' + n
+endfunction
+
+
+function generateOrders(count):
+    orders = []
+    i = 0
+    while i < count:
+        customer = 'C' + pad3(randInt(500))
+        day = 1 + randInt(30)
+        itemCount = 1 + randInt(5)
+        items = []
+        j = 0
+        while j < itemCount:
+            sku = 'SKU' + pad3(randInt(200))
+            qty = 1 + randInt(5)
+            priceCents = 100 + randInt(9900)
+            arrayPush(items, {'sku': sku, 'qty': qty, 'priceCents': priceCents})
+            j = j + 1
+        endwhile
+        shipping = if(randInt(4) == 0, 'express', 'standard')
+        note = arrayGet(NOTES, randInt(4))
+        arrayPush(orders, {'id': i + 1, 'customer': customer, 'date': '2026-09-' + pad2(day), 'items': items, \
+                           'shipping': shipping, 'note': note})
+        i = i + 1
+    endwhile
+    return orders
+endfunction
+
+
+function compareRank(a, b):
+    valueA = arrayGet(a, 1)
+    valueB = arrayGet(b, 1)
+    if valueA != valueB:
+        return valueB - valueA
+    endif
+    keyA = arrayGet(a, 0)
+    keyB = arrayGet(b, 0)
+    return if(keyA < keyB, -1, if(keyA > keyB, 1, 0))
+endfunction
+
+
+function rank(map, count):
+    entries = []
+    for key in objectKeys(map):
+        arrayPush(entries, [key, objectGet(map, key)])
+    endfor
+    arraySort(entries, compareRank)
+    return arraySlice(entries, 0, mathMin(count, arrayLength(entries)))
+endfunction
+
+
+function summarize(orders):
+    revenueByCustomer = {}
+    qtyBySku = {}
+    express = 0
+    totalRevenue = 0
+    itemLines = 0
+    for order in orders:
+        revenue = 0
+        for item in objectGet(order, 'items'):
+            qty = objectGet(item, 'qty')
+            sku = objectGet(item, 'sku')
+            revenue = revenue + qty * objectGet(item, 'priceCents')
+            objectSet(qtyBySku, sku, objectGet(qtyBySku, sku, 0) + qty)
+            itemLines = itemLines + 1
+        endfor
+        customer = objectGet(order, 'customer')
+        objectSet(revenueByCustomer, customer, objectGet(revenueByCustomer, customer, 0) + revenue)
+        totalRevenue = totalRevenue + revenue
+        if objectGet(order, 'shipping') == 'express':
+            express = express + 1
+        endif
+    endfor
+    parts = [arrayLength(orders), itemLines, totalRevenue, express, arrayLength(objectKeys(revenueByCustomer))]
+    for entry in rank(revenueByCustomer, 5):
+        arrayPush(parts, arrayGet(entry, 0) + ':' + arrayGet(entry, 1))
+    endfor
+    for entry in rank(qtyBySku, 3):
+        arrayPush(parts, arrayGet(entry, 0) + ':' + arrayGet(entry, 1))
+    endfor
+    return arrayJoin(parts, ',')
+endfunction
+
+
+function main():
+    n = systemGlobalGet('vN', 50000)
+    t0 = datetimeNow()
+    orders = generateOrders(n)
+    text = jsonStringify(orders)
+    parsed = jsonParse(text)
+    result = summarize(parsed)
+    t1 = datetimeNow()
+    systemLog('result: ' + result)
+    systemLog('time: ' + (t1 - t0))
+endfunction
+
+
+main()

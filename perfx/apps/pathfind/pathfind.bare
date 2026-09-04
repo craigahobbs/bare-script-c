@@ -1,0 +1,171 @@
+# pathfind - shortest path across a weighted grid (arrays, a binary heap, integer arithmetic)
+#
+# Builds an n x n grid of terrain costs with a fifth of the cells blocked, then runs Dijkstra's
+# algorithm from the top-left corner to the bottom-right with a hand-written binary heap and
+# reports the path cost, the number of settled cells, and the path length.
+
+INF = 1e15
+
+seed = 42
+
+
+function randInt(n):
+    systemGlobalSet('seed', (seed * 48271) % 2147483647)
+    return seed % n
+endfunction
+
+
+function generateGrid(width, height):
+    cells = width * height
+    grid = arrayNewSize(cells, 0)
+    i = 0
+    while i < cells:
+        cost = 1 + randInt(9)
+        if randInt(100) < 20:
+            cost = -1
+        endif
+        arraySet(grid, i, cost)
+        i = i + 1
+    endwhile
+    # The corners and their neighbors stay open so the search always leaves the start
+    for i in [0, 1, width, cells - 1, cells - 2, cells - 1 - width]:
+        if arrayGet(grid, i) < 0:
+            arraySet(grid, i, 1)
+        endif
+    endfor
+    return grid
+endfunction
+
+
+function heapPush(hd, hn, d, node):
+    arrayPush(hd, d)
+    arrayPush(hn, node)
+    i = arrayLength(hd) - 1
+    while i > 0:
+        p = mathFloor((i - 1) / 2)
+        if arrayGet(hd, p) <= arrayGet(hd, i):
+            break
+        endif
+        t = arrayGet(hd, p)
+        arraySet(hd, p, arrayGet(hd, i))
+        arraySet(hd, i, t)
+        t = arrayGet(hn, p)
+        arraySet(hn, p, arrayGet(hn, i))
+        arraySet(hn, i, t)
+        i = p
+    endwhile
+endfunction
+
+
+# Pop the least entry into "top" - top is [d, node]
+function heapPop(hd, hn, top):
+    arraySet(top, 0, arrayGet(hd, 0))
+    arraySet(top, 1, arrayGet(hn, 0))
+    lastD = arrayPop(hd)
+    lastN = arrayPop(hn)
+    size = arrayLength(hd)
+    if size > 0:
+        arraySet(hd, 0, lastD)
+        arraySet(hn, 0, lastN)
+        i = 0
+        while true:
+            left = 2 * i + 1
+            right = left + 1
+            m = i
+            if left < size && arrayGet(hd, left) < arrayGet(hd, m):
+                m = left
+            endif
+            if right < size && arrayGet(hd, right) < arrayGet(hd, m):
+                m = right
+            endif
+            if m == i:
+                break
+            endif
+            t = arrayGet(hd, m)
+            arraySet(hd, m, arrayGet(hd, i))
+            arraySet(hd, i, t)
+            t = arrayGet(hn, m)
+            arraySet(hn, m, arrayGet(hn, i))
+            arraySet(hn, i, t)
+            i = m
+        endwhile
+    endif
+endfunction
+
+
+function relax(grid, dist, prev, hd, hn, d, u, v):
+    cost = arrayGet(grid, v)
+    if cost < 0:
+        return
+    endif
+    nd = d + cost
+    if nd < arrayGet(dist, v):
+        arraySet(dist, v, nd)
+        arraySet(prev, v, u)
+        heapPush(hd, hn, nd, v)
+    endif
+endfunction
+
+
+function shortestPath(grid, width, height):
+    cells = width * height
+    goal = cells - 1
+    dist = arrayNewSize(cells, INF)
+    prev = arrayNewSize(cells, -1)
+    arraySet(dist, 0, 0)
+    hd = []
+    hn = []
+    heapPush(hd, hn, 0, 0)
+    settled = 0
+    top = [0, 0]
+    while arrayLength(hd) > 0:
+        heapPop(hd, hn, top)
+        d = arrayGet(top, 0)
+        u = arrayGet(top, 1)
+        if d > arrayGet(dist, u):
+            continue
+        endif
+        settled = settled + 1
+        if u == goal:
+            break
+        endif
+        x = u % width
+        y = mathFloor(u / width)
+        if y > 0:
+            relax(grid, dist, prev, hd, hn, d, u, u - width)
+        endif
+        if y < height - 1:
+            relax(grid, dist, prev, hd, hn, d, u, u + width)
+        endif
+        if x > 0:
+            relax(grid, dist, prev, hd, hn, d, u, u - 1)
+        endif
+        if x < width - 1:
+            relax(grid, dist, prev, hd, hn, d, u, u + 1)
+        endif
+    endwhile
+    if arrayGet(dist, goal) == INF:
+        return 'unreachable,' + settled
+    endif
+    length = 0
+    node = goal
+    while node >= 0:
+        length = length + 1
+        node = arrayGet(prev, node)
+    endwhile
+    return arrayGet(dist, goal) + ',' + settled + ',' + length
+endfunction
+
+
+function main():
+    n = systemGlobalGet('vN', 800)
+    t0 = datetimeNow()
+    grid = generateGrid(n, n)
+    result = shortestPath(grid, n, n)
+    t1 = datetimeNow()
+    systemLog('result: ' + result)
+    systemLog('time: ' + (t1 - t0))
+endfunction
+
+
+main()

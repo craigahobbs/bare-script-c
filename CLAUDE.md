@@ -22,6 +22,8 @@ make cover          # C unit tests with line coverage; FAILS THE BUILD under 100
 make test-include   # the BareScript include library suite (1407 tests, 100% coverage)
 make test-language  # this project's own BareScript language tests
 make perf           # performance suite -> build/perf.csv
+make perfx          # cross-language application suite -> build/perfx/report.md (see perfx/README.md)
+make perfx-check    # verify every perfx port computes the same result
 make release        # three-stage PGO+LTO build in build/release
 make includes       # regenerate src/includeSource.c (checked in; only after lib/include changes)
 make release INCLUDE="barescriptParser.bare barescriptLint.bare url.bare"  # bundle only these includes
@@ -178,6 +180,7 @@ subset BareScript exposes - see README's **Regular Expressions** table.
 | `lib/include/`            | **vendored** reference include library and its test suite     |
 | `bin/`                    | BareScript build tools (include source generator, perf report) |
 | `perf/`                   | the benchmark and a native C baseline                         |
+| `perfx/`                  | the cross-language application suite: runner, ports, report   |
 
 ## Tests and coverage
 

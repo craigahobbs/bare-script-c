@@ -142,7 +142,7 @@ commit: test cover test-include test-language release test-release
 
 .PHONY: help
 help:
-	@echo "usage: make [commit|compile|test|cover|test-include|test-language|test-release|perf|release|includes|install|clean]"
+	@echo "usage: make [commit|compile|test|cover|test-include|test-language|test-release|perf|perfx|release|includes|install|clean]"
 	@echo
 	@echo "  commit        everything that must pass before a commit"
 	@echo "  compile       build the shared library and the command-line interface"
@@ -153,6 +153,8 @@ help:
 	@echo "  test-language run this project's own BareScript language tests"
 	@echo "  test-release  run those suites again against the release build"
 	@echo "  perf          run the performance suite against the release build"
+	@echo "  perfx         run the cross-language application suite against the release build"
+	@echo "  perfx-check   verify that every perfx port computes the same result"
 	@echo "  release       profile-guided optimization build in build/release"
 	@echo "  includes      regenerate the bundled include library source"
 	@echo "  install       build the release and install it to \$$(PREFIX), default /usr/local"
@@ -468,7 +470,7 @@ test-language: compile
 #
 
 PERF_BARE_JS_DIR := ../bare-script
-PERF_BARE_PY_DIR := ../bare-script-py
+#PERF_BARE_PY_DIR := ../bare-script-py
 PERF_CSV := $(BUILD_DIR)/perf.csv
 PERF_CSV_TMP := $(BUILD_DIR)/perf-$$PPID.csv
 PERF_MERGE := 1
@@ -506,6 +508,21 @@ endif
 $(PERF_NATIVE): $(PERF_DIR)/test.c
 	@mkdir -p $(dir $@)
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) -o $@ $< -lm
+
+
+#
+# The cross-language performance suite - real-world-like applications ported to BareScript,
+# JavaScript, Python, Lua, Ruby, and Perl, measured under the release build. See perfx/README.md.
+# PERFX_ARGS passes options through, e.g. make perfx PERFX_ARGS="--apps nbody --runs 5".
+#
+
+.PHONY: perfx perfx-check
+perfx: $(RELEASE_CLI)
+	python3 perfx/perfx.py --bare $(RELEASE_CLI) --out $(BUILD_DIR)/perfx $(PERFX_ARGS)
+
+# Run every port at a small workload and check that they all compute the same result
+perfx-check: $(RELEASE_CLI)
+	python3 perfx/perfx.py --bare $(RELEASE_CLI) --check
 
 
 #

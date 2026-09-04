@@ -1,0 +1,184 @@
+# loganalyze - web server log analysis (regular expressions, string splitting, hash maps)
+#
+# Generates n lines of an Apache-style access log with a deterministic PRNG, then parses every
+# line with a regular expression and aggregates: unique client addresses, status code counts,
+# requests per hour, bytes per path prefix, and the busiest hour and heaviest paths.
+
+WORDS = ['perf', 'bare', 'script', 'lua', 'ruby', 'perl', 'python', 'node']
+SLUGS = ['hello-world', 'release-notes', 'faq', 'roadmap', 'benchmarks']
+LINE_RE = regexNew('^(\\S+) \\S+ \\S+ \\[(\\d+)/(\\w+)/(\\d+):(\\d+):(\\d+):(\\d+) [^\\]]+\\] "(\\w+) (\\S+) [^"]+" (\\d+) (\\d+)$')
+
+seed = 42
+
+
+function randInt(n):
+    systemGlobalSet('seed', (seed * 48271) % 2147483647)
+    return seed % n
+endfunction
+
+
+function pad2(n):
+    return if(n < 10, '0' + n, '' + n)
+endfunction
+
+
+function generateLog(count):
+    lines = []
+    i = 0
+    while i < count:
+        ip = '10.' + randInt(8) + '.' + randInt(256) + '.' + randInt(256)
+        day = 1 + randInt(30)
+        hour = randInt(24)
+        minute = randInt(60)
+        second = randInt(60)
+        method = if(randInt(10) == 0, 'POST', 'GET')
+        kind = randInt(12)
+        if kind == 0:
+            path = '/'
+        elif kind == 1:
+            path = '/index.html'
+        elif kind == 2:
+            path = '/api/users'
+        elif kind == 3:
+            path = '/api/users/' + randInt(1000)
+        elif kind == 4:
+            path = '/api/orders'
+        elif kind == 5:
+            path = '/static/app.js'
+        elif kind == 6:
+            path = '/static/style.css'
+        elif kind == 7:
+            path = '/images/logo.png'
+        elif kind == 8:
+            path = '/login'
+        elif kind == 9:
+            path = '/logout'
+        elif kind == 10:
+            path = '/search?q=' + arrayGet(WORDS, randInt(8))
+        else:
+            path = '/blog/' + arrayGet(SLUGS, randInt(5))
+        endif
+        pick = randInt(100)
+        if pick < 80:
+            status = 200
+        elif pick < 88:
+            status = 304
+        elif pick < 95:
+            status = 404
+        elif pick < 98:
+            status = 302
+        else:
+            status = 500
+        endif
+        size = randInt(50000)
+        if status == 304:
+            size = 0
+        endif
+        arrayPush(lines, ip + ' - - [' + pad2(day) + '/Sep/2026:' + pad2(hour) + ':' + pad2(minute) + ':' + pad2(second) + \
+                  ' +0000] "' + method + ' ' + path + ' HTTP/1.1" ' + status + ' ' + size)
+        i = i + 1
+    endwhile
+    return arrayJoin(lines, '\n')
+endfunction
+
+
+function pathKey(path):
+    q = stringIndexOf(path, '?')
+    if q >= 0:
+        path = stringSlice(path, 0, q)
+    endif
+    parts = stringSplit(path, '/')
+    if arrayLength(parts) > 3:
+        path = '/' + arrayGet(parts, 1) + '/' + arrayGet(parts, 2)
+    endif
+    return path
+endfunction
+
+
+function compareTop(a, b):
+    sizeA = arrayGet(a, 1)
+    sizeB = arrayGet(b, 1)
+    if sizeA != sizeB:
+        return sizeB - sizeA
+    endif
+    keyA = arrayGet(a, 0)
+    keyB = arrayGet(b, 0)
+    return if(keyA < keyB, -1, if(keyA > keyB, 1, 0))
+endfunction
+
+
+function analyze(text):
+    total = 0
+    bad = 0
+    posts = 0
+    errors = 0
+    totalBytes = 0
+    ips = {}
+    statuses = {}
+    hours = arrayNewSize(24, 0)
+    pathBytes = {}
+    for line in stringSplit(text, '\n'):
+        m = regexMatch(LINE_RE, line)
+        if m == null:
+            bad = bad + 1
+            continue
+        endif
+        groups = objectGet(m, 'groups')
+        ip = objectGet(groups, '1')
+        hour = numberParseInt(objectGet(groups, '5'))
+        method = objectGet(groups, '8')
+        path = objectGet(groups, '9')
+        status = numberParseInt(objectGet(groups, '10'))
+        size = numberParseInt(objectGet(groups, '11'))
+        total = total + 1
+        objectSet(ips, ip, true)
+        objectSet(statuses, '' + status, objectGet(statuses, '' + status, 0) + 1)
+        arraySet(hours, hour, arrayGet(hours, hour) + 1)
+        if method == 'POST':
+            posts = posts + 1
+        endif
+        if status >= 500:
+            errors = errors + 1
+        endif
+        totalBytes = totalBytes + size
+        key = pathKey(path)
+        objectSet(pathBytes, key, objectGet(pathBytes, key, 0) + size)
+    endfor
+
+    peakHour = 0
+    hour = 0
+    while hour < 24:
+        if arrayGet(hours, hour) > arrayGet(hours, peakHour):
+            peakHour = hour
+        endif
+        hour = hour + 1
+    endwhile
+    entries = []
+    for key in objectKeys(pathBytes):
+        arrayPush(entries, [key, objectGet(pathBytes, key)])
+    endfor
+    arraySort(entries, compareTop)
+    parts = [total, bad, arrayLength(objectKeys(ips)), posts, errors, totalBytes, objectGet(statuses, '200', 0), \
+             objectGet(statuses, '304', 0), objectGet(statuses, '404', 0), peakHour + ':' + arrayGet(hours, peakHour)]
+    ix = 0
+    while ix < 3 && ix < arrayLength(entries):
+        entry = arrayGet(entries, ix)
+        arrayPush(parts, arrayGet(entry, 0) + ':' + arrayGet(entry, 1))
+        ix = ix + 1
+    endwhile
+    return arrayJoin(parts, ',')
+endfunction
+
+
+function main():
+    n = systemGlobalGet('vN', 300000)
+    t0 = datetimeNow()
+    text = generateLog(n)
+    result = analyze(text)
+    t1 = datetimeNow()
+    systemLog('result: ' + result)
+    systemLog('time: ' + (t1 - t0))
+endfunction
+
+
+main()

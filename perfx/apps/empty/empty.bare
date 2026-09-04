@@ -1,0 +1,3 @@
+# The empty program - measures interpreter startup and baseline memory
+systemLog('result: 0')
+systemLog('time: 0')
