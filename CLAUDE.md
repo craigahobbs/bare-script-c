@@ -282,8 +282,8 @@ Profile first, change what the profile names, measure, keep or revert:
 
 ### Updating README's Performance section
 
-The section has three parts - the include library benchmarks with the suite parse times, the
-cross-language perfx results, and memory and size - and every number in it is re-measured, not
+The section has three parts - the cross-language perfx benchmarks, the include library benchmarks
+with the suite parse times, and memory and size - and every number in it is re-measured, not
 edited:
 
 1. `make perf PERF_RUNS=5` re-runs this runtime and, when the sibling checkouts are present, the

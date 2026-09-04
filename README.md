@@ -40,8 +40,8 @@ make compile
 - [Testing](#testing)
   - [The Include Library Test Suite](#the-include-library-test-suite)
 - [Performance](#performance)
+  - [The Cross-Language Benchmarks](#the-cross-language-benchmarks)
   - [The Include Library Benchmarks](#the-include-library-benchmarks)
-  - [Across Languages](#across-languages)
   - [Memory and Size](#memory-and-size)
 - [Compatibility](#compatibility)
   - [jsonParse and regexNew messages](#jsonparse-and-regexnew-messages)
@@ -690,13 +690,63 @@ so it runs unchanged on all three implementations.
 
 ## Performance
 
-Two suites measure the runtime. `make perf` runs the include library's performance suite, the
-same `perf/test.bare` the JavaScript and Python implementations run, so their results merge into
-one report. `make perfx` runs [perfx](perfx/README.md), a set of real-world-like applications
-ported to six languages. Both measure the **release** build, and build it first if needed. The
-implementations it is compared against are themselves optimized builds - Node ships as one, and
-CPython is built with profile-guided and link-time optimization - so timing the development build
-here would understate this runtime by about 1.5x against them.
+Two suites measure the runtime. `make perfx` runs [perfx](perfx/README.md), a set of
+real-world-like applications ported to six languages. `make perf` runs the include library's
+performance suite, the same `perf/test.bare` the JavaScript and Python implementations run, so
+their results merge into one report. Both measure the **release** build, and build it first if
+needed. The implementations it is compared against are themselves optimized builds - Node ships
+as one, and CPython is built with profile-guided and link-time optimization - so timing the
+development build here would understate this runtime by about 1.5x against them.
+
+### The Cross-Language Benchmarks
+
+`make perfx` runs [perfx](perfx/README.md): five applications a working developer might write -
+an n-body simulation, web log analysis, a JSON pipeline, grid pathfinding, and a CSV sales report
+- each ported to BareScript, JavaScript (V8 with and without its JIT), Python, Lua, Ruby, and
+Perl. Every port generates identical input from a shared pseudo-random sequence and prints a
+result the runner checks across languages, so a timing only counts when the ports did the same
+work. The runner measures each process's application time, wall time, CPU time, and peak memory,
+and writes `build/perfx/report.md`, which explains what each of its columns means.
+
+```sh
+make perfx
+make perfx PERFX_ARGS="--apps nbody --runs 5"   # options pass through; see perfx/perfx.py --help
+make perfx-check                                # every port at a small size: do they all agree?
+```
+
+Application time on an Apple M3 Max with Node 26, Python 3.14, Lua 5.5, Ruby 2.6, and Perl 5.34,
+best of three, with the fastest port of each application in bold and the geometric mean of each
+language's ratio to the fastest port across the applications:
+
+| Language                |       nbody | loganalyze |    jsonetl |   pathfind | salesreport | geomean vs fastest |
+| ----------------------- | ----------: | ---------: | ---------: | ---------: | ----------: | -----------------: |
+| JavaScript (V8 JIT)     | **17.5 ms** | **504 ms** | **111 ms** | **131 ms** |  **144 ms** |              1.00x |
+| JavaScript (V8 jitless) |      810 ms |     996 ms |     171 ms |     736 ms |      341 ms |              4.52x |
+| BareScript              |      856 ms |     720 ms |     165 ms |     816 ms |      462 ms |              4.61x |
+| Python                  |      923 ms |     1.01 s |     301 ms |     771 ms |      405 ms |              5.43x |
+| Lua                     |      592 ms |     1.00 s |     1.28 s |     464 ms |      617 ms |              6.53x |
+| Ruby                    |      1.18 s |     1.07 s |     512 ms |     1.08 s |      1.02 s |              8.25x |
+| Perl                    |      2.18 s |     1.18 s |     4.47 s |     2.80 s |      996 ms |             17.69x |
+
+BareScript ties V8's bytecode interpreter and runs ahead of CPython, Lua, Ruby, and Perl; only
+V8's optimizing JIT is faster. It is the fastest interpreter on the log analysis and JSON tests,
+where the work runs in the C regular expression engine and JSON codec, and trails Lua by 1.5x to
+1.8x on the n-body and pathfinding tests, where every field and element access is a library call
+rather than an instruction. (Lua's JSON figure is a pure-Lua codec and Perl's is its core
+`JSON::PP`; neither language ships a native one.) It gets there as a plain bytecode interpreter -
+no JIT, no assembly, no dependencies - in 196 KB of code.
+
+Startup is where the runtimes differ most. Launching the empty program, wall time and peak
+resident set:
+
+| Language                |    Wall | Peak RSS |
+| ----------------------- | ------: | -------: |
+| Lua                     |  2.7 ms |   1.7 MB |
+| BareScript              |  3.3 ms |   3.1 MB |
+| Perl                    |  4.6 ms |   4.3 MB |
+| Python                  | 16.4 ms |  14.6 MB |
+| JavaScript (V8 JIT)     | 26.9 ms |  38.2 MB |
+| Ruby                    | 44.1 ms |  27.6 MB |
 
 ### The Include Library Benchmarks
 
@@ -708,7 +758,7 @@ make perf
 make perf TEST=mandelbrot PERF_RUNS=5
 ```
 
-Time per 1000 runs, best of five, on an Apple M3 Max. The rows are the three BareScript
+Time per 1000 runs, best of five, on the same machine. The rows are the three BareScript
 implementations (`PyC` is the Python one running its C extension) and the host languages doing the
 same work natively: V8 running the JavaScript packages the library was ported from, and CPython
 3.14 running the Python ones, which have no markdown tests. The columns show five of the eight
@@ -745,56 +795,6 @@ BareScript before it runs a single test:
 Most of that margin is the runtime optimization pass described under [Design](#design) - the
 emit-time stack sizing, per-site global caches, threaded dispatch, statement stripping, lazy
 treaps, and free lists - and the regular expression engine's compiled programs and first sets.
-
-### Across Languages
-
-`make perfx` runs [perfx](perfx/README.md): five applications a working developer might write -
-an n-body simulation, web log analysis, a JSON pipeline, grid pathfinding, and a CSV sales report
-- each ported to BareScript, JavaScript (V8 with and without its JIT), Python, Lua, Ruby, and
-Perl. Every port generates identical input from a shared pseudo-random sequence and prints a
-result the runner checks across languages, so a timing only counts when the ports did the same
-work. The runner measures each process's application time, wall time, CPU time, and peak memory,
-and writes `build/perfx/report.md`, which explains what each of its columns means.
-
-```sh
-make perfx
-make perfx PERFX_ARGS="--apps nbody --runs 5"   # options pass through; see perfx/perfx.py --help
-make perfx-check                                # every port at a small size: do they all agree?
-```
-
-Application time on the same machine with Node 26, Python 3.14, Lua 5.5, Ruby 2.6, and Perl 5.34,
-best of three, with the fastest port of each application in bold and the geometric mean of each
-language's ratio to the fastest port across the applications:
-
-| Language                |       nbody | loganalyze |    jsonetl |   pathfind | salesreport | geomean vs fastest |
-| ----------------------- | ----------: | ---------: | ---------: | ---------: | ----------: | -----------------: |
-| JavaScript (V8 JIT)     | **17.5 ms** | **504 ms** | **111 ms** | **131 ms** |  **144 ms** |              1.00x |
-| JavaScript (V8 jitless) |      810 ms |     996 ms |     171 ms |     736 ms |      341 ms |              4.52x |
-| BareScript              |      856 ms |     720 ms |     165 ms |     816 ms |      462 ms |              4.61x |
-| Python                  |      923 ms |     1.01 s |     301 ms |     771 ms |      405 ms |              5.43x |
-| Lua                     |      592 ms |     1.00 s |     1.28 s |     464 ms |      617 ms |              6.53x |
-| Ruby                    |      1.18 s |     1.07 s |     512 ms |     1.08 s |      1.02 s |              8.25x |
-| Perl                    |      2.18 s |     1.18 s |     4.47 s |     2.80 s |      996 ms |             17.69x |
-
-BareScript ties V8's bytecode interpreter and runs ahead of CPython, Lua, Ruby, and Perl; only
-V8's optimizing JIT is faster. It is the fastest interpreter on the log analysis and JSON tests,
-where the work runs in the C regular expression engine and JSON codec, and trails Lua by 1.5x to
-1.8x on the n-body and pathfinding tests, where every field and element access is a library call
-rather than an instruction. (Lua's JSON figure is a pure-Lua codec and Perl's is its core
-`JSON::PP`; neither language ships a native one.) It gets there as a plain bytecode interpreter -
-no JIT, no assembly, no dependencies - in 196 KB of code.
-
-Startup is where the runtimes differ most. Launching the empty program, wall time and peak
-resident set:
-
-| Language                |    Wall | Peak RSS |
-| ----------------------- | ------: | -------: |
-| Lua                     |  2.7 ms |   1.7 MB |
-| BareScript              |  3.3 ms |   3.1 MB |
-| Perl                    |  4.6 ms |   4.3 MB |
-| Python                  | 16.4 ms |  14.6 MB |
-| JavaScript (V8 JIT)     | 26.9 ms |  38.2 MB |
-| Ruby                    | 44.1 ms |  27.6 MB |
 
 ### Memory and Size
 
