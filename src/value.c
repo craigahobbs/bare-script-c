@@ -348,7 +348,9 @@ static bool bsUtf8IsAscii(const char *data, size_t size)
 
 static void bsStringFree(BSString *string)
 {
-    free(string->offsets);
+    if (string->offsets != NULL) {
+        free(string->offsets);
+    }
     unsigned class = string->flags >> BS_STR_POOL_SHIFT;
     if (class != 0 && bsTS.stringPoolCount[class - 1] < BS_STRING_POOL_MAX) {
         string->offsets = (uint32_t *) bsTS.stringPool[class - 1];
@@ -704,17 +706,23 @@ BSValue bsSBToValue(BSStringBuilder *sb)
 #define BS_ARRAY_POOL_MAX 16384
 
 /* Recycle common array value buffers so JSON arrays are not two mallocs every time */
-static const size_t bsArrayBufClass[BS_ARRAY_BUF_CLASS_COUNT] = {8, 16, 32, 64};
 #define BS_ARRAY_BUF_POOL_MAX 64
 
+/* The pool class of a buffer capacity, or -1 for a capacity the pool does not hold */
 static int bsArrayBufClassIndex(size_t capacity)
 {
-    for (int ix = 0; ix < BS_ARRAY_BUF_CLASS_COUNT; ix++) {
-        if (bsArrayBufClass[ix] == capacity) {
-            return ix;
-        }
+    switch (capacity) {
+    case 8:
+        return 0;
+    case 16:
+        return 1;
+    case 32:
+        return 2;
+    case 64:
+        return 3;
+    default:
+        return -1;
     }
-    return -1;
 }
 
 static BSValue *bsArrayBufAlloc(size_t capacity)
@@ -928,7 +936,7 @@ static BSObject *bsObjectAlloc(void)
 
 static void bsObjectRecycle(BSObject *object)
 {
-    if (!object->packed) {
+    if (!object->packed && object->u.tree.lookup != NULL) {
         free(object->u.tree.lookup);
     }
     if (bsTS.objectPoolCount >= BS_OBJECT_POOL_MAX) {

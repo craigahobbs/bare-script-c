@@ -190,6 +190,11 @@ static const BSArgModel valueArgs[] = {{"value", BS_ARG_ANY, 0, 0, 0, 0, 0}};
 /* The substring between two code point indexes, as an owned string value */
 static BSValue bsStringSlice(BSValue string, size_t begin, size_t end)
 {
+    const BSString *source = string.u.string;
+    if (source->length == source->size) {
+        /* An ASCII string's slice is ASCII, at the same offsets */
+        return bsStringNewAscii(source->data + begin, end - begin);
+    }
     size_t beginOffset = bsStringOffset(string, begin);
     size_t endOffset = bsStringOffset(string, end);
     return bsStringNewSize(bsStringData(string) + beginOffset, endOffset - beginOffset);
@@ -1774,6 +1779,9 @@ static BSValue bsFnStringTrim(const BSValue *args, size_t argCount, BSOptions *o
     }
     while (end > begin && isspace((unsigned char) text[end - 1])) {
         end--;
+    }
+    if (begin == 0 && end == bsStringSize(values[0])) {
+        return bsRetain(values[0]);
     }
     return bsStringNewSize(text + begin, end - begin);
 }
