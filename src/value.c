@@ -291,6 +291,19 @@ static _Thread_local BSValueState bsTS = {.priorityState = 0x9E3779B9u};
 static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128};
 
 
+/* Set up a string allocation's header for "size" data bytes; the caller fills them, then bsStringFinish */
+static void bsStringInit(BSString *string, size_t size, uint8_t flags)
+{
+    string->refcount = 1;
+    string->flags = flags;
+    string->size = (uint32_t) size;
+    string->length = 0;
+    string->offsets = NULL;
+    string->cursorIndex = 0;
+    string->cursorOffset = 0;
+    string->data[size] = '\0';
+}
+
 static BSString *bsStringAlloc(size_t size)
 {
     size_t total = sizeof(BSString) + size + 1;
@@ -312,14 +325,7 @@ static BSString *bsStringAlloc(size_t size)
     if (string == NULL) {
         string = bsAlloc(total);
     }
-    string->refcount = 1;
-    string->flags = flags;
-    string->size = (uint32_t) size;
-    string->length = 0;
-    string->offsets = NULL;
-    string->cursorIndex = 0;
-    string->cursorOffset = 0;
-    string->data[size] = '\0';
+    bsStringInit(string, size, flags);
     return string;
 }
 
@@ -698,12 +704,7 @@ BSValue bsSBToValue(BSStringBuilder *sb)
         return bsStringNewSize("", 0);
     }
     /* The buffer becomes the string, uncopied; built this way it is freed rather than pooled */
-    string->refcount = 1;
-    string->flags = 0;
-    string->size = (uint32_t) sb->size;
-    string->offsets = NULL;
-    string->cursorIndex = 0;
-    string->cursorOffset = 0;
+    bsStringInit(string, sb->size, 0);
     BSValue value = bsStringFinish(string, sb->size);
     bsSBInit(sb);
     return value;

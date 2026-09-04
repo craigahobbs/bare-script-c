@@ -169,19 +169,28 @@ static BSValue bsParserUnwrap(BSValue result, BSParserError *error)
 }
 
 
+/*
+ * Parse text with a parser function whose arguments are the text, its line, its script name, and
+ * "extra" when argCount says so. Returns the owned model, or a null value.
+ */
+static BSValue bsParserParse(const char *functionName, const char *text, size_t size, BSValue line,
+                             const char *scriptName, BSValue extra, size_t argCount, BSParserError *error)
+{
+    BSValue args[4] = {
+        bsStringNewSize(text, size), line, scriptName != NULL ? bsStringNew(scriptName) : bsNull(), extra
+    };
+    BSValue result = bsParserCall(&bsParserBootstrap, functionName, args, argCount, scriptName, error);
+    bsRelease(args[0]);
+    bsRelease(args[2]);
+    return bsParserUnwrap(result, error);
+}
+
+
 BSScript *bsParseScript(const char *text, size_t size, int startLineNumber, const char *scriptName,
                         BSParserError *error)
 {
-    BSValue args[3];
-    args[0] = bsStringNewSize(text, size);
-    args[1] = bsNumber(startLineNumber);
-    args[2] = scriptName != NULL ? bsStringNew(scriptName) : bsNull();
-
-    BSValue result = bsParserCall(&bsParserBootstrap, "barescriptParseScriptEx", args, 3, scriptName,
-                                  error);
-    bsRelease(args[0]);
-    bsRelease(args[2]);
-    BSValue model = bsParserUnwrap(result, error);
+    BSValue model = bsParserParse("barescriptParseScriptEx", text, size, bsNumber(startLineNumber),
+                                  scriptName, bsNull(), 3, error);
     if (model.type != BS_OBJECT) {
         return NULL;
     }
@@ -213,17 +222,9 @@ BSValue bsScriptReparse(const BSScript *script)
 BSExpr *bsParseExpression(const char *text, size_t size, int lineNumber, const char *scriptName,
                           bool arrayLiterals, BSParserError *error)
 {
-    BSValue args[4];
-    args[0] = bsStringNewSize(text, size);
-    args[1] = lineNumber != 0 ? bsNumber(lineNumber) : bsNull();
-    args[2] = scriptName != NULL ? bsStringNew(scriptName) : bsNull();
-    args[3] = bsBoolean(arrayLiterals);
-
-    BSValue result = bsParserCall(&bsParserBootstrap, "barescriptParseExpressionEx", args, 4,
-                                  scriptName, error);
-    bsRelease(args[0]);
-    bsRelease(args[2]);
-    BSValue model = bsParserUnwrap(result, error);
+    BSValue model = bsParserParse("barescriptParseExpressionEx", text, size,
+                                  lineNumber != 0 ? bsNumber(lineNumber) : bsNull(), scriptName,
+                                  bsBoolean(arrayLiterals), 4, error);
     if (model.type != BS_OBJECT) {
         return NULL;
     }
