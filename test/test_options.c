@@ -81,10 +81,7 @@ TEST(options_fetch_file)
 {
     const char *path = bsTestTempFile("read.txt", "file contents");
 
-    BSFetchRequest request;
-    memset(&request, 0, sizeof(request));
-    request.url = path;
-    request.headers = bsNull();
+    BSFetchRequest request = {.url = path, .headers = bsNull()};
 
     size_t size = 0;
     char *text = bsFetchReadOnly(&request, &size, NULL);
@@ -125,12 +122,7 @@ TEST(options_fetch_file_write)
     char path[512];
     snprintf(path, sizeof(path), "%s/write.txt", bsTestTempDir());
 
-    BSFetchRequest request;
-    memset(&request, 0, sizeof(request));
-    request.url = path;
-    request.body = "written";
-    request.bodySize = 7;
-    request.headers = bsNull();
+    BSFetchRequest request = {.url = path, .body = "written", .bodySize = 7, .headers = bsNull()};
 
     size_t size = 0;
     char *result = bsFetchReadWrite(&request, &size, NULL);
@@ -152,9 +144,7 @@ TEST(options_fetch_file_write)
     ASSERT_NULL(bsFetchReadWrite(&request, &size, NULL));
 
     /* Read back what was written */
-    memset(&request, 0, sizeof(request));
-    request.url = path;
-    request.headers = bsNull();
+    request = (BSFetchRequest) {.url = path, .headers = bsNull()};
     char *text = bsFetchReadOnly(&request, &size, NULL);
     ASSERT_NOT_NULL(text);
     ASSERT_STR_EQ(text, "written");
@@ -165,10 +155,7 @@ TEST(options_fetch_file_write)
 TEST(options_fetch_http)
 {
     /* A non-URL request is not an HTTP fetch */
-    BSFetchRequest request;
-    memset(&request, 0, sizeof(request));
-    request.url = "not-a-url";
-    request.headers = bsNull();
+    BSFetchRequest request = {.url = "not-a-url", .headers = bsNull()};
     ASSERT_NULL(bsFetchHTTP(&request, NULL, NULL));
 
     /* An unreachable host fails rather than hanging */
@@ -280,9 +267,7 @@ static bool bsTestHTTPRequest(pid_t *child, BSFetchRequest *request, char *url, 
     int port = bsTestHTTPServe(child, status, body);
     ASSERT_TRUE(port != 0);
     snprintf(url, urlSize, "http://127.0.0.1:%d/x", port);
-    memset(request, 0, sizeof(*request));
-    request->url = url;
-    request->headers = bsNull();
+    *request = (BSFetchRequest) {.url = url, .headers = bsNull()};
     return true;
 }
 

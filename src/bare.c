@@ -239,10 +239,7 @@ int bsMain(int argc, char **argv)
             const char *scriptName;
             if (sources[ix].isFile) {
                 scriptName = sources[ix].value;
-                BSFetchRequest request;
-                memset(&request, 0, sizeof(request));
-                request.url = sources[ix].value;
-                request.headers = bsNull();
+                BSFetchRequest request = {.url = sources[ix].value, .headers = bsNull()};
                 text = bsFetchReadWrite(&request, &size, NULL);
                 if (text == NULL) {
                     fprintf(stderr, "Failed to load \"%s\"\n", sources[ix].value);

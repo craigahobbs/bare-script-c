@@ -202,10 +202,7 @@ static const char *bsSystemIncludeText(const char *name)
     for (size_t ix = 0; ix < bsArrayCount(bsSystemIncludePaths); ix++) {
         BSValue directory = bsArrayGet(bsSystemIncludePaths, ix);
         BSValue path = bsStringNewFormat("%s/%s", bsStringData(directory), name);
-        BSFetchRequest request;
-        memset(&request, 0, sizeof(request));
-        request.url = bsStringData(path);
-        request.headers = bsNull();
+        BSFetchRequest request = {.url = bsStringData(path), .headers = bsNull()};
         char *fileText = bsFetchReadOnly(&request, NULL, NULL);
         bsRelease(path);
         if (fileText != NULL) {
@@ -811,10 +808,7 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
         }
         includeSize = strlen(includeText);
     } else if (options->fetchFn != NULL) {
-        BSFetchRequest request;
-        memset(&request, 0, sizeof(request));
-        request.url = bsStringData(includeUrl);
-        request.headers = bsNull();
+        BSFetchRequest request = {.url = bsStringData(includeUrl), .headers = bsNull()};
         includeOwned = options->fetchFn(&request, &includeSize, options->fetchData);
         includeText = includeOwned;
     }
