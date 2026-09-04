@@ -185,7 +185,6 @@ static void rxProgramFree(struct BSRegex *regex);
 
 struct BSRegex {
     int32_t refcount;
-    unsigned flags;
     bool anchored; /* every alternative begins with "^", so only the start position can match */
     RxFirstSet first;
     size_t groupCount;
@@ -197,7 +196,6 @@ struct BSRegex {
     struct RxAlt *alts;
     size_t altCount;
     struct RxLook *looks;
-    size_t lookCount;
     uint32_t repeatCount; /* the counted repeats, each with a counter slot */
 };
 
@@ -681,19 +679,9 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         return rxParseClass(compiler, classOffset);
     }
 
-    if (ch == '.') {
+    if (ch == '.' || ch == '^' || ch == '$') {
         compiler->offset++;
-        return rxNodeNew(compiler, RX_ANY);
-    }
-
-    if (ch == '^') {
-        compiler->offset++;
-        return rxNodeNew(compiler, RX_BOL);
-    }
-
-    if (ch == '$') {
-        compiler->offset++;
-        return rxNodeNew(compiler, RX_EOL);
+        return rxNodeNew(compiler, ch == '.' ? RX_ANY : (ch == '^' ? RX_BOL : RX_EOL));
     }
 
     if (ch == '\\') {
@@ -829,6 +817,7 @@ static RxNode *rxParseSequence(RxCompiler *compiler)
 {
     RxNode *head = NULL;
     RxNode **tail = &head;
+    RxNode *last = NULL;
 
     while (compiler->offset < compiler->size) {
         char ch = compiler->pattern[compiler->offset];
@@ -836,13 +825,14 @@ static RxNode *rxParseSequence(RxCompiler *compiler)
             break;
         }
 
-        /* A quantifier with no atom to repeat */
+        /* A quantifier with no atom to repeat, or one that would repeat a repeat */
         size_t quantifierOffset = compiler->offset;
         int min;
         int max;
         size_t digitOffset;
         if (rxMatchQuantifier(compiler, &min, &max, &digitOffset)) {
-            rxError(compiler, quantifierOffset, "nothing to repeat");
+            rxError(compiler, quantifierOffset,
+                    last != NULL && last->kind == RX_REPEAT ? "multiple repeat" : "nothing to repeat");
             return NULL;
         }
 
@@ -876,17 +866,11 @@ static RxNode *rxParseSequence(RxCompiler *compiler)
             repeat->u.repeat.max = max;
             repeat->u.repeat.greedy = greedy;
             atom = repeat;
-
-            /* A quantifier cannot itself be quantified */
-            size_t secondOffset = compiler->offset;
-            if (rxMatchQuantifier(compiler, &min, &max, &digitOffset)) {
-                rxError(compiler, secondOffset, "multiple repeat");
-                return NULL;
-            }
         }
 
         *tail = atom;
         tail = &atom->next;
+        last = atom;
     }
 
     return head;
@@ -1138,14 +1122,12 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
     BSRegex *regex = bsAlloc(sizeof(BSRegex));
     memset(regex, 0, sizeof(*regex));
     regex->refcount = 1;
-    regex->flags = flags;
     regex->groupCount = 1;
 
     RxCompiler compiler;
     memset(&compiler, 0, sizeof(compiler));
     compiler.pattern = pattern;
     compiler.size = patternSize;
-    compiler.offset = 0;
     compiler.flags = flags;
     compiler.regex = regex;
     compiler.error = error;
@@ -1154,52 +1136,6 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
     if (!compiler.failed && compiler.offset != patternSize) {
         rxError(&compiler, compiler.offset, "unbalanced parenthesis");
     }
-    if (!compiler.failed) {
-        /*
-         * A pattern whose every alternative begins with "^" can only match at the search start, so
-         * the scan over later positions is skipped. Multi-line patterns still scan, since "^" also
-         * matches after a newline. The parser's patterns are all anchored, so this is the
-         * difference between a linear and a quadratic scan over every line it parses.
-         */
-        if ((flags & BS_REGEX_MULTILINE) == 0) {
-            regex->anchored = true;
-            for (size_t ix = 0; ix < compiler.root->u.alt.count; ix++) {
-                const RxNode *branch = compiler.root->u.alt.branches[ix];
-                if (branch == NULL || branch->kind != RX_BOL) {
-                    regex->anchored = false;
-                    break;
-                }
-            }
-        }
-
-        /* The set of code points a match can begin with, for the search scan */
-        rxFirstCompute(compiler.root, flags, &regex->first);
-
-        rxEmitProgram(&compiler);
-        rxChunksFree(&compiler);
-
-        /* Keep named-group strings only; unnamed patterns store no name array */
-        bool named = false;
-        for (size_t ix = 0; ix < regex->groupCount; ix++) {
-            if (compiler.groupNames[ix].type == BS_STRING) {
-                named = true;
-                break;
-            }
-        }
-        if (named) {
-            regex->groupNames = bsAlloc(regex->groupCount * sizeof(BSValue));
-            memcpy(regex->groupNames, compiler.groupNames, regex->groupCount * sizeof(BSValue));
-            regex->uniqueNames = true;
-            for (size_t ix = 0; ix < regex->groupCount && regex->uniqueNames; ix++) {
-                for (size_t jx = 0; jx < ix; jx++) {
-                    if (regex->groupNames[ix].type == BS_STRING && regex->groupNames[jx].type == BS_STRING &&
-                        bsValueCompare(regex->groupNames[ix], regex->groupNames[jx]) == 0) {
-                        regex->uniqueNames = false;
-                    }
-                }
-            }
-        }
-    }
     if (compiler.failed) {
         for (size_t ix = 0; ix < regex->groupCount; ix++) {
             bsRelease(compiler.groupNames[ix]);
@@ -1207,6 +1143,51 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         rxChunksFree(&compiler);
         bsRegexFree(regex);
         return bsNull();
+    }
+
+    /*
+     * A pattern whose every alternative begins with "^" can only match at the search start, so
+     * the scan over later positions is skipped. Multi-line patterns still scan, since "^" also
+     * matches after a newline. The parser's patterns are all anchored, so this is the
+     * difference between a linear and a quadratic scan over every line it parses.
+     */
+    if ((flags & BS_REGEX_MULTILINE) == 0) {
+        regex->anchored = true;
+        for (size_t ix = 0; ix < compiler.root->u.alt.count; ix++) {
+            const RxNode *branch = compiler.root->u.alt.branches[ix];
+            if (branch == NULL || branch->kind != RX_BOL) {
+                regex->anchored = false;
+                break;
+            }
+        }
+    }
+
+    /* The set of code points a match can begin with, for the search scan */
+    rxFirstCompute(compiler.root, flags, &regex->first);
+
+    rxEmitProgram(&compiler);
+    rxChunksFree(&compiler);
+
+    /* Keep named-group strings only; unnamed patterns store no name array */
+    bool named = false;
+    for (size_t ix = 0; ix < regex->groupCount; ix++) {
+        if (compiler.groupNames[ix].type == BS_STRING) {
+            named = true;
+            break;
+        }
+    }
+    if (named) {
+        regex->groupNames = bsAlloc(regex->groupCount * sizeof(BSValue));
+        memcpy(regex->groupNames, compiler.groupNames, regex->groupCount * sizeof(BSValue));
+        regex->uniqueNames = true;
+        for (size_t ix = 0; ix < regex->groupCount && regex->uniqueNames; ix++) {
+            for (size_t jx = 0; jx < ix; jx++) {
+                if (regex->groupNames[ix].type == BS_STRING && regex->groupNames[jx].type == BS_STRING &&
+                    bsValueCompare(regex->groupNames[ix], regex->groupNames[jx]) == 0) {
+                    regex->uniqueNames = false;
+                }
+            }
+        }
     }
 
     BSValue value;
@@ -1277,7 +1258,6 @@ typedef enum {
     RXI_REPEAT_LOOP,   /* slot; a: the exit; b: max; operand: min; aux: greedy; the body follows */
     RXI_REPEAT_NEXT,   /* slot; a: the loop; b: the exit */
     RXI_MATCH,         /* the pattern matched */
-    RXI_MATCH_SUB,     /* a lookahead body matched */
     RXI_MATCH_AT       /* a lookbehind body matched, if it ends at the anchor */
 } RxOp;
 
@@ -1736,7 +1716,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
             uint32_t look = rxEmit(e, ahead ? RXI_LOOKAHEAD : RXI_LOOKBEHIND, 0, 0, lookIndex, negate, 0);
             e->inst[look].a = (uint32_t) e->count;
             rxEmitChain(e, node->u.look.sub);
-            rxEmitOp(e, ahead ? RXI_MATCH_SUB : RXI_MATCH_AT);
+            rxEmitOp(e, ahead ? RXI_MATCH : RXI_MATCH_AT);
             e->inst[look].b = (uint32_t) e->count;
             break;
         }
@@ -1767,7 +1747,7 @@ static void rxEmitProgram(RxCompiler *compiler)
     BSRegex *regex = compiler->regex;
     RxEmit e;
     memset(&e, 0, sizeof(e));
-    e.flags = regex->flags;
+    e.flags = compiler->flags;
     rxEmitChain(&e, compiler->root);
     rxEmitOp(&e, RXI_MATCH);
     regex->prog = bsRealloc(e.inst, e.count * sizeof(RxInst));
@@ -1776,7 +1756,6 @@ static void rxEmitProgram(RxCompiler *compiler)
     regex->alts = e.alts;
     regex->altCount = e.altCount;
     regex->looks = e.looks;
-    regex->lookCount = e.lookCount;
     regex->repeatCount = e.repeatSlots;
 }
 
@@ -1867,7 +1846,7 @@ static inline bool rxAtomAt(const RxState *state, unsigned kind, uint32_t operan
 
 
 /*
- * Run the program from "pc" at "pos". A lookahead body runs to RXI_MATCH_SUB; a lookbehind body
+ * Run the program from "pc" at "pos". A lookahead body runs to RXI_MATCH like the pattern; a lookbehind body
  * runs to RXI_MATCH_AT, which requires it to end at "anchor". Returns whether the program
  * matched - the pattern's end position is left in state->end - with the backtrack entries the
  * run pushed discarded either way.
@@ -1886,7 +1865,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
         &&op_CHAR, &&op_CHAR_FOLD, &&op_ANY, &&op_ANY_ALL, &&op_CLASS, &&op_ALT, &&op_JMP,
         &&op_GROUP_BEGIN, &&op_GROUP_END, &&op_BOL, &&op_BOL_ML, &&op_EOL, &&op_EOL_ML, &&op_WB,
         &&op_NWB, &&op_BACKREF, &&op_LOOK_ATOM, &&op_LOOKAHEAD, &&op_LOOKBEHIND, &&op_REPEAT_SIMPLE,
-        &&op_REPEAT_ENTER, &&op_REPEAT_LOOP, &&op_REPEAT_NEXT, &&op_MATCH, &&op_MATCH_SUB, &&op_MATCH_AT
+        &&op_REPEAT_ENTER, &&op_REPEAT_LOOP, &&op_REPEAT_NEXT, &&op_MATCH, &&op_MATCH_AT
     };
 #define RX_CASE(name) op_##name:
 #define RX_NEXT() \
@@ -2134,27 +2113,26 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             uint32_t operand = inst->operand;
             size_t min = inst->a;
             uint32_t max = inst->b;
-            size_t limit = (max == RX_UNBOUNDED || max > length - pos) ? length : pos + max;
             uint32_t next = pc + 1;
             size_t end = pos;
 
             if ((inst->aux & RX_ATOM_FLAG) == 0) {
-                /* Lazy: take the minimum, then one more each time the continuation fails */
-                size_t count = 0;
-                while (count < min && rxAtomAt(state, kind, operand, end)) {
+                /* Lazy: take the minimum, then one more each time the continuation fails - a count
+                   saturates below the unbounded marker, so a bound means "min < max" */
+                while (end - pos < min && rxAtomAt(state, kind, operand, end)) {
                     end++;
-                    count++;
                 }
-                if (count < min) {
+                if (end - pos < min) {
                     goto backtrack;
                 }
-                if (max == RX_UNBOUNDED || count < max) {
+                if (min < max) {
                     rxBtPush(state, RX_BT_LAZY, next, end, (uint32_t) pos);
                 }
                 pos = end;
                 pc = next;
                 goto dispatch;
             }
+            size_t limit = (max == RX_UNBOUNDED || max > length - pos) ? length : pos + max;
 
             /* Consume as much as the body matches - an ASCII subject scans by the body's kind */
             if (state->codes == NULL) {
@@ -2220,26 +2198,23 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             if (++state->steps > RX_STEPS_MAX) {
                 goto backtrack;
             }
-            bool enter = true;
             if (inst->b != RX_UNBOUNDED && count >= inst->b) {
                 pc = inst->a;
-                enter = false;
-            } else if (count >= inst->operand) {
+                goto dispatch;
+            }
+            if (count >= inst->operand) {
                 if (inst->aux == 0) {
                     /* Lazy: try the continuation first; the body is the alternative */
                     rxBtPush(state, RX_BT_REPEAT_BODY, pc, pos, 0);
                     pc = inst->a;
-                    enter = false;
-                } else {
-                    rxBtPush(state, RX_BT_SPLIT, inst->a, pos, 0);
+                    goto dispatch;
                 }
+                rxBtPush(state, RX_BT_SPLIT, inst->a, pos, 0);
             }
-            if (enter) {
-                rxTrailPushRepeat(state, slot);
-                state->repeats[slot].start = pos;
-                state->repeats[slot].count = count + 1;
-                pc++;
-            }
+            rxTrailPushRepeat(state, slot);
+            state->repeats[slot].start = pos;
+            state->repeats[slot].count = count + 1;
+            pc++;
         }
         RX_NEXT();
 
@@ -2250,10 +2225,6 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
 
         RX_CASE(MATCH)
             state->end = pos;
-            state->btCount = btBase;
-            return true;
-
-        RX_CASE(MATCH_SUB)
             state->btCount = btBase;
             return true;
 
@@ -2280,6 +2251,9 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 return false;
             }
             RxBacktrack *bt = &state->bt[state->btCount - 1];
+            /* Every attempt from an entry starts at its trail mark - and so does the next entry's, once
+               this one is popped, since a deeper entry's mark is never below a shallower one's */
+            rxTrailUnwind(state, bt->trail);
             switch (bt->kind) {
 
             case RX_BT_SPLIT:
@@ -2292,12 +2266,11 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 uint32_t slot = prog[bt->pc].slot;
                 pc = bt->pc + 1;
                 pos = bt->pos;
-                rxTrailUnwind(state, bt->trail);
                 state->btCount--;
                 rxTrailPushRepeat(state, slot);
                 state->repeats[slot].start = pos;
                 state->repeats[slot].count++;
-                goto resume;
+                break;
             }
 
             case RX_BT_ALT_MASK: {
@@ -2308,8 +2281,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 pos = bt->pos;
                 if (mask != 0) {
                     bt->aux = mask;
-                    rxTrailUnwind(state, bt->trail);
-                    goto resume;
+                    break;
                 }
                 state->btCount--;
                 break;
@@ -2332,8 +2304,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 pos = bt->pos;
                 if (ix + 1 < count) {
                     bt->aux = (uint32_t) (ix + 1);
-                    rxTrailUnwind(state, bt->trail);
-                    goto resume;
+                    break;
                 }
                 state->btCount--;
                 break;
@@ -2345,14 +2316,13 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 size_t stop = bt->aux;
                 if (prog[bt->pc].op == RXI_CHAR && !rxGiveBackTo(state, prog[bt->pc].a, stop, &end)) {
                     state->btCount--;
-                    goto backtrack;
+                    continue;
                 }
                 pc = bt->pc;
                 pos = end;
                 if (end > stop) {
                     bt->pos = (uint32_t) end;
-                    rxTrailUnwind(state, bt->trail);
-                    goto resume;
+                    break;
                 }
                 state->btCount--;
                 break;
@@ -2372,14 +2342,9 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 pc = bt->pc;
                 pos = end;
                 bt->pos = (uint32_t) end;
-                rxTrailUnwind(state, bt->trail);
-                goto resume;
+                break;
             }
             }
-
-            /* A popped entry - its trail mark is where the next attempt starts */
-            rxTrailUnwind(state, state->bt[state->btCount].trail);
-        resume:
             break;
         }
     }
