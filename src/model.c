@@ -196,8 +196,18 @@ static _Thread_local bool bsKeysReady;
 
 void bsModelKeysInit(void)
 {
+    /*
+     * Interned once per thread - and again after a runtime cleanup, which leaves the strings held
+     * here as ordinary ones that no longer compare by pointer
+     */
     if (bsKeysReady) {
-        return;
+        if ((bsKeys.expr.u.string->flags & BS_STR_INTERNED) != 0) {
+            return;
+        }
+        BSValue *keys = (BSValue *) &bsKeys;
+        for (size_t ix = 0; ix < sizeof(bsKeys) / sizeof(BSValue); ix++) {
+            bsRelease(keys[ix]);
+        }
     }
 #define BS_KEY(field, text) bsKeys.field = bsStringIntern(text, sizeof(text) - 1)
     BS_KEY(args, "args");
@@ -491,11 +501,30 @@ static inline void bsAssignedSet(BSEmit *e, int slot)
 }
 
 
+/*
+ * A model node - an expression or a statement - is an object with one member whose name is its
+ * kind. The kind key, with the member in "*member", or NULL for a value of any other shape.
+ */
+static BSString *bsModelKind(BSValue node, BSValue *member)
+{
+    BSString *kind;
+    if (!bsObjectSole(node, &kind, member)) {
+        *member = bsNull();
+        return NULL;
+    }
+    return kind;
+}
+
+/* Whether a node's kind key is the model key "field" */
+#define BS_KIND(kind, field) ((kind) != NULL && bsObjectKeyIs((kind), bsKeys.field))
+
+
 /* The name a statement assigns - an expression statement with a name - or a null value */
 static BSValue bsStatementAssignName(BSValue statement)
 {
-    BSValue expr = bsObjectGetString(statement, bsKeys.expr);
-    return expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.name) : bsNull();
+    BSValue expr;
+    BSString *kind = bsModelKind(statement, &expr);
+    return BS_KIND(kind, expr) && expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.name) : bsNull();
 }
 
 
@@ -521,16 +550,15 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
     size_t blockCount = 0;
     bool starts = true;
     for (size_t ix = 0; ix < count; ix++) {
-        BSValue statement = bsArrayGet(statements, ix);
-        bool isLabel = bsObjectHasString(statement, bsKeys.label);
+        BSValue member;
+        BSString *kind = bsModelKind(bsArrayGet(statements, ix), &member);
+        bool isLabel = BS_KIND(kind, label);
         if (starts || isLabel) {
             blockCount++;
         }
         blockOf[ix] = (uint32_t) (blockCount - 1);
-        starts = !isLabel &&
-            (bsObjectHasString(statement, bsKeys.jump) || bsObjectHasString(statement, bsKeys.return_));
-        BSValue label = bsObjectGetString(statement, bsKeys.label);
-        BSValue name = label.type == BS_OBJECT ? bsObjectGetString(label, bsKeys.name) : bsNull();
+        starts = !isLabel && (BS_KIND(kind, jump) || BS_KIND(kind, return_));
+        BSValue name = isLabel && member.type == BS_OBJECT ? bsObjectGetString(member, bsKeys.name) : bsNull();
         if (name.type == BS_STRING) {
             BSValue blocks = bsObjectGetString(labelBlocks, name);
             if (blocks.type != BS_ARRAY) {
@@ -569,12 +597,12 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
             }
             const uint32_t *blockGen = &gen[block * words];
             const uint32_t *blockIn = &in[block * words];
-            BSValue statement = bsArrayGet(statements, ix);
-            BSValue jump = bsObjectGetString(statement, bsKeys.jump);
-            bool fallsThrough = jump.type != BS_OBJECT ? !bsObjectHasString(statement, bsKeys.return_) :
-                bsObjectHasString(jump, bsKeys.expr);
-            BSValue targets = jump.type == BS_OBJECT ?
-                bsObjectGetString(labelBlocks, bsObjectGetString(jump, bsKeys.label)) : bsNull();
+            BSValue member;
+            BSString *kind = bsModelKind(bsArrayGet(statements, ix), &member);
+            bool isJump = BS_KIND(kind, jump) && member.type == BS_OBJECT;
+            bool fallsThrough = isJump ? bsObjectHasString(member, bsKeys.expr) : !BS_KIND(kind, return_);
+            BSValue targets = isJump ? bsObjectGetString(labelBlocks, bsObjectGetString(member, bsKeys.label)) :
+                bsNull();
             size_t targetCount = targets.type == BS_ARRAY ? bsArrayCount(targets) : 0;
             for (size_t succIx = 0; succIx < targetCount + (fallsThrough ? 1 : 0); succIx++) {
                 uint32_t succ = succIx < targetCount ? (uint32_t) bsArrayGet(targets, succIx).u.number :
@@ -653,41 +681,27 @@ static uint8_t bsUnaryOpcode(const char *op)
 }
 
 
-/* Whether an expression model computes its value - a call or an operator - rather than naming one */
-static bool bsExprComputes(BSValue model)
-{
-    return bsObjectHasString(model, bsKeys.function) || bsObjectHasString(model, bsKeys.binary) ||
-        bsObjectHasString(model, bsKeys.unary);
-}
-
-
 /*
  * Compile an expression to an operand: a constant or a local costs no instruction; anything else
  * is computed into the lowest free temporary, which stays allocated for the caller to consume.
  */
 static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
 {
-    if (model.type != BS_OBJECT) {
-        return false;
-    }
-
-    BSValue number = bsObjectGetString(model, bsKeys.number);
-    if (number.type == BS_NUMBER) {
-        *operand = bsEmitConst(e, number);
+    BSValue member;
+    BSString *kind = bsModelKind(model, &member);
+    if (BS_KIND(kind, number) && member.type == BS_NUMBER) {
+        *operand = bsEmitConst(e, member);
         return true;
     }
-
-    BSValue string = bsObjectGetString(model, bsKeys.string);
-    if (string.type == BS_STRING) {
-        BSValue interned = bsInternName(string);
+    if (BS_KIND(kind, string) && member.type == BS_STRING) {
+        BSValue interned = bsInternName(member);
         *operand = bsEmitConst(e, interned);
         bsRelease(interned);
         return true;
     }
-
-    BSValue variable = bsObjectGetString(model, bsKeys.variable);
-    if (variable.type == BS_STRING) {
-        const char *name = bsStringData(variable);
+    bool variable = BS_KIND(kind, variable) && member.type == BS_STRING;
+    if (variable) {
+        const char *name = bsStringData(member);
         if (strcmp(name, "null") == 0) {
             *operand = e->nullConst;
             return true;
@@ -696,19 +710,18 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
             *operand = bsEmitBool(e, name[0] == 't');
             return true;
         }
-        int slot = bsSlotFind(e, variable);
+        int slot = bsSlotFind(e, member);
         if (slot >= 0 && bsAssignedTest(e, slot)) {
             *operand = (BSOperand) slot;
             return true;
         }
     }
-
-    if (bsObjectHasString(model, bsKeys.group)) {
-        return bsEmitExprOperand(e, bsObjectGetString(model, bsKeys.group), operand);
+    if (BS_KIND(kind, group)) {
+        return bsEmitExprOperand(e, member, operand);
     }
 
     /* A global or a possibly unset local loads into a temporary; a call or an operator computes into one */
-    if (variable.type != BS_STRING && !bsExprComputes(model)) {
+    if (!variable && !BS_KIND(kind, function) && !BS_KIND(kind, binary) && !BS_KIND(kind, unary)) {
         return false;
     }
     *operand = bsTempAlloc(e);
@@ -795,12 +808,11 @@ static bool bsEmitCallTo(BSEmit *e, BSValue function, uint16_t dst)
 /* Compile an expression so its value lands in register "dst" */
 static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
 {
-    if (model.type != BS_OBJECT) {
-        return false;
-    }
+    BSValue member;
+    BSString *kind = bsModelKind(model, &member);
 
-    BSValue function = bsObjectGetString(model, bsKeys.function);
-    if (function.type == BS_OBJECT) {
+    if (BS_KIND(kind, function) && member.type == BS_OBJECT) {
+        BSValue function = member;
         BSValue name = bsObjectGetString(function, bsKeys.name);
         if (name.type != BS_STRING) {
             return false;
@@ -825,8 +837,8 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
         return true;
     }
 
-    BSValue binary = bsObjectGetString(model, bsKeys.binary);
-    if (binary.type == BS_OBJECT) {
+    if (BS_KIND(kind, binary) && member.type == BS_OBJECT) {
+        BSValue binary = member;
         BSValue op = bsObjectGetString(binary, bsKeys.op);
         if (op.type != BS_STRING) {
             return false;
@@ -866,8 +878,8 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
         return true;
     }
 
-    BSValue unary = bsObjectGetString(model, bsKeys.unary);
-    if (unary.type == BS_OBJECT) {
+    if (BS_KIND(kind, unary) && member.type == BS_OBJECT) {
+        BSValue unary = member;
         BSValue op = bsObjectGetString(unary, bsKeys.op);
         if (op.type != BS_STRING) {
             return false;
@@ -886,18 +898,17 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
         return true;
     }
 
-    if (bsObjectHasString(model, bsKeys.group)) {
-        return bsEmitExprTo(e, bsObjectGetString(model, bsKeys.group), dst);
+    if (BS_KIND(kind, group)) {
+        return bsEmitExprTo(e, member, dst);
     }
 
     /* A global variable or an unassigned local loads into dst; a constant or an assigned local moves */
-    BSValue variable = bsObjectGetString(model, bsKeys.variable);
-    if (variable.type == BS_STRING) {
-        const char *name = bsStringData(variable);
+    if (BS_KIND(kind, variable) && member.type == BS_STRING) {
+        const char *name = bsStringData(member);
         if (strcmp(name, "null") != 0 && strcmp(name, "true") != 0 && strcmp(name, "false") != 0) {
-            int slot = bsSlotFind(e, variable);
+            int slot = bsSlotFind(e, member);
             if (slot < 0) {
-                bsEmitInst(e, BS_OP_LOAD_NAME, dst, bsEmitSite(e, variable), 0);
+                bsEmitInst(e, BS_OP_LOAD_NAME, dst, bsEmitSite(e, member), 0);
                 return true;
             }
             if (!bsAssignedTest(e, slot)) {
@@ -905,9 +916,8 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
                 return true;
             }
         }
-    }
-    if (bsExprComputes(model)) {
-        return false; /* a malformed call or operator */
+    } else if (!BS_KIND(kind, number) && !BS_KIND(kind, string)) {
+        return false; /* a malformed node, or a call or operator whose member is not an object */
     }
     BSOperand operand;
     if (!bsEmitExprOperand(e, model, &operand)) {
@@ -923,10 +933,13 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
 /* Compile an expression statement - a call drops its result; anything else is computed and left */
 static bool bsEmitExprDiscard(BSEmit *e, BSValue model)
 {
-    BSValue function = bsObjectGetString(model, bsKeys.function);
-    BSValue name = bsObjectGetString(function, bsKeys.name);
-    if (name.type == BS_STRING && strcmp(bsStringData(name), "if") != 0) {
-        return bsEmitCallTo(e, function, BS_REG_DISCARD);
+    BSValue function;
+    BSString *kind = bsModelKind(model, &function);
+    if (BS_KIND(kind, function) && function.type == BS_OBJECT) {
+        BSValue name = bsObjectGetString(function, bsKeys.name);
+        if (name.type == BS_STRING && strcmp(bsStringData(name), "if") != 0) {
+            return bsEmitCallTo(e, function, BS_REG_DISCARD);
+        }
     }
     uint16_t base = e->tempTop;
     BSOperand operand;
@@ -962,12 +975,13 @@ static bool bsEmitFunction(BSEmit *e, BSValue model);
 /* Emit one statement model. Returns false for a malformed statement. */
 static bool bsEmitStatement(BSEmit *e, BSValue model)
 {
-    if (model.type != BS_OBJECT) {
+    BSValue value;
+    BSString *kind = bsModelKind(model, &value);
+    if (value.type != BS_OBJECT) {
         return false;
     }
 
-    BSValue value = bsObjectGetString(model, bsKeys.expr);
-    if (value.type == BS_OBJECT) {
+    if (BS_KIND(kind, expr)) {
         bsEmitCover(e, model, value);
         BSValue expr = bsObjectGetString(value, bsKeys.expr);
         BSValue name = bsObjectGetString(value, bsKeys.name);
@@ -993,8 +1007,7 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         return true;
     }
 
-    value = bsObjectGetString(model, bsKeys.jump);
-    if (value.type == BS_OBJECT) {
+    if (BS_KIND(kind, jump)) {
         BSValue label = bsObjectGetString(value, bsKeys.label);
         if (label.type != BS_STRING) {
             return false;
@@ -1025,8 +1038,7 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         return true;
     }
 
-    value = bsObjectGetString(model, bsKeys.return_);
-    if (value.type == BS_OBJECT) {
+    if (BS_KIND(kind, return_)) {
         bsEmitCover(e, model, value);
         uint16_t base = e->tempTop;
         BSOperand operand;
@@ -1042,8 +1054,7 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         return true;
     }
 
-    value = bsObjectGetString(model, bsKeys.label);
-    if (value.type == BS_OBJECT) {
+    if (BS_KIND(kind, label)) {
         BSValue name = bsObjectGetString(value, bsKeys.name);
         if (name.type != BS_STRING) {
             return false;
@@ -1053,14 +1064,12 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         return true;
     }
 
-    value = bsObjectGetString(model, bsKeys.function);
-    if (value.type == BS_OBJECT) {
+    if (BS_KIND(kind, function)) {
         bsEmitCover(e, model, value);
         return bsEmitFunction(e, value);
     }
 
-    value = bsObjectGetString(model, bsKeys.include);
-    if (value.type == BS_OBJECT) {
+    if (BS_KIND(kind, include)) {
         BSValue includes = bsObjectGetString(value, bsKeys.includes);
         size_t includeCount = bsArrayCount(includes);
         if (includeCount == 0) {

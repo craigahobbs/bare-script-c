@@ -1832,6 +1832,32 @@ BSValue bsObjectGetString(BSValue value, BSValue key)
 }
 
 
+bool bsObjectSole(BSValue object, BSString **key, BSValue *value)
+{
+    if (object.type != BS_OBJECT || object.u.object->count != 1) {
+        return false;
+    }
+    const BSObject *o = object.u.object;
+    if (o->packed) {
+        *key = o->u.small.keys[0];
+        *value = o->u.small.values[0];
+    } else {
+        *key = o->u.tree.insertHead->key;
+        *value = o->u.tree.insertHead->value;
+    }
+    return true;
+}
+
+
+bool bsObjectKeyIs(const BSString *stored, BSValue key)
+{
+    const char *data = key.u.string->data;
+    size_t size = key.u.string->size;
+    BSString *interned = bsInternResolve(&data, &size, bsKeyInterned(key));
+    return bsObjectKeyEqual(stored, data, size, interned) != 0;
+}
+
+
 BSValue bsObjectGet(BSValue value, const char *key)
 {
     BSValue *found = value.type == BS_OBJECT ? bsObjectValuePtr(value, key, strlen(key)) : NULL;

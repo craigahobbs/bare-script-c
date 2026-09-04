@@ -206,6 +206,16 @@ typedef struct BSScriptFunction {
  */
 bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out);
 
+/*
+ * The one member of an object with exactly one key. A model node - an expression or a statement -
+ * is such an object, whose member's name is its kind. Returns false for any other value; the key
+ * and value are borrowed.
+ */
+bool bsObjectSole(BSValue object, BSString **key, BSValue *value);
+
+/* Whether a stored key equals the string "key" - a pointer compare when both are interned */
+bool bsObjectKeyIs(const BSString *stored, BSValue key);
+
 /* Pointer to the stored value for key, or NULL if absent. Valid until a key is added or removed. */
 BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size);
 BSValue *bsObjectValuePtrString(BSValue object, BSValue key);

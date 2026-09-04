@@ -208,6 +208,8 @@ TEST(model_operand_limits)
     /* Malformed expression statements, operands, and a conditional's branch assigned to a local */
     bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":5}}}}]}");
     bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"bogus\":1}}}]}");
+    bsTestInvalidModel("{\"statements\":[{\"function\":{\"name\":\"f\",\"args\":[],\"statements\":"
+                       "[{\"expr\":{\"name\":\"x\",\"expr\":{\"number\":\"bad\"}}}]}}]}");
     bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"binary\":5}}}]}");
     bsTestInvalidModel("{\"statements\":[{\"expr\":{\"name\":\"x\",\"expr\":{\"number\":\"5\"}}}]}");
     bsTestInvalidModel("{\"statements\":[{\"expr\":{\"expr\":{\"unary\":{\"op\":\"-\",\"expr\":{\"bogus\":1}}}}}]}");
@@ -380,4 +382,33 @@ TEST(model_expression_shapes)
         bsExprFree(expr);
         bsExprFree(expr2);
     }
+}
+
+
+TEST(model_statement_list_form)
+{
+    /* A statement object that spilled to a list and shrank back to one member is still a node */
+    static const char *returnJSON = "{\"expr\":{\"number\":7}}";
+    BSValue statement = bsObjectNew();
+    bsTestObjectFill(statement, "extra%d", 0, 5);
+    bsObjectSet(statement, "return", bsJSONDecode(returnJSON, strlen(returnJSON), NULL));
+    for (int ix = 0; ix < 5; ix++) {
+        char key[16];
+        snprintf(key, sizeof(key), "extra%d", ix);
+        ASSERT_TRUE(bsObjectDelete(statement, key));
+    }
+    ASSERT_INT_EQ(bsObjectCount(statement), 1);
+    ASSERT_INT_EQ(statement.u.object->packed, 0);
+    BSValue statements = bsArrayNew();
+    bsArrayPush(statements, statement);
+    BSValue model = bsObjectNew();
+    bsObjectSet(model, "statements", statements);
+
+    BSScript *script = bsScriptFromModel(model, NULL);
+    ASSERT_NOT_NULL(script);
+    BSOptions *options = bsTestOptions();
+    ASSERT_VALUE(bsExecuteScript(script, options), "7");
+    bsOptionsFree(options);
+    bsScriptRelease(script);
+    bsRelease(model);
 }
