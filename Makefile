@@ -22,18 +22,18 @@ BUILD_DIR := build
 UNAME_S := $(shell uname -s)
 ifeq '$(UNAME_S)' 'Darwin'
     SO_EXT := dylib
-    SO_LDFLAGS = -dynamiclib -install_name @rpath/lib$(LIB_NAME).$(SO_EXT)
+    SO_LDFLAGS := -dynamiclib -install_name @rpath/lib$(LIB_NAME).dylib
     RPATH_FLAGS := -Wl,-rpath,@executable_path -Wl,-rpath,@executable_path/../lib
 else
     SO_EXT := so
-    SO_LDFLAGS = -shared -Wl,-soname,lib$(LIB_NAME).$(SO_EXT)
+    SO_LDFLAGS := -shared -Wl,-soname,lib$(LIB_NAME).so
     RPATH_FLAGS := -Wl,-rpath,'$$ORIGIN' -Wl,-rpath,'$$ORIGIN/../lib'
 endif
 
 
 # Toolchain
 CC ?= cc
-CC_IS_CLANG := $(shell $(CC) --version 2>/dev/null | grep -c -i clang)
+CC_IS_CLANG := $(shell $(CC) --version 2>/dev/null | grep -qi clang && echo 1)
 
 # Use a flag only where the toolchain accepts it - the argument must not contain a comma
 CC_SUPPORTS = $(shell echo 'int main(void){return 0;}' | \
@@ -44,12 +44,12 @@ CC_SUPPORTS = $(shell echo 'int main(void){return 0;}' | \
 WARN_FLAGS := -Wall -Wextra -Werror -Wno-unused-parameter -Wshadow -Wpointer-arith \
     -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes -Wwrite-strings \
     $(call CC_SUPPORTS,-Wno-clobbered)
-BASE_CFLAGS := -std=c11 -pedantic -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -I$(INC_DIR) $(WARN_FLAGS)
 
-# No caller reads errno after a libm call. Without this, GCC and clang on Linux wrap every sqrt,
-# floor, and fmod in an errno check that keeps them out of line; Apple's clang already assumes it,
-# so this makes the ELF build match the code generation that was measured.
-BASE_CFLAGS += -fno-math-errno
+# No caller reads errno after a libm call. Without -fno-math-errno, GCC and clang on Linux wrap
+# every sqrt, floor, and fmod in an errno check that keeps them out of line; Apple's clang already
+# assumes it, so this makes the ELF build match the code generation that was measured.
+BASE_CFLAGS := -std=c11 -pedantic -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -I$(INC_DIR) \
+    $(WARN_FLAGS) -fno-math-errno
 OPT_CFLAGS ?= -O2 -g
 LIBS := -lm
 TEST_LIBS := -pthread
@@ -80,6 +80,7 @@ endif
 INCLUDE_LIB_DIR := lib/include
 INCLUDE_LIB_SRCS := $(sort $(wildcard $(INCLUDE_LIB_DIR)/*.bare))
 INCLUDE_TEST_DIR := $(INCLUDE_LIB_DIR)/test
+INCLUDE_TEST_SRCS := $(sort $(wildcard $(INCLUDE_TEST_DIR)/*.bare))
 INCLUDE_SOURCE_C := $(SRC_DIR)/includeSource.c
 INCLUDE_SOURCE_H := $(INC_DIR)/barescript/includeSource.h
 
@@ -101,9 +102,8 @@ endif
 
 
 # Sources
-LIB_SRCS := $(sort $(wildcard $(SRC_DIR)/*.c))
-LIB_SRCS := $(filter-out $(SRC_DIR)/main.c $(SRC_DIR)/bare.c,$(LIB_SRCS))
 CLI_SRCS := $(SRC_DIR)/bare.c $(SRC_DIR)/main.c
+LIB_SRCS := $(filter-out $(CLI_SRCS),$(sort $(wildcard $(SRC_DIR)/*.c)))
 TEST_SRCS := $(sort $(wildcard $(TEST_DIR)/*.c))
 
 
@@ -112,10 +112,10 @@ OBJ_DIR := $(BUILD_DIR)/obj
 COVER_DIR := $(BUILD_DIR)/cover
 LIB_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(LIB_SRCS))
 CLI_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(CLI_SRCS))
+TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test-%.o,$(TEST_SRCS))
 COVER_SRCS := $(LIB_SRCS) $(SRC_DIR)/bare.c
 COVER_OBJS := $(patsubst $(SRC_DIR)/%.c,$(COVER_DIR)/%.o,$(COVER_SRCS)) \
     $(patsubst $(TEST_DIR)/%.c,$(COVER_DIR)/test-%.o,$(TEST_SRCS))
-TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test-%.o,$(TEST_SRCS))
 
 
 # Build outputs
@@ -131,9 +131,10 @@ COVER_BIN := $(BUILD_DIR)/$(CLI_NAME)-cover
 #
 # Everything that must pass before a commit, as it is in the JavaScript and Python
 # implementations: the unit tests under coverage, the include library suite - which includes its
-# static analysis run - and this project's own language tests. The release build runs last, and
+# static analysis run - and this project's own language tests. The release build runs too, and
 # then those suites run again against it, so a flag, LTO, or profile problem cannot reach a commit
-# unnoticed.
+# unnoticed. Under "make -j" every suite runs as soon as the binary it tests is linked, alongside
+# the release build.
 #
 
 .PHONY: commit
@@ -208,16 +209,13 @@ $(OBJ_DIR)/test-%.o: $(TEST_DIR)/%.c
 	$(CC) $(BASE_CFLAGS) $(OPT_CFLAGS) -I$(TEST_DIR) -MMD -MP -c -o $@ $<
 
 $(LIB_SO): $(LIB_OBJS)
-	@mkdir -p $(dir $@)
 	$(CC) $(OPT_CFLAGS) $(SO_LDFLAGS) -o $@ $^ $(LIBS)
 
 $(LIB_A): $(LIB_OBJS)
-	@mkdir -p $(dir $@)
 	rm -f $@
 	ar rcs $@ $^
 
 $(CLI_BIN): $(CLI_OBJS) $(LIB_SO)
-	@mkdir -p $(dir $@)
 	$(CC) $(OPT_CFLAGS) -o $@ $(CLI_OBJS) -L$(BUILD_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
 
 
@@ -225,12 +223,16 @@ $(CLI_BIN): $(CLI_OBJS) $(LIB_SO)
 # Release - a profile-guided optimization build
 #
 # PGO is a three-stage build: compile instrumented, run a training workload, then recompile with
-# the profile. The training stage below says what the workload covers and why.
+# the profile. Each stage compiles one object per source, so the compiles run in parallel under
+# "make -j" and only the link-time optimization itself is serial. The training stage below says
+# what the workload covers and why.
 #
 
 RELEASE_DIR := $(BUILD_DIR)/release
-RELEASE_OBJ_DIR := $(RELEASE_DIR)/obj
-PROFILE_DIR := $(BUILD_DIR)/profile
+RELEASE_LIB_SO := $(RELEASE_DIR)/lib$(LIB_NAME).$(SO_EXT)
+RELEASE_LIB_A := $(RELEASE_DIR)/lib$(LIB_NAME).a
+RELEASE_CLI := $(RELEASE_DIR)/$(CLI_NAME)
+
 # -O2, not -O3. On Apple clang the two are equal in speed and -O2 emits 10% less code; on GCC 14
 # and aarch64 Linux -O3 is 8.1% slower across the performance suite - every test but one, from
 # -0.3% on markdownParse to +23% on mandelbrot - and 2.2% slower on the include test suite.
@@ -245,22 +247,30 @@ PROFILE_DIR := $(BUILD_DIR)/profile
 # see PROFILE_MERGE for why that had to be said.
 # -flto=auto avoids the lto-wrapper "serial compilation" note on GCC while preserving full LTO.
 RELEASE_CFLAGS ?= -O2 -DNDEBUG -flto=auto
-RELEASE_LIB_SO := $(RELEASE_DIR)/lib$(LIB_NAME).$(SO_EXT)
-RELEASE_LIB_A := $(RELEASE_DIR)/lib$(LIB_NAME).a
-RELEASE_CLI := $(RELEASE_DIR)/$(CLI_NAME)
-RELEASE_A_OBJS := $(patsubst $(SRC_DIR)/%.c,$(RELEASE_OBJ_DIR)/%.o,$(LIB_SRCS))
 
-# The static library keeps the profile but drops link-time optimization, so it stays an archive of
-# ordinary object files that any linker consumes rather than one of compiler intermediate code
+# The shared library and the command-line interface link from link-time optimization objects. The
+# static library keeps the profile but drops link-time optimization, so it stays an archive of
+# ordinary object files that any linker consumes rather than one of compiler intermediate code.
+RELEASE_LTO_DIR := $(RELEASE_DIR)/lto
+RELEASE_LTO_OBJS := $(patsubst $(SRC_DIR)/%.c,$(RELEASE_LTO_DIR)/%.o,$(LIB_SRCS))
+RELEASE_OBJ_DIR := $(RELEASE_DIR)/obj
+RELEASE_A_OBJS := $(patsubst $(SRC_DIR)/%.c,$(RELEASE_OBJ_DIR)/%.o,$(LIB_SRCS))
 RELEASE_A_CFLAGS := $(filter-out -flto -flto=%,$(RELEASE_CFLAGS))
 
-ifneq '$(filter-out 0,$(CC_IS_CLANG))' ''
+# The instrumented command-line interface and the profile it produces
+PGO_DIR := $(BUILD_DIR)/pgo
+PGO_CLI := $(PGO_DIR)/$(CLI_NAME)
+PGO_OBJS := $(patsubst $(SRC_DIR)/%.c,$(PGO_DIR)/%.o,$(LIB_SRCS) $(CLI_SRCS))
+PROFILE_DIR := $(BUILD_DIR)/profile
+
+ifneq '$(CC_IS_CLANG)' ''
     PROFILE_DATA := $(PROFILE_DIR)/barescript.profdata
-    # The evaluator's indirect calls have many targets (library functions). Clang's
-    # default of one value-profile counter per site exhausts the static pool during
-    # training: "Unable to track new values: Running out of static counters."
-    # Eight is the smallest power of two that covers the training workload.
-    PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR) -mllvm -vp-counters-per-site=8
+    PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR)
+    # The evaluator's indirect calls have many targets (library functions). Clang's default of one
+    # value-profile counter per site exhausts the static pool during training: "Unable to track
+    # new values: Running out of static counters." Eight is the smallest power of two that covers
+    # the training workload.
+    PROFILE_GENERATE_CFLAGS := $(PROFILE_GENERATE) -mllvm -vp-counters-per-site=8
     # Clang applies the profile function by function, matching each on a hash of its control
     # flow, and reports a mismatch through -Wbackend-plugin, which -Werror makes fatal: a stale
     # profile fails stage 3 rather than silently not applying. (The -Wprofile-instr-* groups
@@ -269,7 +279,7 @@ ifneq '$(filter-out 0,$(CC_IS_CLANG))' ''
     # functions the CLI never calls, so -pgo-warn-missing-function would fire on every build, and
     # keeping them with -export_dynamic gives them zero counts, which compiles that API as cold
     # code. So the check on merge below is what would catch a profile that is not this program's.
-    PROFILE_USE = -fprofile-use=$(CURDIR)/$(PROFILE_DATA)
+    PROFILE_USE := -fprofile-use=$(CURDIR)/$(PROFILE_DATA)
     PROFILE_CHECK := bsRunCode bsFunctionCall bsRelease
     PROFILE_MERGE = set -e; \
         xcrun llvm-profdata merge -output=$(PROFILE_DATA) $(PROFILE_DIR)/*.profraw; \
@@ -280,35 +290,26 @@ ifneq '$(filter-out 0,$(CC_IS_CLANG))' ''
                 { echo "PGO: $(PROFILE_DATA) has no profile for $$fn" >&2; exit 1; }; \
         done
 else
-    PROFILE_DATA := $(PROFILE_DIR)
-    PROFILE_GENERATE := -fprofile-generate=$(PROFILE_DIR) -fprofile-update=single
-    PROFILE_USE = -fprofile-use=$(PROFILE_DIR) -fprofile-correction -Wno-missing-profile -Wno-clobbered
-    #
-    # GCC names each .gcda for the compilation that will read it back: the output path with "/"
-    # mangled to "#", then the translation unit. Training produces one program, build/pgo/bare, so
-    # not one of those names matches what stage 3 compiles - the shared library, the CLI, and the
-    # static library's objects each ask for a different one, and a single-object compile drops the
-    # trailing unit name. A profile GCC cannot find is not an error, it just silently builds
-    # without one, and -Wno-missing-profile above hides the warning that would say so. So copy each
-    # trained profile to every name stage 3 looks for.
-    # "#" would start a make comment even inside a recipe, so the separator comes from the shell
-    PROFILE_HASH := $(shell printf '\043')
-    PROFILE_MERGE = set -e; cd $(PROFILE_DIR) && \
-        mangle() { echo "$$1" | tr / '$(PROFILE_HASH)'; } && \
-        src="$$(mangle '$(CURDIR)/$(BUILD_DIR)/pgo/$(CLI_NAME)')" && \
-        so="$$(mangle '$(CURDIR)/$(RELEASE_LIB_SO)')" && \
-        cli="$$(mangle '$(CURDIR)/$(RELEASE_CLI)')" && \
-        obj="$$(mangle '$(CURDIR)/$(RELEASE_OBJ_DIR)')" && \
-        for f in "$$src"-*.gcda; do \
-            [ -e "$$f" ] || { echo "PGO: nothing matches $$src-*.gcda - the training output moved" >&2; exit 1; }; \
-            tu="$${f$(PROFILE_HASH)$$src-}" && \
-            cp -f "$$f" "$$so-$$tu" && cp -f "$$f" "$$cli-$$tu" && \
-            cp -f "$$f" "$$obj$(PROFILE_HASH)$$tu"; \
-        done && \
+    # GCC names each translation unit's profile for the compilation that reads it back: beside the
+    # object, "<object>.gcda", or for a source compiled straight to an executable,
+    # "<executable>-<unit>.gcda". Training writes them beside the stage-1 objects, and not one of
+    # those names is what stage 3 asks for - the shared library's objects, the static library's,
+    # and the command-line interface each want a different one. A profile GCC cannot find is not
+    # an error, it just silently builds without one, and -Wno-missing-profile hides the warning
+    # that would say so. So copy each trained profile to every name stage 3 looks for.
+    PROFILE_DATA := $(PROFILE_DIR)/gcda.stamp
+    PROFILE_GENERATE := -fprofile-generate
+    PROFILE_GENERATE_CFLAGS := $(PROFILE_GENERATE) -fprofile-update=single
+    PROFILE_USE := -fprofile-use -fprofile-correction -Wno-missing-profile -Wno-clobbered
+    PROFILE_MERGE = set -e; mkdir -p $(RELEASE_LTO_DIR) $(RELEASE_OBJ_DIR); \
         for tu in $(notdir $(basename $(LIB_SRCS))); do \
-            [ -e "$$so-$$tu.gcda" ] || \
-                { echo "PGO: $(RELEASE_LIB_SO) would build with no profile for $$tu" >&2; exit 1; }; \
-        done
+            cp -f $(PGO_DIR)/$$tu.gcda $(RELEASE_LTO_DIR)/$$tu.gcda; \
+            cp -f $(PGO_DIR)/$$tu.gcda $(RELEASE_OBJ_DIR)/$$tu.gcda; \
+        done; \
+        for tu in $(notdir $(basename $(CLI_SRCS))); do \
+            cp -f $(PGO_DIR)/$$tu.gcda $(RELEASE_DIR)/$(CLI_NAME)-$$tu.gcda; \
+        done; \
+        touch $(PROFILE_DATA)
 endif
 
 .PHONY: release
@@ -316,43 +317,50 @@ release: $(RELEASE_CLI) $(RELEASE_LIB_A)
 	@echo
 	@echo "Release build: $(RELEASE_CLI)"
 
-# Stage 1 and 2 - build instrumented and run the training workload
+# Stage 1 - build instrumented
+$(PGO_DIR)/%.o: $(SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_GENERATE_CFLAGS) -MMD -MP -c -o $@ $<
+
+$(PGO_CLI): $(PGO_OBJS)
+	$(CC) $(RELEASE_CFLAGS) $(PROFILE_GENERATE) -o $@ $^ $(LIBS)
+
+# Stage 2 - run the training workload
 #
 # Two programs, merged by count: the performance suite, which is the benchmark itself, and the
 # include library test suite, which parses about 2 MB of BareScript from source and runs every
 # include library function - the path "bare script.bare" takes, and one the performance suite
 # never does since it loads bundled models. A synthetic parse script, the language tests, and a
-# static-analysis run were measured and moved neither workload beyond build-to-build noise. %p so
-# each process writes its own profraw, then merge.
+# static-analysis run were measured and moved neither workload beyond build-to-build noise. The
+# two are independent, so they run at once; %p so each process writes its own profraw, then merge.
 # With includes compiled out, the training programs read them from lib/include instead.
 # A merge whose check fails must not leave its output behind: make would take it as up to date,
 # and the next run would go straight to stage 3, past the check.
-PROFILE_ENV = LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
+PROFILE_ENV := LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
     $(if $(INCLUDE_CFLAGS),BARESCRIPT_INCLUDE_PATH=$(CURDIR)/$(INCLUDE_LIB_DIR))
-$(PROFILE_DATA): $(LIB_SRCS) $(CLI_SRCS) $(PERF_DIR)/test.bare $(INCLUDE_LIB_SRCS) \
-        $(sort $(wildcard $(INCLUDE_TEST_DIR)/*.bare))
-	@rm -rf $(PROFILE_DIR) $(BUILD_DIR)/pgo
-	@mkdir -p $(PROFILE_DIR) $(BUILD_DIR)/pgo
-	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_GENERATE) -o $(BUILD_DIR)/pgo/$(CLI_NAME) \
-	    $(LIB_SRCS) $(CLI_SRCS) $(LIBS)
-	$(PROFILE_ENV) $(BUILD_DIR)/pgo/$(CLI_NAME) $(PERF_DIR)/test.bare > /dev/null
-	$(PROFILE_ENV) $(BUILD_DIR)/pgo/$(CLI_NAME) -d -m $(INCLUDE_TEST_DIR)/runTests.bare > /dev/null
+$(PROFILE_DATA): $(PGO_CLI) $(PERF_DIR)/test.bare $(INCLUDE_LIB_SRCS) $(INCLUDE_TEST_SRCS)
+	@rm -rf $(PROFILE_DIR) $(PGO_DIR)/*.gcda
+	@mkdir -p $(PROFILE_DIR)
+	$(PROFILE_ENV) $(PGO_CLI) $(PERF_DIR)/test.bare > /dev/null & \
+	$(PROFILE_ENV) $(PGO_CLI) -d -m $(INCLUDE_TEST_DIR)/runTests.bare > /dev/null; status=$$?; \
+	wait $$! && exit $$status
 	( $(PROFILE_MERGE) ) || { rm -rf $(PROFILE_DATA); exit 1; }
 
 # Stage 3 - rebuild with the profile
-$(RELEASE_LIB_SO): $(PROFILE_DATA)
-	@mkdir -p $(RELEASE_DIR)
-	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) $(SO_CFLAGS) $(SO_LDFLAGS) \
-	    -o $@ $(LIB_SRCS) $(LIBS)
-
-$(RELEASE_CLI): $(RELEASE_LIB_SO)
-	@mkdir -p $(RELEASE_DIR)
-	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -o $@ $(CLI_SRCS) \
-	    -L$(RELEASE_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
+$(RELEASE_LTO_DIR)/%.o: $(SRC_DIR)/%.c $(PROFILE_DATA)
+	@mkdir -p $(dir $@)
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) $(SO_CFLAGS) -c -o $@ $<
 
 $(RELEASE_OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(PROFILE_DATA)
 	@mkdir -p $(dir $@)
 	$(CC) $(BASE_CFLAGS) $(RELEASE_A_CFLAGS) $(PROFILE_USE) $(SO_CFLAGS) -c -o $@ $<
+
+$(RELEASE_LIB_SO): $(RELEASE_LTO_OBJS)
+	$(CC) $(RELEASE_CFLAGS) $(PROFILE_USE) $(SO_LDFLAGS) -o $@ $^ $(LIBS)
+
+$(RELEASE_CLI): $(RELEASE_LIB_SO)
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -o $@ $(CLI_SRCS) \
+	    -L$(RELEASE_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
 
 $(RELEASE_LIB_A): $(RELEASE_A_OBJS)
 	rm -f $@
@@ -364,8 +372,7 @@ $(RELEASE_LIB_A): $(RELEASE_A_OBJS)
 #
 
 $(TEST_BIN): $(TEST_OBJS) $(OBJ_DIR)/bare.o $(LIB_A)
-	@mkdir -p $(dir $@)
-	$(CC) -o $@ $(TEST_OBJS) $(OBJ_DIR)/bare.o $(LIB_A) $(LIBS) $(TEST_LIBS)
+	$(CC) -o $@ $^ $(LIBS) $(TEST_LIBS)
 
 .PHONY: test
 test: $(TEST_BIN)
@@ -390,10 +397,11 @@ $(COVER_DIR)/test-%.o: $(TEST_DIR)/%.c
 	$(CC) $(BASE_CFLAGS) $(COVER_CFLAGS) -I$(TEST_DIR) -MMD -MP -c -o $@ $<
 
 $(COVER_BIN): $(COVER_OBJS)
-	@mkdir -p $(dir $@)
 	$(CC) --coverage -o $@ $^ $(LIBS) $(TEST_LIBS)
 
-GCOV := $(if $(filter-out 0,$(CC_IS_CLANG)),xcrun llvm-cov gcov,gcov)
+# gcov names each report for its source and writes it to the current directory, which must be the
+# one the objects were compiled in for it to find the source - so the reports are moved afterwards
+GCOV := $(if $(CC_IS_CLANG),xcrun llvm-cov gcov,gcov)
 COVER_GCOV := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/coverage/%.c.gcov,$(COVER_SRCS))
 
 .PHONY: cover
@@ -407,53 +415,43 @@ cover: $(COVER_BIN)
 
 
 #
-# The BareScript include library test suite
+# The BareScript include library test suite and the language test suite
 #
-# The same three runs the JavaScript and Python implementations make, over the same test scripts,
-# so the reports are directly comparable.
+# The same three include library runs the JavaScript and Python implementations make, over the
+# same test scripts, so the reports are directly comparable. The language tests are this
+# project's own suite. Each suite is its own target, so under "make -j" they run at once.
 #
 
-.PHONY: test-include test-include-lint test-include-markdownup test-include-run
 # The binary under test. The release build is what ships, and PGO and LTO are the two things most
 # able to change behaviour without changing a source line, so "test-release" runs these same suites
 # against it - see the pre-commit gate.
 TEST_CLI ?= $(CLI_BIN)
 
+.PHONY: test-include test-include-lint test-include-markdownup test-include-run test-language
 test-include: test-include-lint test-include-markdownup test-include-run
-test-include-lint test-include-markdownup test-include-run: compile
 
-test-include-lint:
+test-include-lint: $(TEST_CLI)
 	$(TEST_CLI) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
 	$(TEST_CLI) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
 
-test-include-markdownup:
+test-include-markdownup: $(TEST_CLI)
 	$(TEST_CLI) -d -v vUnittestReport true \
 	    $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
 
-test-include-run:
+test-include-run: $(TEST_CLI)
 	$(TEST_CLI) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
 
-
-#
-# The release build under the same suites
-#
-# The shipped binary is built by a different pipeline - profile-guided, link-time optimized - than
-# the one every other target tests. Running the include library suite and the language tests
-# against it is what catches a miscompile, or a profile that silently failed to apply.
-#
-
-.PHONY: test-release
-test-release: release
-	$(MAKE) test-include test-language TEST_CLI=$(CURDIR)/$(RELEASE_CLI)
-
-
-#
-# The BareScript language test suite
-#
-
-.PHONY: test-language
-test-language: compile
+test-language: $(TEST_CLI)
 	$(TEST_CLI) -d -m $(TEST_DIR)/include/runTests.bare
+
+# The release build under the same suites. The shipped binary is built by a different pipeline -
+# profile-guided, link-time optimized - than the one every other target tests; running the suites
+# against it is what catches a miscompile, or a profile that silently failed to apply. The
+# sub-make depends only on the release binary, which is complete, so it cannot race the outer
+# make's development build.
+.PHONY: test-release
+test-release: $(RELEASE_CLI)
+	$(MAKE) test-include test-language TEST_CLI=$(RELEASE_CLI)
 
 
 #
@@ -480,7 +478,6 @@ PERF_NATIVE := $(BUILD_DIR)/perf-native
 
 .PHONY: perf
 perf: $(RELEASE_CLI) $(PERF_NATIVE)
-	mkdir -p $(dir $(PERF_CSV_TMP))
 	echo "language,test,runs,timeMs" > $(PERF_CSV_TMP)
 	set -e; for X in $$(seq 1 $(PERF_RUNS)); do \
 	    echo "Run $$X of $(PERF_RUNS) - BareScript (C)"; \
@@ -541,4 +538,4 @@ install: release
 	install -m 644 $(INC_DIR)/barescript/*.h $(DESTDIR)$(PREFIX)/include/barescript/
 
 
--include $(wildcard $(OBJ_DIR)/*.d) $(wildcard $(COVER_DIR)/*.d)
+-include $(wildcard $(OBJ_DIR)/*.d $(COVER_DIR)/*.d $(PGO_DIR)/*.d)
