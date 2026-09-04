@@ -23,21 +23,18 @@
  * Finish a cached system include's chunk
  *
  * A system script is never statement-counted or coverage-recorded, so its STMT markers only cost
- * dispatch: they are stripped, with jump targets remapped and each statement's start index kept
- * in coverPcs for error line numbers. The borrowed statement models are dropped with the parser
- * model. Data words (call operands, a trap's line) are never STMT and never jumps.
+ * dispatch: they are stripped in place, with jump targets remapped and each statement's start
+ * index kept in coverPcs for error line numbers. Data words (call operands, a trap's line) are
+ * never STMT and never jumps.
  */
-static void bsCodeFinishSystem(BSCode *code)
+static void bsCodeStripStatements(BSCode *code)
 {
-    free(code->cover);
-    code->cover = NULL;
-
     size_t count = code->count;
+    BSInst *inst = code->inst;
     uint32_t *map = bsAlloc(count * sizeof(uint32_t));
-    BSInst *inst = bsAlloc(count * sizeof(BSInst));
     size_t stripped = 0;
     for (size_t pc = 0; pc < count; pc++) {
-        BSInst word = code->inst[pc];
+        BSInst word = inst[pc];
         map[pc] = (uint32_t) stripped;
         if (word.op == BS_OP_STMT) {
             code->coverPcs[word.a] = (uint32_t) stripped;
@@ -52,20 +49,17 @@ static void bsCodeFinishSystem(BSCode *code)
         }
     }
     free(map);
-    free(code->inst);
-    code->inst = inst;
     code->count = stripped;
 }
 
 
 void bsScriptDropModel(BSScript *script)
 {
-    bsCodeFinishSystem(&script->code);
+    bsScriptForgetModel(script);
+    bsCodeStripStatements(&script->code);
     for (size_t ix = 0; ix < script->functionCount; ix++) {
-        bsCodeFinishSystem(&script->functions[ix]->code);
+        bsCodeStripStatements(&script->functions[ix]->code);
     }
-    bsRelease(script->model);
-    script->model = bsNull();
 }
 
 
@@ -155,10 +149,6 @@ void bsExprFree(BSExpr *expr)
 static void bsFunctionDefFree(BSFunctionDef *def)
 {
     bsRelease(def->name);
-    for (size_t ix = 0; ix < def->argCount; ix++) {
-        bsRelease(def->argNames[ix]);
-    }
-    free(def->argNames);
     bsCodeFree(&def->code);
     free(def);
 }
@@ -1216,16 +1206,11 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
     def->lastArgArray = bsValueBoolean(bsObjectGetString(model, bsKeys.lastArgArray));
 
     BSValue args = bsObjectGetString(model, bsKeys.args);
-    size_t argCount = bsArrayCount(args);
-    if (argCount != 0) {
-        def->argNames = bsAlloc(argCount * sizeof(BSValue));
-        for (size_t ix = 0; ix < argCount; ix++) {
-            BSValue argName = bsArrayGet(args, ix);
-            if (argName.type != BS_STRING) {
-                bsFunctionDefFree(def);
-                return false;
-            }
-            def->argNames[def->argCount++] = bsInternName(argName);
+    def->argCount = bsArrayCount(args);
+    for (size_t ix = 0; ix < def->argCount; ix++) {
+        if (bsArrayGet(args, ix).type != BS_STRING) {
+            bsFunctionDefFree(def);
+            return false;
         }
     }
 
@@ -1236,7 +1221,7 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
     BSEmit body;
     bsEmitInit(&body, e->script, e->functionCap);
     for (size_t ix = 0; ix < def->argCount; ix++) {
-        bsSlotAdd(&body, def->argNames[ix]);
+        bsSlotAdd(&body, bsArrayGet(args, ix));
     }
     size_t stmtCount = bsArrayCount(statements);
     for (size_t ix = 0; ix < stmtCount; ix++) {

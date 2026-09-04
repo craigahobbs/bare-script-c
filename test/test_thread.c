@@ -117,7 +117,6 @@ static void *bsThreadRun(void *data)
         bsOptionsFree(options);
         bsExprFree(expr);
     }
-    memset(&error, 0, sizeof(error));
     BSScript *bad = bsParseScript("foo bar", 7, 1, "bad.bare", &error);
     if (bad != NULL) {
         bsThreadFail(task, "parse error", "no error");

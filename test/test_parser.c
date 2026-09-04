@@ -622,7 +622,6 @@ TEST(parser_bootstrap_errors)
     bsParserErrorFree(&error);
 
     /* Without a script name the message has no location */
-    memset(&error, 0, sizeof(error));
     ASSERT_NULL(bsParseExpression(bsStringData(text), bsStringSize(text), 0, NULL, false, &error));
     ASSERT_VALUE_STRING(bsRetain(error.message), "Maximum expression depth exceeded\n");
     ASSERT_INT_EQ(error.scriptName.type, BS_NULL);

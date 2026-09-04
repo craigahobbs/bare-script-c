@@ -93,8 +93,7 @@ struct BSExpr {
 /* A function definition */
 struct BSFunctionDef {
     BSValue name;
-    BSValue *argNames;
-    size_t argCount;
+    size_t argCount;      /* the arguments are the first slots of the code */
     bool lastArgArray;
     BSCode code;
 };

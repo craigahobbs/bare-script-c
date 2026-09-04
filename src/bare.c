@@ -237,7 +237,7 @@ int bsMain(int argc, char **argv)
                 }
             } else {
                 inlineCount++;
-                size_t inlineDisplay = inlineCount - ixUserScript;
+                size_t inlineDisplay = inlineCount > ixUserScript ? inlineCount - ixUserScript : 0;
                 if (inlineDisplay > 1) {
                     snprintf(scriptNameBuffer, sizeof(scriptNameBuffer), "<string%zu>", inlineDisplay);
                 } else {

@@ -299,9 +299,8 @@ static int bsCodeLine(const BSCode *code, size_t pc)
 static void bsCoverageGrow(BSScript *script, int line)
 {
     int cap = script->coverageLineCap;
-    int needed = line + 1;
     int newCap = cap == 0 ? 32 : cap;
-    while (newCap < needed) {
+    while (newCap <= line) {
         newCap *= 2;
     }
     script->coverageCounts = bsRealloc(script->coverageCounts, (size_t) newCap * sizeof(BSValue *));
@@ -361,19 +360,16 @@ static void bsRecordCoverage(BSScript *script, const BSCode *code, uint32_t inde
     char lineKey[16];
     snprintf(lineKey, sizeof(lineKey), "%d", line);
     BSValue coveredStatement = bsObjectGet(script->coverageCovered, lineKey);
-    if (coveredStatement.type == BS_OBJECT) {
-        script->coverageCounts[line] = bsObjectValuePtr(coveredStatement, "count", 5);
-        script->coverageCounts[line]->u.number += 1;
-        return;
+    if (coveredStatement.type != BS_OBJECT) {
+        /* A script that forgot its model borrows the statement models back before recording one */
+        BSValue statement = (code->cover != NULL || bsScriptRestoreCover(script)) ? code->cover[index] : bsNull();
+        coveredStatement = bsObjectNew();
+        bsObjectSet(coveredStatement, "statement", bsRetain(statement));
+        bsObjectSet(coveredStatement, "count", bsNumber(0));
+        bsObjectSet(script->coverageCovered, lineKey, coveredStatement);
     }
-
-    /* A script that forgot its model borrows the statement models back before recording one */
-    BSValue statement = (code->cover != NULL || bsScriptRestoreCover(script)) ? code->cover[index] : bsNull();
-    coveredStatement = bsObjectNew();
-    bsObjectSet(coveredStatement, "statement", bsRetain(statement));
-    bsObjectSet(coveredStatement, "count", bsNumber(1));
-    bsObjectSet(script->coverageCovered, lineKey, coveredStatement);
     script->coverageCounts[line] = bsObjectValuePtr(coveredStatement, "count", 5);
+    script->coverageCounts[line]->u.number += 1;
 }
 
 
@@ -418,12 +414,9 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     size_t regCount = slotCount + def->code.tempCount;
 
     /* The registers: the slots, filled from the arguments, then the temporaries, nulled */
-    BSScope scope;
-    bsScopeInit(&scope);
     BSValue regsInline[BS_REGS_INLINE];
     BSValue *regs = regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue));
-    scope.slots = regs;
-    scope.slotCount = slotCount;
+    BSScope scope = {regs, slotCount, bsNull()};
 
     for (size_t ix = 0; ix < def->argCount; ix++) {
         if (def->lastArgArray && ix + 1 == def->argCount) {
@@ -442,13 +435,7 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
 
     BSValue result = bsRunCode(&def->code, scriptFunction->script, options, &scope, false);
     for (size_t ix = 0; ix < regCount; ix++) {
-        /*
-         * Most of a frame's registers are slots the call never assigned, so the test decides on
-         * the four-byte type alone and only a reference has its whole value read
-         */
-        if (BS_IS_REF(regs[ix])) {
-            bsReleaseInline(regs[ix]);
-        }
+        bsReleaseInline(regs[ix]);
     }
     if (regs != regsInline) {
         free(regs);
@@ -668,7 +655,7 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
         bsRelease(function);
         options->depth--;
         if (options->argsError.type == BS_STRING) {
-            if (options->debug && options->logFn != NULL) {
+            if (options->debug) {
                 const char *scriptName = (script != NULL && script->scriptName.type == BS_STRING) ?
                     bsStringData(script->scriptName) : "";
                 bsLog(options, "%s:%d: BareScript: Function \"%s\" failed with error: %s", scriptName,
@@ -778,8 +765,7 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
     options->urlFn = bsUrlFileRelative;
     options->urlData = bsStrdup(bsStringData(includeUrl));
     options->urlDataFree = free;
-    BSValue result = bsRunCode(&includeScript->code, includeScript, options, NULL, false);
-    bsRelease(result);
+    bsRelease(bsRunCode(&includeScript->code, includeScript, options, NULL, false));
 
     if (options->logFn != NULL && options->debug && options->error.type != BS_STRING) {
         BSValue warnings = bsLintScript(includeScript, options->globals);
@@ -967,7 +953,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             regs[ix] = bsNull();
         }
     }
-    BSValue locals = (ownRegs && scope != NULL) ? scope->object : bsNull();
+    BSValue locals = scope != NULL ? scope->object : bsNull();
 
     bool countStatements = script != NULL && !script->system;
     BSValue coverage = bsNull();
@@ -1247,9 +1233,7 @@ BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue
     if (expr == NULL) {
         return bsNull();
     }
-    BSScope scope;
-    bsScopeInit(&scope);
-    scope.object = locals;
+    BSScope scope = {NULL, 0, locals};
     BSValue result = bsRunCode(&expr->code, NULL, options, &scope, builtins);
     bsExprFree(expr);
     return result;
