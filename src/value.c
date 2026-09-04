@@ -665,16 +665,10 @@ void bsSBAppendFormat(BSStringBuilder *sb, const char *format, ...)
 {
     va_list args;
     va_start(args, format);
-    va_list argsCopy;
-    va_copy(argsCopy, args);
-    int size = vsnprintf(NULL, 0, format, argsCopy);
-    va_end(argsCopy);
-    if (size > 0) {
-        bsSBReserve(sb, (size_t) size);
-        vsnprintf(sb->data + sb->size, (size_t) size + 1, format, args);
-        sb->size += (size_t) size;
-    }
+    BSValue text = bsStringNewVFormat(format, args);
     va_end(args);
+    bsSBAppend(sb, bsStringData(text), bsStringSize(text));
+    bsReleaseInline(text);
 }
 
 
@@ -2049,7 +2043,6 @@ BSValue bsFunctionNew(const char *name, BSFunctionFn fn, void *data, void (*data
     function->fn = fn;
     function->data = data;
     function->dataFree = dataFree;
-    function->name = bsStringNew(name).u.string;
     function->intrinsic = 0;
 
     BSValue value;
@@ -2111,7 +2104,6 @@ void bsReleaseDestroyed(BSValue value)
         if (function->dataFree != NULL) {
             function->dataFree(function->data);
         }
-        bsReleaseInline(bsStringTake(function->name));
         free(function);
         break;
     }
@@ -2538,34 +2530,22 @@ static bool bsParseDigits(const char *text, size_t offset, size_t count, int *re
 
 bool bsDatetimeParse(const char *text, size_t size, int64_t *result)
 {
+    /* The date - "YYYY-MM-DD" - alone is a local-time date; the datetime form continues with
+       "THH:MM:SS[.fff](Z|(+|-)HH:MM)" */
     int year, month, day;
-
-    /* Date form - "YYYY-MM-DD" - is a local-time date */
+    if ((size != 10 && size < 20) || text[4] != '-' || text[7] != '-' ||
+        !bsParseDigits(text, 0, 4, &year) || !bsParseDigits(text, 5, 2, &month) ||
+        !bsParseDigits(text, 8, 2, &day) || month < 1 || month > 12 || day < 1 || day > 31) {
+        return false;
+    }
     if (size == 10) {
-        if (text[4] != '-' || text[7] != '-' ||
-            !bsParseDigits(text, 0, 4, &year) || !bsParseDigits(text, 5, 2, &month) ||
-            !bsParseDigits(text, 8, 2, &day)) {
-            return false;
-        }
-        if (month < 1 || month > 12 || day < 1 || day > 31) {
-            return false;
-        }
         *result = bsDatetimeFromParts(year, month, day, 0, 0, 0, 0);
         return true;
     }
-
-    /* Datetime form - "YYYY-MM-DDTHH:MM:SS[.fff](Z|(+|-)HH:MM)" */
-    if (size < 20 || text[4] != '-' || text[7] != '-' || text[10] != 'T' ||
-        text[13] != ':' || text[16] != ':') {
-        return false;
-    }
     int hour, minute, second;
-    if (!bsParseDigits(text, 0, 4, &year) || !bsParseDigits(text, 5, 2, &month) ||
-        !bsParseDigits(text, 8, 2, &day) || !bsParseDigits(text, 11, 2, &hour) ||
-        !bsParseDigits(text, 14, 2, &minute) || !bsParseDigits(text, 17, 2, &second)) {
-        return false;
-    }
-    if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 24 || minute > 59 || second > 59) {
+    if (text[10] != 'T' || text[13] != ':' || text[16] != ':' ||
+        !bsParseDigits(text, 11, 2, &hour) || !bsParseDigits(text, 14, 2, &minute) ||
+        !bsParseDigits(text, 17, 2, &second) || hour > 24 || minute > 59 || second > 59) {
         return false;
     }
 
@@ -2650,8 +2630,7 @@ BSValue bsValueString(BSValue value)
     case BS_BOOLEAN:
         return bsStringNew(value.u.boolean ? "true" : "false");
     case BS_NUMBER:
-        bsNumberFormat(value.u.number, buffer, sizeof(buffer));
-        return bsStringNew(buffer);
+        return bsStringNewAscii(buffer, bsNumberFormat(value.u.number, buffer, sizeof(buffer)));
     case BS_DATETIME: {
         BSDatetimeParts parts;
         bsDatetimeParts(value.u.datetime, &parts);
@@ -2778,7 +2757,6 @@ int bsValueCompare(BSValue left, BSValue right)
         return BS_COMPARE(leftCount, rightCount);
     }
 
-    /* Values of different types compare by type name - the ranks are the names' sorted order */
-    static const signed char rank[] = {4, 1, 5, 2, 8, 0, 6, 3, 7};
-    return rank[left.type] < rank[right.type] ? -1 : 1;
+    /* Values of different types compare by type name */
+    return strcmp(bsTypeNames[left.type], bsTypeNames[right.type]) < 0 ? -1 : 1;
 }

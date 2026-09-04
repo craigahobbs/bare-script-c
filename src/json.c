@@ -126,8 +126,7 @@ static void bsJSONEncodeValue(BSStringBuilder *sb, BSValue value, int indent, in
         if (!isfinite(value.u.number)) {
             bsSBAppendString(sb, "null");
         } else {
-            bsNumberFormat(value.u.number, buffer, sizeof(buffer));
-            bsSBAppendString(sb, buffer);
+            bsSBAppend(sb, buffer, bsNumberFormat(value.u.number, buffer, sizeof(buffer)));
         }
         break;
 
@@ -352,12 +351,9 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey
         }
     }
 
-    if (asKey) {
-        *result = bsStringInternExisting(sb.data != NULL ? sb.data : "", sb.size);
-        bsSBFree(&sb);
-    } else {
-        *result = bsSBToValue(&sb);
-    }
+    const char *data = sb.data != NULL ? sb.data : "";
+    *result = asKey ? bsStringInternExisting(data, sb.size) : bsStringNewSize(data, sb.size);
+    bsSBFree(&sb);
     return true;
 }
 
