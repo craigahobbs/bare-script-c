@@ -385,14 +385,20 @@ static void bsRecordCoverage(BSScript *script, const BSCode *code, uint32_t inde
 }
 
 
-static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, bool hasCoverage,
-                        BSValue coverage)
+/*
+ * A backward jump lands on the statement it repeats without executing that statement's STMT, so a
+ * loop body would be counted once. Only reached when coverage is recording - see BS_JUMP_COVER,
+ * which keeps the call itself out of the interpreter's jumps, about a quarter of all dispatches.
+ */
+static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, BSValue coverage)
 {
-    if (!hasCoverage || target == 0) {
-        return;
-    }
-    const BSInst *prev = &code->inst[target - 1];
-    if (prev->op != BS_OP_STMT) {
+    /*
+     * Only a target that lands just past a STMT records anything. Target zero never does - a
+     * covered script emits a STMT for its first statement, so every label it can jump back to sits
+     * beyond it - and testing for it here is also what keeps the index below from underflowing.
+     */
+    const BSInst *prev = target != 0 ? &code->inst[target - 1] : NULL;
+    if (prev == NULL || prev->op != BS_OP_STMT) {
         return;
     }
     bsRecordCoverage(script, code, prev->a, coverage);
@@ -1024,11 +1030,19 @@ static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t sl
     } \
     BS_NEXT()
 
+/* "hasCoverage" is fixed for the whole run, so the branch predicts and the call is not built */
+#define BS_JUMP_COVER(target) \
+    do { \
+        if (hasCoverage) { \
+            bsJumpCover(code, (target), script, coverage); \
+        } \
+    } while (0)
+
 #define BS_JUMP_IF(name, cond) \
     BS_CASE(name) { \
         BSValue value = BS_READ(inst->a); \
         if (cond) { \
-            bsJumpCover(code, inst->w, script, hasCoverage, coverage); \
+            BS_JUMP_COVER(inst->w); \
             pc = inst->w; \
         } \
     } \
@@ -1155,7 +1169,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_NEXT();
 
         BS_CASE(JUMP)
-            bsJumpCover(code, inst->w, script, hasCoverage, coverage);
+            BS_JUMP_COVER(inst->w);
             pc = inst->w;
             BS_NEXT();
 
