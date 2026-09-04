@@ -40,8 +40,8 @@ make compile
 - [Testing](#testing)
   - [The Include Library Test Suite](#the-include-library-test-suite)
 - [Performance](#performance)
-  - [The Cross-Language Benchmarks](#the-cross-language-benchmarks)
-  - [The Include Library Benchmarks](#the-include-library-benchmarks)
+  - [Cross-Language Benchmarks](#cross-language-benchmarks)
+  - [Include Library Benchmarks](#include-library-benchmarks)
   - [Memory and Size](#memory-and-size)
 - [Compatibility](#compatibility)
   - [jsonParse and regexNew messages](#jsonparse-and-regexnew-messages)
@@ -696,7 +696,7 @@ same `perf/test.bare` the JavaScript and Python implementations run. Both time t
 build, since the runtimes it is compared against are optimized builds too; the development build
 would read about 1.5x slower.
 
-### The Cross-Language Benchmarks
+### Cross-Language Benchmarks
 
 `make perfx` runs [perfx](perfx/README.md): five applications a working developer might write -
 an n-body simulation, web log analysis, a JSON pipeline, grid pathfinding, and a CSV sales report
@@ -746,7 +746,7 @@ resident set:
 | JavaScript (V8 JIT)     | 26.9 ms |  38.2 MB |
 | Ruby                    | 44.1 ms |  27.6 MB |
 
-### The Include Library Benchmarks
+### Include Library Benchmarks
 
 `make perf` runs the suite, merges in the results of `../bare-script` and `../bare-script-py` when
 they are present, and prints the report they print; `perf/test.c` is the native C baseline.
