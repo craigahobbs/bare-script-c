@@ -692,7 +692,8 @@ static inline BSValue bsGlobalLookup(BSCallCache *cache, BSValue name, BSOptions
  * "builtins" on the stack; the common shape needs none of that. Anything else - a slot call, an
  * object of locals, a script function, an intrinsic that declines its arguments - falls through
  * to bsCall unchanged, which re-resolves the name. Handing the resolution down instead was
- * measured and is slower: the argument costs more than the lookup it saves.
+ * measured and is slower: the argument costs more than the lookup it saves. Removing this
+ * altogether costs 2.3% of the performance suite and 1.9% of the include test suite.
  */
 static inline bool bsCallIntrinsic(const BSCode *code, const BSInst *inst, const BSValue *args,
                                    size_t argCount, BSOptions *options, BSValue locals,
