@@ -193,6 +193,8 @@ BSValue bsObjectNew(void);
 
 /* A new object expecting "count" keys - past the small-object threshold it is born with its lookup table */
 BSValue bsObjectNewCapacity(size_t count);
+
+/* A new function value. The name is accepted for the reference implementations' API and not kept. */
 BSValue bsFunctionNew(const char *name, BSFunctionFn fn, void *data, void (*dataFree)(void *data));
 
 

@@ -770,7 +770,7 @@ Milliseconds per run on the same machine - the Ruby and Perl rows are one-off po
 That is the neighborhood: 12x behind V8's JIT and 24x behind native C, 1.4x ahead of V8's own
 bytecode interpreter, 2.4x as fast as CPython, and 6x to 180x ahead of the other BareScript
 runtimes. It gets there as a plain bytecode interpreter - no JIT, no assembly, no dependencies -
-in 198 KB of code.
+in 197 KB of code.
 
 The release build is about 1.5x the default build, milliseconds per test run:
 
@@ -813,7 +813,7 @@ the release build:
 | urlDecode, ms per 2000 runs                   |     28 |     20 |
 | urlEncode, ms per 2000 runs                   |     21 |     15 |
 
-The shared library is 486 KB, of which 205 KB is the compressed include library and 198 KB is
+The shared library is 486 KB, of which 205 KB is the compressed include library and 197 KB is
 code.
 
 Memory is measured the same way, with `/usr/bin/time -l`. A script that does nothing runs in a
