@@ -167,81 +167,6 @@ static int bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap, size_
 }
 
 
-static int bsInflateStored(BsBits *bits, unsigned char *out, size_t outCap, size_t *outLen)
-{
-    bits->bitBuf = 0;
-    bits->bitCount = 0;
-    int length = bsGetBits(bits, 16);
-    int nlen = bsGetBits(bits, 16);
-    if (length < 0 || nlen < 0 || length != (nlen ^ 65535)) {
-        return -1;
-    }
-    if (bits->offset + (size_t) length > bits->size || *outLen + (size_t) length > outCap) {
-        return -1;
-    }
-    memcpy(out + *outLen, bits->data + bits->offset, (size_t) length);
-    bits->offset += (size_t) length;
-    *outLen += (size_t) length;
-    return 0;
-}
-
-
-static int bsInflate(BsBits *bits, unsigned char *out, size_t outCap, size_t *outLen)
-{
-    for (;;) {
-        int final = bsGetBits(bits, 1);
-        int type = bsGetBits(bits, 2);
-        if (final < 0 || type < 0) {
-            return -1;
-        }
-        int status;
-        if (type == 0) {
-            status = bsInflateStored(bits, out, outCap, outLen);
-        } else if (type == 1) {
-            status = bsInflateCodes(bits, out, outCap, outLen);
-        } else {
-            return -1;
-        }
-        if (status != 0) {
-            return -1;
-        }
-        if (final) {
-            return 0;
-        }
-    }
-}
-
-
-static _Thread_local uint32_t bsCrc32Table[256];
-static _Thread_local bool bsCrc32Ready;
-
-
-static void bsCrc32Init(void)
-{
-    for (uint32_t n = 0; n < 256; n++) {
-        uint32_t crc = n;
-        for (int k = 0; k < 8; k++) {
-            crc = (crc & 1u) ? (0xEDB88320u ^ (crc >> 1)) : (crc >> 1);
-        }
-        bsCrc32Table[n] = crc;
-    }
-    bsCrc32Ready = true;
-}
-
-
-static uint32_t bsCrc32(const unsigned char *data, size_t size)
-{
-    if (!bsCrc32Ready) {
-        bsCrc32Init();
-    }
-    uint32_t crc = 0xFFFFFFFFu;
-    for (size_t ix = 0; ix < size; ix++) {
-        crc = bsCrc32Table[(crc ^ data[ix]) & 0xFFu] ^ (crc >> 8);
-    }
-    return crc ^ 0xFFFFFFFFu;
-}
-
-
 static uint32_t bsReadU32LE(const unsigned char *data)
 {
     return (uint32_t) data[0] | ((uint32_t) data[1] << 8) | ((uint32_t) data[2] << 16) |
@@ -249,60 +174,22 @@ static uint32_t bsReadU32LE(const unsigned char *data)
 }
 
 
-/* Advance past a NUL-terminated gzip extra field (filename or comment) */
-static size_t bsGzipSkipString(const unsigned char *src, size_t srcSize, size_t offset)
-{
-    while (offset < srcSize && src[offset] != 0) {
-        offset++;
-    }
-    return offset + 1;
-}
-
-
+/*
+ * The bundled models are written by gzip.bare's compressor (see bin/includeSource.bare), whose
+ * output has one shape: the ten-byte header with no optional fields, a single final block of fixed
+ * Huffman codes, and the CRC and size trailer. Only that shape is decoded. The data is compiled in,
+ * so the inflated size is the one integrity check it needs; the CRC is not verified.
+ */
 char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
 {
-    if (srcSize < 10) {
+    if (srcSize < 18 || src[0] != 0x1f || src[1] != 0x8b || src[2] != 8 || src[3] != 0) {
         return NULL;
     }
-    if (src[0] != 0x1f || src[1] != 0x8b || src[2] != 8) {
-        return NULL;
-    }
-    unsigned flags = src[3];
-    if ((flags & 0xE0u) != 0) {
-        return NULL;
-    }
-
-    size_t offset = 10;
-    if ((flags & 4u) != 0) {
-        if (offset + 2 > srcSize) {
-            return NULL;
-        }
-        unsigned xlen = (unsigned) src[offset] | ((unsigned) src[offset + 1] << 8);
-        offset += 2 + xlen;
-    }
-    if ((flags & 8u) != 0) {
-        offset = bsGzipSkipString(src, srcSize, offset);
-    }
-    if ((flags & 16u) != 0) {
-        offset = bsGzipSkipString(src, srcSize, offset);
-    }
-    if ((flags & 2u) != 0) {
-        offset += 2;
-    }
-    if (offset + 8 > srcSize) {
-        return NULL;
-    }
-
-    uint32_t crcExpected = bsReadU32LE(src + srcSize - 8);
     uint32_t isize = bsReadU32LE(src + srcSize - 4);
     unsigned char *out = bsAlloc((size_t) isize + 1);
     size_t outLen = 0;
-    BsBits bits;
-    memset(&bits, 0, sizeof(bits));
-    bits.data = src + offset;
-    bits.size = srcSize - 8 - offset;
-    if (bsInflate(&bits, out, isize, &outLen) != 0 || outLen != isize ||
-        bsCrc32(out, outLen) != crcExpected) {
+    BsBits bits = {src + 10, srcSize - 18, 0, 0, 0};
+    if (bsGetBits(&bits, 3) != 3 || bsInflateCodes(&bits, out, isize, &outLen) != 0 || outLen != isize) {
         free(out);
         return NULL;
     }
@@ -317,9 +204,6 @@ const char *bsIncludeSourceDecode(size_t index)
         return bsIncludeDecoded[index];
     }
     const BSIncludeSource *source = &bsIncludeSources[index];
-    if (source->gzip == NULL || source->gzipSize == 0) {
-        return NULL;
-    }
     bsIncludeDecoded[index] = bsGzipUncompress(source->gzip, source->gzipSize);
     return bsIncludeDecoded[index];
 }

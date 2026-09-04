@@ -190,13 +190,6 @@ TEST(include_gzip_decode)
     } cases[] = {
         {"H4sIAAAAAAAC/8tIzcnJBwCGphA2BQAAAA==", "hello"},
         {"H4sIAAAAAAAA/wMAAAAAAAAAAAA=", ""},
-        {"H4sIAAAAAAAE/wEFAPr/aGVsbG+GphA2BQAAAA==", "hello"}, /* a stored block */
-        {"H4sICAAAAAAA/3gAAwAAAAAAAAAAAA==", ""},             /* FNAME */
-        {"H4sIBAAAAAAA/wIAQUIDAAAAAAAAAAAA", ""},             /* FEXTRA */
-        {"H4sIEAAAAAAA/2hpAAMAAAAAAAAAAAA=", ""},             /* FCOMMENT */
-        {"H4sIAgAAAAAA/5DJAwAAAAAAAAAAAA==", ""},             /* FHCRC */
-        {"H4sIAQAAAAAA/wMAAAAAAAAAAAA=", ""},                 /* FTEXT */
-        {"H4sIAAAAAAAA/wAAAP//AwAAAAAAAAAAAA==", ""},         /* two blocks */
     };
     for (size_t ix = 0; ix < sizeof(cases) / sizeof(cases[0]); ix++) {
         char *decoded = bsTestGzipDecode(cases[ix].gzip);
@@ -208,10 +201,17 @@ TEST(include_gzip_decode)
 
 TEST(include_gzip_invalid)
 {
+    /* Not gzip, a wrong size, and other shapes of gzip stream than the one the compressor writes */
     static const char *const invalid[] = {
         "YWJj",
-        "H4sIAAAAAAAC/8tIzcnJBwCGphA3BQAAAA==",
         "H4sIAAAAAAAC/8tIzcnJBwCGphA2BQAAAQ==",
+        "H4sIAAAAAAAE/wEFAPr/aGVsbG+GphA2BQAAAA==", /* a stored block */
+        "H4sICAAAAAAA/3gAAwAAAAAAAAAAAA==",             /* FNAME */
+        "H4sIBAAAAAAA/wIAQUIDAAAAAAAAAAAA",             /* FEXTRA */
+        "H4sIEAAAAAAA/2hpAAMAAAAAAAAAAAA=",             /* FCOMMENT */
+        "H4sIAgAAAAAA/5DJAwAAAAAAAAAAAA==",             /* FHCRC */
+        "H4sIAQAAAAAA/wMAAAAAAAAAAAA=",                 /* FTEXT */
+        "H4sIAAAAAAAA/wAAAP//AwAAAAAAAAAAAA==",         /* two blocks */
         "H4sIAAAAAAAA/wcAAAAAAAAAAA==",
         "H4sIAAAAAAAA//UAAAAAAAAAAAAA",
         "H4sIIAAAAAAA/wMAAAAAAAAAAAA=",
