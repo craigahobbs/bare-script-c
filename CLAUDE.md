@@ -283,7 +283,7 @@ Profile first, change what the profile names, measure, keep or revert:
 ### Updating README's Performance section
 
 The section has three parts - the cross-language perfx benchmarks, the include library benchmarks
-with the suite parse times, and memory and size - and every number in it is re-measured, not
+with the suite time as a column, and memory and size - and every number in it is re-measured, not
 edited:
 
 1. `make perf PERF_RUNS=5` re-runs this runtime and, when the sibling checkouts are present, the
@@ -300,9 +300,10 @@ edited:
 4. Tables follow the perfx report's layout: languages as rows sorted by their geometric mean,
    tests as columns, the fastest per column in bold, times as `s`/`ms` (no decimals from 100 s and
    from 100 ms, one from 10 s and below 100 ms, two from 1 s), and a final `geomean vs fastest`
-   column over every test the row has. The include library table shows five representative
-   columns (`mandelbrot`, `mdElements`, `mdParse`, `schValidate`, `urlEncode`) but its mean covers
-   all eight tests; generate the cells with a script rather than by hand.
+   column over every test the row has. The include library table shows six representative
+   columns (`mandelbrot`, `mdElements`, `mdParse`, `schValidate`, `urlEncode`, and `testSuite`,
+   the suite's wall time scaled to the per-1000-run unit) but its mean covers all nine tests;
+   generate the cells with a script rather than by hand.
 5. `markdownParse` parses this README, so its figure moves when the file changes: measure it last,
    after the edits, and update its cells and the means it feeds.
 

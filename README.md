@@ -748,42 +748,57 @@ make perf TEST=mandelbrot PERF_RUNS=5
 
 Time per 1000 runs on the same machine, best of five. `PyC` is the Python implementation with its
 C extension; V8 and CPython 3.14 run the JavaScript and Python packages the library was ported
-from (Python has no markdown ports). Five of the eight tests are shown - `schemaParse`,
+from (Python has no markdown ports). `testSuite` is the include library's test suite, which parses
+about 2 MB of BareScript before its first test. Six of the nine tests are shown - `schemaParse`,
 `qrcodeMatrix`, and `urlDecode` track `markdownParse`, `schemaValidate`, and `urlEncode` - and the
-mean covers all eight:
+mean covers all nine:
 
-| Language         | mandelbrot |  mdElements |    mdParse | schValidate |  urlEncode | geomean vs fastest |
-| ---------------- | ---------: | ----------: | ---------: | ----------: | ---------: | -----------------: |
-| JavaScript (V8)  | **1.57 s** | **32.3 ms** | **618 ms** | **55.6 ms** | **2.2 ms** |              1.00x |
-| BareScript (C)   |     19.0 s |      244 ms |     1.32 s |      164 ms |     5.0 ms |              2.78x |
-| Python (CPython) |     45.9 s |             |            |      205 ms |    10.5 ms |              5.00x |
-| BareScript (PyC) |      109 s |      664 ms |     7.15 s |      1.06 s |    57.0 ms |             20.40x |
-| BareScript (JS)  |      304 s |      721 ms |     2.85 s |      1.90 s |    49.5 ms |             21.70x |
-| BareScript (Py)  |    3,478 s |      5.25 s |     20.8 s |      14.4 s |     394 ms |            179.54x |
+| Language         | mandelbrot |  mdElements |    mdParse | schValidate |  urlEncode | testSuite | geomean vs fastest |
+| ---------------- | ---------: | ----------: | ---------: | ----------: | ---------: | --------: | -----------------: |
+| JavaScript (V8)  | **1.57 s** | **32.3 ms** | **618 ms** | **55.6 ms** | **2.2 ms** |           |              1.00x |
+| BareScript (C)   |     19.0 s |      244 ms |     1.32 s |      164 ms |     5.0 ms | **220 s** |              2.48x |
+| Python (CPython) |     45.9 s |             |            |      205 ms |    10.5 ms |           |              5.00x |
+| BareScript (JS)  |      304 s |      721 ms |     2.85 s |      1.90 s |    49.5 ms |   1,830 s |             19.51x |
+| BareScript (PyC) |      109 s |      664 ms |     7.15 s |      1.06 s |    57.0 ms |   7,500 s |             21.60x |
+| BareScript (Py)  |    3,478 s |      5.25 s |     20.8 s |      14.4 s |     394 ms |  10,200 s |            154.46x |
 
 The closest race is `markdownParse`, regular expressions against V8's JIT-compiled regex engine;
 the widest is `markdownElements`, V8's inline caches allocating nested objects 7.6x faster. Native
-C runs `mandelbrot` in 0.79 ms, 24x ahead. The include library's test suite, which parses about
-2 MB of BareScript before its first test runs:
-
-| Implementation            |  Time |
-| ------------------------- | ----: |
-| C                         | 0.22s |
-| JavaScript                | 1.83s |
-| Python (with C extension) |  7.5s |
-| Python                    | 10.2s |
+C runs `mandelbrot` in 0.79 ms, 24x ahead.
 
 ### Memory and Size
 
-The shared library is 469 KB: 205 KB of compressed includes and 196 KB of code. An empty script
-runs in a 3.1 MB resident set with a 2.4 MB peak footprint (`/usr/bin/time -l`): libcurl loads on
-the first HTTP fetch, the parser compiles from its model a statement at a time, and a script keeps
-its model only where lint or coverage reads it. The `make perf` tests peak at about 6 MB and the
-include library test suite at 35 MB, or 63 MB recording coverage. Across languages, BareScript has
-the lowest peak of any runtime on the JSON pipeline (139 MB; V8 160 MB, Lua 202 MB) and the
-pathfinder (33 MB), a third of V8's on the log analysis (137 MB against 363 MB), and twice Lua's
-on the sales report, where Lua interns the repeated CSV fields. It is single-threaded, so its CPU
-time equals its wall time; V8 spends up to a third more CPU than wall on background threads.
+Peak resident set of each perfx application, `empty` being the empty program, with the smallest
+per column in bold and each language's geometric mean against it:
+
+| Language                |      empty |      nbody |   loganalyze |      jsonetl |    pathfind | salesreport | geomean vs smallest |
+| ----------------------- | ---------: | ---------: | -----------: | -----------: | ----------: | ----------: | ------------------: |
+| Lua                     | **1.7 MB** | **1.8 MB** |     140.1 MB |     201.7 MB |     39.4 MB | **36.0 MB** |               1.15x |
+| BareScript              |     3.1 MB |     3.3 MB |     136.8 MB | **139.3 MB** | **32.7 MB** |     69.9 MB |               1.42x |
+| Perl                    |     4.3 MB |     6.8 MB |     136.5 MB |     219.8 MB |    113.3 MB |     86.8 MB |               2.33x |
+| Python                  |    14.6 MB |    15.2 MB | **107.0 MB** |     162.2 MB |     56.3 MB |     73.6 MB |               2.58x |
+| Ruby                    |    27.6 MB |    27.7 MB |     188.6 MB |     205.9 MB |     42.5 MB |    105.3 MB |               3.68x |
+| JavaScript (V8 JIT)     |    38.2 MB |    44.7 MB |     363.1 MB |     159.7 MB |     69.9 MB |    198.6 MB |               5.43x |
+| JavaScript (V8 jitless) |    37.7 MB |    40.7 MB |     357.0 MB |     181.3 MB |     86.0 MB |    196.0 MB |               5.61x |
+
+BareScript is single-threaded, so its CPU time equals its wall time; V8 spends up to a third more
+CPU than wall on background threads. Lua interns every short string, which halves its sales
+report footprint, where the CSV fields repeat.
+
+| This runtime                            |        |
+| --------------------------------------- | -----: |
+| Shared library                          | 469 KB |
+| ... of which compressed include library | 205 KB |
+| ... of which code                       | 196 KB |
+| Empty script, resident set              | 3.1 MB |
+| Empty script, peak footprint            | 2.4 MB |
+| `make perf` test, peak                  |   6 MB |
+| Include library test suite, peak        |  35 MB |
+| ... recording coverage                  |  63 MB |
+
+The empty script's floor is the process itself: libcurl loads on the first HTTP fetch, the parser
+compiles from its model a statement at a time, and a script keeps its model only where lint or
+coverage reads it. Memory figures are from `/usr/bin/time -l`.
 
 ## Compatibility
 
