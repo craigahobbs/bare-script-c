@@ -1799,7 +1799,6 @@ void bsObjectSetString(BSValue value, BSValue key, BSValue item)
         /* Reuse an interned name when one exists; do not intern untrusted unique keys. */
         BSString *found = bsInternLookup(key.u.string->data, key.u.string->size);
         if (found != NULL) {
-            found->refcount++;
             bsObjectInsert(object, bsStringTake(found), item);
             return;
         }

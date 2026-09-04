@@ -580,6 +580,31 @@ TEST(value_object_small_update)
 }
 
 
+TEST(value_object_set_interned_twin)
+{
+    /* A key built at run time that matches an interned name is stored as the interned string, which
+       gains one reference for the object and no more */
+    BSValue holder = bsObjectNew();
+    bsObjectSet(holder, "twin", bsNull());
+    BSValue keys = bsObjectKeys(holder);
+    BSString *interned = bsArrayGet(keys, 0).u.string;
+    ASSERT_INT_EQ(interned->flags & BS_STR_INTERNED, BS_STR_INTERNED);
+    int32_t refcount = interned->refcount;
+    BSValue key = bsStringNewSize("twin", 4);
+    ASSERT_INT_EQ(key.u.string->flags & BS_STR_INTERNED, 0);
+    BSValue object = bsObjectNew();
+    bsObjectSetString(object, key, bsNumber(1));
+    bsObjectSetString(object, key, bsNumber(2));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "twin").u.number, 2);
+    ASSERT_INT_EQ(interned->refcount, refcount + 1);
+    bsRelease(object);
+    ASSERT_INT_EQ(interned->refcount, refcount);
+    bsRelease(key);
+    bsRelease(keys);
+    bsRelease(holder);
+}
+
+
 TEST(value_object_packed)
 {
     /* Four keys stay inline; the fifth spills onto the insertion list */
