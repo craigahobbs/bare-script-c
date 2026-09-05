@@ -29,6 +29,7 @@ make perfx-check    # verify every perfx port computes the same result
 make release        # three-stage PGO+LTO build in build/release
 make includes       # regenerate src/includeSource.c (checked in; only after lib/include changes)
 make release INCLUDE="barescriptParser.bare barescriptLint.bare url.bare"  # bundle only these includes
+make release INCLUDE_EXCLUDE="qrcode.bare draw.bare"                         # bundle all but these
 ```
 
 Filtering and diagnostics:
@@ -112,7 +113,8 @@ every statement in a cached include's code.
 under a CLI built from the *existing* generated source. DESIGN.md's **The Bundled Include Library**
 describes the encoding. Any include but the parser and linter compiles out under its
 `NO_BARESCRIPT_INCLUDE_<NAME>` macro; the Makefile's `INCLUDE` list sets the macro for every include
-not named. There is no dependency tracking, so an include's own includes must be listed with it.
+not named, and its `INCLUDE_EXCLUDE` list for every include named. There is no dependency tracking,
+so an include's own includes must be listed with it.
 
 ### Values and reference counting
 

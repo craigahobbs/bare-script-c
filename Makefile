@@ -85,14 +85,19 @@ INCLUDE_SOURCE_C := $(SRC_DIR)/includeSource.c
 INCLUDE_SOURCE_H := $(INC_DIR)/barescript/includeSource.h
 
 # The includes to bundle - all of them unless INCLUDE lists them, the parser and linter always
-# among them:
+# among them, or INCLUDE_EXCLUDE lists the ones to leave out:
 #
 #   make release INCLUDE="barescriptParser.bare barescriptLint.bare markdownUp.bare ..."
+#   make release INCLUDE_EXCLUDE="markdownUp.bare ..."
 #
 # Every other include is compiled out by its NO_BARESCRIPT_INCLUDE_<NAME> macro, which only
-# src/includeSource.c reads - so a change to INCLUDE needs a "make clean" first. The test suites
+# src/includeSource.c reads - so a change to either needs a "make clean" first. The test suites
 # need them all.
 INCLUDE ?=
+INCLUDE_EXCLUDE ?=
+ifneq '$(strip $(INCLUDE_EXCLUDE))' ''
+    INCLUDE := $(filter-out $(INCLUDE_EXCLUDE),$(notdir $(INCLUDE_LIB_SRCS)))
+endif
 INCLUDE_CFLAGS :=
 ifneq '$(strip $(INCLUDE))' ''
     INCLUDE_OUT := $(basename $(filter-out $(INCLUDE),$(notdir $(INCLUDE_LIB_SRCS))))
@@ -165,6 +170,7 @@ help:
 	@echo "  TEST=<name>   filter the unit tests by name substring"
 	@echo "  QUIET=1       print a dot per unit test instead of a line"
 	@echo "  INCLUDE=<names>  bundle only these includes, e.g. \"barescriptParser.bare barescriptLint.bare url.bare\""
+	@echo "  INCLUDE_EXCLUDE=<names>  bundle all but these includes, e.g. \"qrcode.bare draw.bare\""
 	@echo "  libcurl HTTP fetch: $(if $(strip $(CURL_LIBS)),enabled,disabled)"
 
 

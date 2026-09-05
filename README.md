@@ -108,18 +108,21 @@ make release
 Any include but `barescriptParser.bare` and `barescriptLint.bare` - the runtime parses with those -
 can be compiled out to make the library smaller. Defining `NO_BARESCRIPT_INCLUDE_<NAME>`, the file
 name without `.bare` in upper case, leaves that include's model out; the Makefile's `INCLUDE`
-variable names the includes to bundle and defines the macro for every other one:
+variable names the includes to bundle, `INCLUDE_EXCLUDE` the ones to leave out, and either defines
+the macro for every include not bundled:
 
 ```sh
 make release INCLUDE="barescriptParser.bare barescriptLint.bare markdownUp.bare url.bare"
+make release INCLUDE_EXCLUDE="qrcode.bare draw.bare"
 ```
 
 A compiled-out include keeps its registry entry and stub accessor, which return no model, so
 `include <name.bare>` is served from the system include path when one is registered and fails
 otherwise. There is no dependency tracking: an include that an included script itself includes has
-to be listed with it - `markdownUp.bare` includes four scripts that include five more. The parser
-and linter alone make a 286 KB release library, against 469 KB with all thirty-two. A change to
-`INCLUDE` needs a `make clean` first, and the test suites need every include.
+to be listed with it - `markdownUp.bare` includes four scripts that include five more - and an
+excluded include is missing from every bundled include that includes it. The parser and linter
+alone make a 286 KB release library, against 469 KB with all thirty-two. A change to `INCLUDE` or
+`INCLUDE_EXCLUDE` needs a `make clean` first, and the test suites need every include.
 
 
 ## Command-Line Interface
