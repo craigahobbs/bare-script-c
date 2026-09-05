@@ -50,8 +50,7 @@ void bsReleaseDestroyed(BSValue value);
 /*
  * Fast-path retain/release for implementation files. Immediate values are a no-op the compiler
  * can see; the public functions in value.c remain the library ABI.
- */
-/*
+ *
  * Every reference type - string, array, object, function, regex - begins with the same int32_t
  * refcount, so one unsigned range test over the contiguous BS_STRING..BS_REGEX span decides
  * whether a value is counted at all, and one decrement serves them all. The regex used to be
@@ -113,7 +112,6 @@ static inline BSValue bsUnset(void)
 }
 
 
-
 /* Drop the saved parser model from a cached system include (not linted or covered) */
 void bsScriptDropModel(BSScript *script);
 
@@ -131,8 +129,6 @@ bool bsScriptRestoreCover(BSScript *script);
  */
 bool bsJSONDecodeStatements(const char *text, size_t size, bool (*emit)(BSValue statement, void *data),
                             void *data, BSValue *rest, const char **error);
-
-
 
 
 /*

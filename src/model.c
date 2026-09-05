@@ -251,8 +251,6 @@ static BSValue bsInternName(BSValue name)
 }
 
 
-
-
 typedef struct {
     size_t pc;
     BSValue label;

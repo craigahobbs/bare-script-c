@@ -349,8 +349,7 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey
         }
     }
 
-    const char *data = sb.data != NULL ? sb.data : "";
-    *result = asKey ? bsStringInternExisting(data, sb.size) : bsStringNewSize(data, sb.size);
+    *result = asKey ? bsStringInternExisting(sb.data, sb.size) : bsStringNewSize(sb.data, sb.size);
     bsSBFree(&sb);
     return true;
 }
