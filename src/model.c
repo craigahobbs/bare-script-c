@@ -1062,6 +1062,8 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         if (includeCount == 0) {
             return false;
         }
+        /* One instruction runs the statement's includes, which fetch together */
+        size_t first = e->includeCount;
         for (size_t inc = 0; inc < includeCount; inc++) {
             BSValue include = bsArrayGet(includes, inc);
             BSValue url = bsObjectGetString(include, bsKeys.url);
@@ -1074,9 +1076,9 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
             BS_GROW(e->includes, e->includeCount, e->includeCap, 4);
             e->includes[e->includeCount].url = bsInternName(url);
             e->includes[e->includeCount].system = bsValueBoolean(bsObjectGetString(include, bsKeys.system));
-            bsEmitInst(e, BS_OP_INCLUDE, (uint16_t) e->includeCount, 0, 0);
             e->includeCount++;
         }
+        bsEmitInst(e, BS_OP_INCLUDE, (uint16_t) first, (uint16_t) includeCount, 0);
         return true;
     }
 

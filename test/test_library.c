@@ -517,27 +517,28 @@ TEST(library_barescript_evaluate_expression)
 }
 
 
-static char *bsTestLibraryFetchFn(const BSFetchRequest *request, size_t *responseSize, void *data)
+/* Each response describes its request and, for a batch of several, the batch size */
+static void bsTestLibraryFetchFn(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data)
 {
-    if (strcmp(request->url, "fail") == 0) {
-        return NULL;
+    for (size_t ix = 0; ix < count; ix++) {
+        const BSFetchRequest *request = &requests[ix];
+        if (strcmp(request->url, "fail") == 0) {
+            continue;
+        }
+        BSStringBuilder sb;
+        bsSBInit(&sb);
+        bsSBAppendFormat(&sb, "url=%s", request->url);
+        if (request->body != NULL) {
+            bsSBAppendFormat(&sb, " body=%.*s", (int) request->bodySize, request->body);
+        }
+        if (request->headers.type == BS_OBJECT) {
+            bsSBAppendFormat(&sb, " headers=%zu", bsObjectCount(request->headers));
+        }
+        if (count > 1) {
+            bsSBAppendFormat(&sb, " batch=%zu", count);
+        }
+        responses[ix] = bsSBToValue(&sb);
     }
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    bsSBAppendFormat(&sb, "url=%s", request->url);
-    if (request->body != NULL) {
-        bsSBAppendFormat(&sb, " body=%.*s", (int) request->bodySize, request->body);
-    }
-    if (request->headers.type == BS_OBJECT) {
-        bsSBAppendFormat(&sb, " headers=%zu", bsObjectCount(request->headers));
-    }
-    BSValue text = bsSBToValue(&sb);
-    if (responseSize != NULL) {
-        *responseSize = bsStringSize(text);
-    }
-    char *result = bsTestStrdup(bsStringData(text));
-    bsRelease(text);
-    return result;
 }
 
 
@@ -552,9 +553,10 @@ TEST(library_system_fetch)
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'headers': {'h': 'v'}})", options),
                  "\"url=a headers=1\"");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch(['a', {'url': 'b'}])", options),
-                 "[\"url=a\",\"url=b\"]");
+                 "[\"url=a batch=2\",\"url=b batch=2\"]");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch('fail')", options), "null");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch(['fail'])", options), "[null]");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch([])", options), "[]");
 
     /* Invalid request models */
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch(1)", options), "null");

@@ -633,7 +633,7 @@ void bsSBFree(BSStringBuilder *sb)
 }
 
 
-static void bsSBReserve(BSStringBuilder *sb, size_t size)
+void bsSBReserve(BSStringBuilder *sb, size_t size)
 {
     if (sb->size + size + 1 > sb->capacity) {
         size_t capacity = sb->capacity != 0 ? sb->capacity : 32;

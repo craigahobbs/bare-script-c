@@ -6,7 +6,9 @@
  */
 
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "test.h"
@@ -128,6 +130,17 @@ static void *bsThreadRun(void *data)
         bsParserErrorFree(&error);
     }
 
+    /* This thread's connection pool - each fetch of a refused port runs a transfer through it */
+    for (int ix = 0; ix < 25; ix++) {
+        BSFetchRequest request = {.url = "http://127.0.0.1:1/nope", .headers = bsNull()};
+        BSValue response = bsNull();
+        bsFetchHTTP(&request, &response, 1, NULL);
+        if (response.type != BS_NULL) {
+            bsThreadFail(task, "fetch", "a refused connection returned a response");
+            bsRelease(response);
+        }
+    }
+
     /* Release this thread's runtime state */
     bsParserCleanup();
     bsSystemIncludeClear();
@@ -142,6 +155,10 @@ TEST(thread_isolated_runtimes)
 {
     /* The main thread's runtime state, before... */
     ASSERT_VALUE(bsTestExecute("include <url.bare>\nreturn urlEncodeComponent('a b')"), "\"a%20b\"");
+
+    /* The workers' fetches must leave the process's SIGPIPE disposition as they found it */
+    struct sigaction before;
+    sigaction(SIGPIPE, NULL, &before);
 
     pthread_t threads[BS_THREAD_COUNT];
     BSThreadTask tasks[BS_THREAD_COUNT];
@@ -158,6 +175,10 @@ TEST(thread_isolated_runtimes)
             bsTestFail(__FILE__, __LINE__, "thread %d - %s", ix, tasks[ix].error);
         }
     }
+
+    struct sigaction after;
+    sigaction(SIGPIPE, NULL, &after);
+    ASSERT_TRUE(after.sa_handler == before.sa_handler);
 
     /* ...and after: intact, and without the workers' system include */
     ASSERT_VALUE(bsTestExecute("include <url.bare>\nreturn urlEncodeComponent('a b')"), "\"a%20b\"");

@@ -16,6 +16,10 @@
 #include "barescript/value.h"
 
 
+/* Release the calling thread's HTTP connection pool (options.c) */
+void bsFetchCleanup(void);
+
+
 /* Allocation helpers - these abort the process on allocation failure */
 void *bsAlloc(size_t size);
 void *bsRealloc(void *ptr, size_t size);
@@ -185,7 +189,7 @@ enum {
     BS_OP_NOT,
     BS_OP_BNOT,
     BS_OP_FUNCTION,    /* define script function a as a global */
-    BS_OP_INCLUDE,     /* run include a */
+    BS_OP_INCLUDE,     /* run the b includes from include a */
     BS_OP_STMT,        /* statement a begins */
     BS_OP_LOAD_SLOT,   /* a = slot b, or the global of its name if the slot is unset */
     BS_OP_DATA = 0xFF  /* call operands, or a trap's line; never dispatched */
@@ -234,6 +238,9 @@ BSValue bsStringInternExisting(const char *data, size_t size);
 
 /* Allocate a string whose bytes are already known to be ASCII (length == size). */
 BSValue bsStringNewAscii(const char *text, size_t size);
+
+/* Ensure a string builder has room for "size" more bytes, so a reader can fill sb->data + sb->size */
+void bsSBReserve(BSStringBuilder *sb, size_t size);
 
 /* Non-ASCII code-point index to byte offset; ASCII is handled by bsStringOffsetFast */
 size_t bsStringOffsetSlow(BSValue value, size_t index);

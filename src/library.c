@@ -1753,44 +1753,6 @@ static bool bsFetchValid(BSValue request)
 }
 
 
-/* Fetch one request model, or one URL string - returns the response string value, or null */
-static BSValue bsFetchOne(BSValue request, BSOptions *options)
-{
-    BSValue url = request.type == BS_STRING ? request : bsObjectGet(request, "url");
-    BSValue body = bsObjectGet(request, "body");
-    BSValue headers = bsObjectGet(request, "headers");
-
-    BSValue fetchUrl = bsRetain(url);
-    if (options->urlFn != NULL) {
-        char *resolved = options->urlFn(bsStringData(fetchUrl), options->urlData);
-        bsAssign(&fetchUrl, bsStringNew(resolved));
-        free(resolved);
-    }
-
-    BSValue response = bsNull();
-    if (options->fetchFn != NULL) {
-        BSFetchRequest fetchRequest = {
-            .url = bsStringData(fetchUrl),
-            .body = body.type == BS_STRING ? bsStringData(body) : NULL,
-            .bodySize = body.type == BS_STRING ? bsStringSize(body) : 0,
-            .headers = headers
-        };
-        size_t responseSize = 0;
-        char *text = options->fetchFn(&fetchRequest, &responseSize, options->fetchData);
-        if (text != NULL) {
-            response = bsStringNewSize(text, responseSize);
-            free(text);
-        }
-    }
-    if (response.type == BS_NULL && options->debug) {
-        bsLog(options, "BareScript: Function \"systemFetch\" failed for resource \"%s\"",
-              bsStringData(fetchUrl));
-    }
-    bsRelease(fetchUrl);
-    return response;
-}
-
-
 static const BSArgModel systemFetchArgs[] = {{"url", BS_ARG_ANY, 0, 0, 0, 0, 0}};
 
 static BSValue bsFnSystemFetch(const BSValue *args, size_t argCount, BSOptions *options, void *data)
@@ -1798,26 +1760,57 @@ static BSValue bsFnSystemFetch(const BSValue *args, size_t argCount, BSOptions *
     BS_ARGS(systemFetchArgs, bsNull());
     BSValue url = values[0];
 
-    /* An array of URL strings and request models */
-    if (url.type == BS_ARRAY) {
-        size_t count = bsArrayCount(url);
-        BSValue responses = bsArrayNewCapacity(count);
-        for (size_t ix = 0; ix < count; ix++) {
-            BSValue item = bsArrayGet(url, ix);
-            if (!bsFetchValid(item)) {
-                bsRelease(responses);
-                return bsArgFail(options, "url", item, bsNull());
-            }
-            bsArrayPush(responses, bsFetchOne(item, options));
+    /* A URL string or request model, or an array of them */
+    bool isArray = (url.type == BS_ARRAY);
+    size_t count = isArray ? bsArrayCount(url) : 1;
+    for (size_t ix = 0; ix < count; ix++) {
+        BSValue item = isArray ? bsArrayGet(url, ix) : url;
+        if (!bsFetchValid(item)) {
+            return bsArgFail(options, "url", item, bsNull());
         }
-        return responses;
+    }
+    if (count == 0) {
+        return bsArrayNew();
     }
 
-    /* A single URL string or request model */
-    if (!bsFetchValid(url)) {
-        return bsArgFail(options, "url", url, bsNull());
+    /* Resolve each request's URL, then fetch the requests together */
+    BSFetchRequest *requests = bsAlloc(count * sizeof(BSFetchRequest));
+    BSValue *responses = bsAlloc(count * sizeof(BSValue));
+    char **resolved = bsAlloc(count * sizeof(char *));
+    for (size_t ix = 0; ix < count; ix++) {
+        responses[ix] = bsNull();
+        BSValue item = isArray ? bsArrayGet(url, ix) : url;
+        BSValue itemUrl = item.type == BS_STRING ? item : bsObjectGet(item, "url");
+        BSValue body = bsObjectGet(item, "body");
+        resolved[ix] = options->urlFn != NULL ? options->urlFn(bsStringData(itemUrl), options->urlData) : NULL;
+        requests[ix] = (BSFetchRequest) {
+            .url = resolved[ix] != NULL ? resolved[ix] : bsStringData(itemUrl),
+            .body = body.type == BS_STRING ? bsStringData(body) : NULL,
+            .bodySize = body.type == BS_STRING ? bsStringSize(body) : 0,
+            .headers = bsObjectGet(item, "headers")
+        };
     }
-    return bsFetchOne(url, options);
+    if (options->fetchFn != NULL) {
+        options->fetchFn(requests, responses, count, options->fetchData);
+    }
+
+    /* The responses, logging each failure */
+    BSValue result = isArray ? bsArrayNewCapacity(count) : bsNull();
+    for (size_t ix = 0; ix < count; ix++) {
+        if (responses[ix].type == BS_NULL && options->debug) {
+            bsLog(options, "BareScript: Function \"systemFetch\" failed for resource \"%s\"", requests[ix].url);
+        }
+        if (isArray) {
+            bsArrayPush(result, responses[ix]);
+        } else {
+            result = responses[ix];
+        }
+        free(resolved[ix]);
+    }
+    free(requests);
+    free(responses);
+    free(resolved);
+    return result;
 }
 
 
@@ -2142,6 +2135,7 @@ BSValue bsLibraryScriptFunction(const char *name)
 
 void bsLibraryCleanup(void)
 {
+    bsFetchCleanup();
     if (bsScriptFunctionValues.type != BS_OBJECT) {
         return;
     }

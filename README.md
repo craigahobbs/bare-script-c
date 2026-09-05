@@ -319,8 +319,8 @@ Allocation failure is fatal: the runtime aborts rather than returning an out-of-
 
 ### Fetching
 
-`options->fetchFn` serves `systemFetch` and file includes: a function that returns the response
-as a `malloc`-allocated buffer, or `NULL` if the fetch failed.
+`options->fetchFn` serves `systemFetch` and file includes: a function that fetches a batch of
+requests and sets each one's response.
 
 ```c
 typedef struct BSFetchRequest {
@@ -330,12 +330,14 @@ typedef struct BSFetchRequest {
     BSValue headers;    /* an object of string header values, or a null value */
 } BSFetchRequest;
 
-typedef char *(*BSFetchFn)(const BSFetchRequest *request, size_t *responseSize, void *data);
+typedef void (*BSFetchFn)(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data);
 ```
 
-The function returns the response as a NUL-terminated, `malloc`-allocated buffer that the caller
-frees, or `NULL` if the fetch failed. `responseSize`, when non-NULL, receives the response size, so
-responses containing NUL bytes round-trip correctly.
+The function fetches `count` requests at once and sets each successful request's response to its
+text, an owned string value that the caller releases. The responses arrive as null values, so a
+failed request's response stays null. A `systemFetch` of an array arrives as one batch, so an
+implementation can fetch the requests concurrently, and so do an include statement's includes,
+which then execute in order; a single URL arrives as a batch of one.
 
 Four options ship with the library:
 
@@ -346,6 +348,11 @@ Four options ship with the library:
 | `bsFetchHTTP`       | HTTP(S) URLs only, via libcurl                               |
 | *(none)*            | Leave `options->fetchFn` NULL to disable fetching entirely   |
 
+`bsFetchHTTP` fetches a batch's requests concurrently over the calling thread's connection pool,
+which keeps a connection open for the next fetch to the same host, opens at most six to a host as
+a browser does, and multiplexes the requests to an HTTPS server that speaks HTTP/2 over one
+connection. It fetches http and https URLs - the schemes a browser's fetch accepts - and no other,
+redirects included. `bsLibraryCleanup` releases the pool with the thread's other library state.
 `bsFetchHTTPAvailable` reports whether libcurl is available - compiled in, and loadable at runtime.
 Without it the file system fetch functions still work and URL fetches fail.
 
@@ -510,6 +517,7 @@ each other, it follows the one shown in bold.
 | Bitwise operators                      | 32-bit            | arbitrary width | **32-bit**          |
 | A `regexNew` repeat count past 2^32    | accepted          | uncaught error  | **accepted**, saturating at 2^31 - 1 |
 | `numberToString` past 2^53             | shortest round trip, exponential past 1e21 | the value's exact digits | **the value's exact digits** |
+| A `systemFetch` array                  | fetched concurrently | fetched in order | **URLs concurrently, then files in order** |
 
 `objectKeys` returns keys in insertion order, matching both references for ordinary keys.
 JavaScript additionally hoists integer-like keys to the front in ascending numeric order; this

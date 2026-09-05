@@ -219,21 +219,18 @@ int bsMain(int argc, char **argv)
         /* Parse and execute each script source in order */
         size_t inlineCount = 0;
         for (size_t ix = 0; ix < sourceCount && (statusCode == 0 || staticAnalysis); ix++) {
-            const char *text = sources[ix].value;
-            char *loaded = NULL;
-            size_t size;
+            BSValue text = bsNull();
             char scriptNameBuffer[32];
             const char *scriptName;
             if (sources[ix].isFile) {
                 scriptName = sources[ix].value;
                 BSFetchRequest request = {.url = sources[ix].value, .headers = bsNull()};
-                loaded = bsFetchReadWrite(&request, &size, NULL);
-                if (loaded == NULL) {
+                bsFetchReadWrite(&request, &text, 1, NULL);
+                if (text.type != BS_STRING) {
                     fprintf(stderr, "Failed to load \"%s\"\n", sources[ix].value);
                     statusCode = 1;
                     break;
                 }
-                text = loaded;
             } else {
                 inlineCount++;
                 size_t inlineDisplay = inlineCount > ixUserScript ? inlineCount - ixUserScript : 0;
@@ -243,13 +240,13 @@ int bsMain(int argc, char **argv)
                     snprintf(scriptNameBuffer, sizeof(scriptNameBuffer), "<string>");
                 }
                 scriptName = scriptNameBuffer;
-                size = strlen(text);
+                text = bsStringNew(sources[ix].value);
             }
 
             /* Parse the script source */
             BSParserError parserError = {0};
-            BSScript *script = bsParseScript(text, size, 1, scriptName, &parserError);
-            free(loaded);
+            BSScript *script = bsParseScriptString(text, 1, scriptName, &parserError);
+            bsRelease(text);
             if (script == NULL) {
                 bsPrintError(bsStringData(parserError.message));
                 bsParserErrorFree(&parserError);

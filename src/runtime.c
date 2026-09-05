@@ -169,12 +169,19 @@ static _Thread_local BSValue bsSystemIncludes = {BS_NULL, {0}};
 static _Thread_local BSValue bsSystemIncludePaths = {BS_NULL, {0}};
 
 
-void bsSystemIncludeRegister(const char *name, const char *text)
+/* Register a system include's text, a string value the registry takes */
+static void bsSystemIncludeSet(const char *name, BSValue text)
 {
     if (bsSystemIncludes.type != BS_OBJECT) {
         bsSystemIncludes = bsObjectNew();
     }
-    bsObjectSet(bsSystemIncludes, name, bsStringNew(text));
+    bsObjectSet(bsSystemIncludes, name, text);
+}
+
+
+void bsSystemIncludeRegister(const char *name, const char *text)
+{
+    bsSystemIncludeSet(name, bsStringNew(text));
 }
 
 
@@ -190,34 +197,29 @@ void bsSystemIncludePath(const char *directory)
 /*
  * A registered system include's text, or a search path directory's - registered once found, so a
  * directory takes precedence over the bundled library and a script can run against an include
- * library checkout. NULL if neither has the include.
+ * library checkout. A borrowed string value, or a null value if neither has the include.
  */
-static const char *bsSystemIncludeText(const char *name)
+static BSValue bsSystemIncludeText(const char *name)
 {
     BSValue text = bsObjectGet(bsSystemIncludes, name);
-    if (text.type == BS_STRING) {
-        return bsStringData(text);
-    }
-    for (size_t ix = 0; ix < bsArrayCount(bsSystemIncludePaths); ix++) {
+    for (size_t ix = 0; text.type != BS_STRING && ix < bsArrayCount(bsSystemIncludePaths); ix++) {
         BSValue directory = bsArrayGet(bsSystemIncludePaths, ix);
         BSValue path = bsStringNewFormat("%s/%s", bsStringData(directory), name);
         BSFetchRequest request = {.url = bsStringData(path), .headers = bsNull()};
-        char *fileText = bsFetchReadOnly(&request, NULL, NULL);
+        bsFetchReadOnly(&request, &text, 1, NULL);
         bsRelease(path);
-        if (fileText != NULL) {
-            bsSystemIncludeRegister(name, fileText);
-            free(fileText);
-            return bsStringData(bsObjectGet(bsSystemIncludes, name));
+        if (text.type == BS_STRING) {
+            bsSystemIncludeSet(name, text);
         }
     }
-    return NULL;
+    return text;
 }
 
 
 const char *bsSystemIncludeGet(const char *name)
 {
-    const char *text = bsSystemIncludeText(name);
-    return text != NULL ? text : bsIncludeSource(name);
+    BSValue text = bsSystemIncludeText(name);
+    return text.type == BS_STRING ? bsStringData(text) : bsIncludeSource(name);
 }
 
 
@@ -687,73 +689,41 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
 }
 
 
-static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lineNumber,
+/*
+ * Parse and execute one include - a fetched include's text or a system include's registered text,
+ * a string value, or given any other value a system include's bundled compiled script - then lint it
+ */
+static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSValue text, int lineNumber,
                              BSOptions *options)
 {
-    bool system = include->system;
-
-    BSValue includeUrl = bsRetain(include->url);
-    if (!system && options->urlFn != NULL) {
-        char *resolved = options->urlFn(bsStringData(includeUrl), options->urlData);
-        bsAssign(&includeUrl, bsStringNew(resolved));
-        free(resolved);
-    }
-
-    BSValue includeKey = system ? bsStringNewFormat("<%s>", bsStringData(includeUrl)) : bsRetain(includeUrl);
-    BSValue includes = bsObjectGet(options->globals, BS_GLOBAL_INCLUDES);
-    if (includes.type != BS_OBJECT) {
-        includes = bsObjectNew();
-        bsObjectSet(options->globals, BS_GLOBAL_INCLUDES, includes);
-    }
-    if (bsValueBoolean(bsObjectGetString(includes, includeKey))) {
-        bsRelease(includeKey);
-        bsRelease(includeUrl);
-        return true;
-    }
-    bsObjectSetString(includes, includeKey, bsBoolean(true));
-    bsRelease(includeKey);
-
-    const char *includeText = NULL;
-    char *includeOwned = NULL;
-    size_t includeSize = 0;
-    if (system) {
-        includeText = bsSystemIncludeText(bsStringData(includeUrl));
-        if (includeText == NULL) {
-            /* The bundled include library's compiled script, cached for the thread */
-            BSScript *cached = bsIncludeScript(bsStringData(includeUrl));
-            if (cached == NULL) {
-                goto includeFailed;
-            }
-            bsRelease(bsRunCode(&cached->code, cached, options, NULL, false));
-            bsScriptRelease(cached);
-            bsRelease(includeUrl);
-            return options->error.type != BS_STRING;
+    BSScript *includeScript = NULL;
+    if (text.type != BS_STRING) {
+        /* The bundled include library's compiled script, cached for the thread */
+        includeScript = system ? bsIncludeScript(url) : NULL;
+        if (includeScript == NULL) {
+            bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed", url);
+            return false;
         }
-        includeSize = strlen(includeText);
-    } else if (options->fetchFn != NULL) {
-        BSFetchRequest request = {.url = bsStringData(includeUrl), .headers = bsNull()};
-        includeOwned = options->fetchFn(&request, &includeSize, options->fetchData);
-        includeText = includeOwned;
-    }
-    if (includeText == NULL) {
-        goto includeFailed;
+        bsRelease(bsRunCode(&includeScript->code, includeScript, options, NULL, false));
+        bsScriptRelease(includeScript);
+        return options->error.type != BS_STRING;
     }
 
-    BSScript *includeScript;
-    if (system && includeText[0] == '{') {
+    if (system && bsStringData(text)[0] == '{') {
         /* A registered system include may be a compiled JSON script model */
-        BSValue model = bsJSONDecode(includeText, includeSize, NULL);
-        includeScript = bsScriptFromModel(model, bsStringData(includeUrl));
+        BSValue model = bsJSONDecode(bsStringData(text), bsStringSize(text), NULL);
+        includeScript = bsScriptFromModel(model, url);
         bsRelease(model);
+        if (includeScript == NULL) {
+            bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed", url);
+            return false;
+        }
     } else {
         BSParserError parserError = {0};
-        includeScript = bsParseScript(includeText, includeSize, 1, bsStringData(includeUrl),
-                                      &parserError);
-        free(includeOwned);
+        includeScript = bsParseScriptString(text, 1, url, &parserError);
         if (includeScript == NULL) {
             bsErrorSet(options, "%s", bsStringData(parserError.message));
             bsParserErrorFree(&parserError);
-            bsRelease(includeUrl);
             return false;
         }
 
@@ -763,16 +733,14 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
             bsScriptForgetModel(includeScript);
         }
     }
-    if (includeScript == NULL) {
-        goto includeFailed;
-    }
     includeScript->system = system;
 
+    /* Execute the include with its own includes and fetches resolved relative to it */
     BSUrlFn savedUrlFn = options->urlFn;
     void *savedUrlData = options->urlData;
     void (*savedUrlDataFree)(void *) = options->urlDataFree;
     options->urlFn = bsUrlFileRelative;
-    options->urlData = bsStrdup(bsStringData(includeUrl));
+    options->urlData = bsStrdup(url);
     options->urlDataFree = free;
     bsRelease(bsRunCode(&includeScript->code, includeScript, options, NULL, false));
 
@@ -781,7 +749,7 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
         size_t warningCount = bsArrayCount(warnings);
         if (warningCount != 0) {
             bsLog(options, "BareScript: Include \"%s\" static analysis... %zu warning%s:",
-                  bsStringData(includeUrl), warningCount, warningCount > 1 ? "s" : "");
+                  url, warningCount, warningCount > 1 ? "s" : "");
             for (size_t ixWarning = 0; ixWarning < warningCount; ixWarning++) {
                 BSValue warning = bsValueString(bsArrayGet(warnings, ixWarning));
                 bsLog(options, "BareScript: %s", bsStringData(warning));
@@ -795,14 +763,122 @@ static bool bsExecuteInclude(BSScript *script, const BSInclude *include, int lin
     options->urlData = savedUrlData;
     options->urlDataFree = savedUrlDataFree;
     bsScriptRelease(includeScript);
-    bsRelease(includeUrl);
-
     return options->error.type != BS_STRING;
+}
 
-includeFailed:
-    bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed", bsStringData(includeUrl));
-    bsRelease(includeUrl);
-    return false;
+
+/* An include statement's include, resolved: its URL, its key in the included set, and whether the
+   statement fetches it - a non-system include neither included nor fetched already */
+typedef struct BSIncludeItem {
+    BSValue url;
+    BSValue key;
+    bool fetch;
+} BSIncludeItem;
+
+/*
+ * The include texts fetched but not yet executed, by key, while an include statement executes: a
+ * nested include statement takes the text of an include its enclosing statement fetched rather
+ * than fetch it again. A fetch that failed leaves true. The outermost statement owns the set.
+ */
+static _Thread_local BSValue bsIncludeTexts = {BS_NULL, {0}};
+
+
+/*
+ * Execute an include statement's includes: resolve each URL, fetch those not yet included - all
+ * together, so the fetch function can fetch them concurrently - then parse and execute them in
+ * order
+ */
+static bool bsExecuteIncludes(BSScript *script, const BSInclude *includes, size_t count, int lineNumber,
+                              BSOptions *options)
+{
+    bool outermost = (bsIncludeTexts.type != BS_OBJECT);
+    if (outermost) {
+        bsIncludeTexts = bsObjectNew();
+    }
+
+    /* The set of includes already included, as its keys - created on first use. A system include's
+       key is bracketed so that it cannot collide with a local include's URL. */
+    BSValue loaded = bsObjectGet(options->globals, BS_GLOBAL_INCLUDES);
+    if (loaded.type != BS_OBJECT) {
+        loaded = bsObjectNew();
+        bsObjectSet(options->globals, BS_GLOBAL_INCLUDES, loaded);
+    }
+    BSIncludeItem *items = bsAlloc(count * sizeof(BSIncludeItem));
+    BSFetchRequest *requests = bsAlloc(count * sizeof(BSFetchRequest));
+    BSValue *responses = bsAlloc(count * sizeof(BSValue));
+    size_t requestCount = 0;
+    for (size_t ix = 0; ix < count; ix++) {
+        responses[ix] = bsNull();
+        const BSInclude *include = &includes[ix];
+        BSIncludeItem *item = &items[ix];
+        item->url = bsRetain(include->url);
+        if (!include->system && options->urlFn != NULL) {
+            char *resolved = options->urlFn(bsStringData(item->url), options->urlData);
+            bsAssign(&item->url, bsStringNew(resolved));
+            free(resolved);
+        }
+        item->key = include->system ? bsStringNewFormat("<%s>", bsStringData(item->url)) : bsRetain(item->url);
+        item->fetch = !include->system && !bsValueBoolean(bsObjectGetString(loaded, item->key)) &&
+            !bsObjectHasString(bsIncludeTexts, item->key);
+        if (item->fetch) {
+            bsObjectSetString(bsIncludeTexts, item->key, bsBoolean(true));
+            requests[requestCount++] = (BSFetchRequest) {.url = bsStringData(item->url), .headers = bsNull()};
+        }
+    }
+    if (requestCount != 0 && options->fetchFn != NULL) {
+        options->fetchFn(requests, responses, requestCount, options->fetchData);
+    }
+    size_t ixResponse = 0;
+    for (size_t ix = 0; ix < count; ix++) {
+        if (items[ix].fetch) {
+            BSValue response = responses[ixResponse++];
+            if (response.type == BS_STRING) {
+                bsObjectSetString(bsIncludeTexts, items[ix].key, response);
+            } else {
+                bsRelease(response);
+            }
+        }
+    }
+
+    /* Execute each include, unless included since - by an include before it in the statement */
+    bool ok = true;
+    for (size_t ix = 0; ix < count && ok; ix++) {
+        const BSIncludeItem *item = &items[ix];
+        if (bsValueBoolean(bsObjectGetString(loaded, item->key))) {
+            continue;
+        }
+        bsObjectSetString(loaded, item->key, bsBoolean(true));
+
+        /* The fetched text, taken from the pending set, or a system include's registered text */
+        const char *url = bsStringData(item->url);
+        bool system = includes[ix].system;
+        BSValue text;
+        if (system) {
+            text = bsRetain(bsSystemIncludeText(url));
+        } else {
+            text = bsRetain(bsObjectGetString(bsIncludeTexts, item->key));
+            bsObjectDelete(bsIncludeTexts, bsStringData(item->key));
+        }
+        ok = bsExecuteInclude(script, url, system, text, lineNumber, options);
+        bsRelease(text);
+    }
+
+    /* A failure leaves the statement's remaining fetched texts, which no statement will take */
+    for (size_t ix = 0; ix < count; ix++) {
+        if (items[ix].fetch) {
+            bsObjectDelete(bsIncludeTexts, bsStringData(items[ix].key));
+        }
+        bsRelease(items[ix].url);
+        bsRelease(items[ix].key);
+    }
+    free(items);
+    free(requests);
+    free(responses);
+    if (outermost) {
+        bsRelease(bsIncludeTexts);
+        bsIncludeTexts = bsNull();
+    }
+    return ok;
 }
 
 
@@ -1183,7 +1259,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_NEXT();
 
         BS_CASE(INCLUDE)
-            if (!bsExecuteInclude(script, &code->includes[inst->a], bsCodeLine(code, pc - 1), options)) {
+            if (!bsExecuteIncludes(script, &code->includes[inst->a], inst->b, bsCodeLine(code, pc - 1), options)) {
                 goto fail;
             }
             BS_NEXT();

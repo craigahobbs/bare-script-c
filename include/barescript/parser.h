@@ -144,6 +144,10 @@ void bsParserErrorFree(BSParserError *error);
 BSScript *bsParseScript(const char *text, size_t size, int startLineNumber, const char *scriptName,
                         BSParserError *error);
 
+/* The same, parsing a string value */
+BSScript *bsParseScriptString(BSValue text, int startLineNumber, const char *scriptName,
+                              BSParserError *error);
+
 /*
  * Lint a parsed script with barescriptLint.bare. "globals" is the globals object the script would
  * execute against, used to resolve function references, or a null value. Returns an owned array of

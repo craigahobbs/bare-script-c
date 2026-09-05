@@ -135,12 +135,14 @@ typedef struct BSFetchRequest {
     BSValue headers;    /* an object of string header values, or a null value */
 } BSFetchRequest;
 
-typedef char *(*BSFetchFn)(const BSFetchRequest *request, size_t *responseSize, void *data);
+typedef void (*BSFetchFn)(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data);
 ```
 
-The function returns the response as a NUL-terminated, `malloc`-allocated buffer that the caller
-frees, or `NULL` if the fetch failed. `responseSize`, when non-NULL, receives the response size, so
-responses containing NUL bytes round-trip correctly.
+The function fetches `count` requests at once and sets each successful request's response to its
+text, an owned string value that the caller releases. The responses arrive as null values, so a
+failed request's response stays null. A `systemFetch` of an array arrives as one batch, so an
+implementation can fetch the requests concurrently, and so do an include statement's includes,
+which then execute in order; a single URL arrives as a batch of one.
 
 Four options ship with the library:
 
@@ -151,6 +153,11 @@ Four options ship with the library:
 | `bsFetchHTTP`       | HTTP(S) URLs only, via libcurl                               |
 | *(none)*            | Leave `options->fetchFn` NULL to disable fetching entirely   |
 
+`bsFetchHTTP` fetches a batch's requests concurrently over the calling thread's connection pool,
+which keeps a connection open for the next fetch to the same host, opens at most six to a host as
+a browser does, and multiplexes the requests to an HTTPS server that speaks HTTP/2 over one
+connection. It fetches http and https URLs - the schemes a browser's fetch accepts - and no other,
+redirects included. `bsLibraryCleanup` releases the pool with the thread's other library state.
 `bsFetchHTTPAvailable` reports whether libcurl is available - compiled in, and loadable at runtime.
 Without it the file system fetch functions still work and URL fetches fail.
 
@@ -327,6 +334,9 @@ the system include registry and search path, and the random number generator sta
 `_Thread_local`, so each thread is an independent runtime and threads never contend - there are no
 locks. The one exception is libcurl, which the first thread to fetch a URL loads and globally
 initializes behind a C11 atomic, because `curl_global_init` was not thread-safe before libcurl 7.84.
+Each thread then fetches through a libcurl multi handle of its own, which holds its connection pool
+that `bsLibraryCleanup` releases, with libcurl's signal handling off so that no transfer touches the
+process's SIGPIPE disposition.
 
 What this buys is confinement, and confinement is the rule: values, scripts, expressions, and
 options belong to the thread that created them and cannot be handed to another. Reference counts

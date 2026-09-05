@@ -19,18 +19,21 @@ BS_VISIBILITY_BEGIN
 
 
 /* A fetch function that reads and writes the local file system, and fetches HTTP(S) URLs */
-char *bsFetchReadWrite(const BSFetchRequest *request, size_t *responseSize, void *data);
+void bsFetchReadWrite(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data);
 
 /* A fetch function that reads the local file system, and fetches HTTP(S) URLs */
-char *bsFetchReadOnly(const BSFetchRequest *request, size_t *responseSize, void *data);
+void bsFetchReadOnly(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data);
 
 /*
- * A fetch function that fetches HTTP(S) URLs with libcurl. Returns NULL for non-URL requests, and
- * always returns NULL unless the library was built with libcurl support (BARESCRIPT_CURL).
+ * A fetch function that fetches http and https URLs with libcurl - the schemes a browser's fetch
+ * accepts. A batch's requests are fetched concurrently over the calling thread's connection pool,
+ * multiplexed where an HTTPS server speaks HTTP/2. A request of any other scheme fails, as does a
+ * redirect to one, and every request fails unless the library was built with libcurl support
+ * (BARESCRIPT_CURL) and libcurl loads at runtime.
  */
-char *bsFetchHTTP(const BSFetchRequest *request, size_t *responseSize, void *data);
+void bsFetchHTTP(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data);
 
-/* True if the library was built with libcurl HTTP support */
+/* True if the library was built with libcurl HTTP support, and libcurl loads at runtime */
 bool bsFetchHTTPAvailable(void);
 
 /* A log function that writes to stdout */

@@ -63,10 +63,9 @@ static int bsTestBare(const char *arg, ...)
     clearerr(stdout);
 
     BSFetchRequest request = {.url = path, .headers = bsNull()};
-    size_t size = 0;
-    char *text = bsFetchReadOnly(&request, &size, NULL);
-    bsAssign(&bsTestMainOutput, text != NULL ? bsStringNewSize(text, size) : bsStringNew(""));
-    free(text);
+    BSValue output = bsNull();
+    bsFetchReadOnly(&request, &output, 1, NULL);
+    bsAssign(&bsTestMainOutput, output.type == BS_STRING ? output : bsStringNew(""));
     return status;
 }
 

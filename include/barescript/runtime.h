@@ -42,10 +42,11 @@ typedef struct BSFetchRequest {
 /*
  * The fetch function signature
  *
- * Returns the response text as a NUL-terminated, malloc-allocated buffer that the caller frees,
- * or NULL if the fetch failed. If "responseSize" is non-NULL it is set to the response size.
+ * Fetches "count" requests at once - so an implementation can fetch them concurrently - and sets
+ * each successful request's response to its text, an owned string value. The responses arrive as
+ * null values, so a request that fails may be left as it is. The caller releases each response.
  */
-typedef char *(*BSFetchFn)(const BSFetchRequest *request, size_t *responseSize, void *data);
+typedef void (*BSFetchFn)(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data);
 
 /* The log function signature */
 typedef void (*BSLogFn)(const char *text, void *data);

@@ -597,26 +597,39 @@ TEST(runtime_globals)
 }
 
 
-static char *bsTestFetchFn(const BSFetchRequest *request, size_t *responseSize, void *data)
+/* The largest batch the fetch function double has seen, and its requests in all */
+static size_t bsTestFetchBatchMax;
+static size_t bsTestFetchRequests;
+
+static void bsTestFetchFn(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data)
 {
-    if (strcmp(request->url, "fail.bare") == 0) {
-        return NULL;
+    if (count > bsTestFetchBatchMax) {
+        bsTestFetchBatchMax = count;
     }
-    const char *text = "includedGlobal = 'included'\nfunction includedFn():\n    return 'from include'\n"
-        "endfunction";
-    if (strcmp(request->url, "lint.bare") == 0) {
-        text = "function lintFn():\n    unused = 1\n    return 1\nendfunction";
-    } else if (strcmp(request->url, "bad.bare") == 0) {
-        text = "a = 1 +";
-    } else if (strcmp(request->url, "error.bare") == 0) {
-        text = "undefinedFunc()";
-    } else if (strcmp(request->url, "nested.bare") == 0) {
-        text = "include 'other.bare'";
+    bsTestFetchRequests += count;
+    for (size_t ix = 0; ix < count; ix++) {
+        const char *url = requests[ix].url;
+        const char *text = "includedGlobal = 'included'\nfunction includedFn():\n    return 'from include'\n"
+            "endfunction";
+        if (strcmp(url, "fail.bare") == 0) {
+            text = NULL;
+        } else if (strcmp(url, "lint.bare") == 0) {
+            text = "function lintFn():\n    unused = 1\n    return 1\nendfunction";
+        } else if (strcmp(url, "bad.bare") == 0) {
+            text = "a = 1 +";
+        } else if (strcmp(url, "error.bare") == 0) {
+            text = "undefinedFunc()";
+        } else if (strcmp(url, "nested.bare") == 0) {
+            text = "include 'other.bare'";
+        } else if (strcmp(url, "count.bare") == 0) {
+            text = "includeCount = systemGlobalGet('includeCount', 0) + 1";
+        } else if (strcmp(url, "nestedCount.bare") == 0) {
+            text = "include 'count.bare'";
+        }
+        if (text != NULL) {
+            responses[ix] = bsStringNew(text);
+        }
     }
-    if (responseSize != NULL) {
-        *responseSize = strlen(text);
-    }
-    return bsTestStrdup(text);
 }
 
 
@@ -642,6 +655,37 @@ TEST(runtime_includes)
     options->fetchFn = bsTestFetchFn;
     ASSERT_VALUE(bsTestExecuteOptions("include 'fail.bare'", options), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Include of \"fail.bare\" failed");
+    bsOptionsFree(options);
+
+    /* An include statement's includes fetch as one batch, then execute in order */
+    options = bsTestOptions();
+    options->fetchFn = bsTestFetchFn;
+    bsTestFetchBatchMax = 0;
+    ASSERT_VALUE(bsTestExecuteOptions("include 'a.bare'\ninclude 'count.bare'\ninclude 'b.bare'\n"
+                                      "return [includedGlobal, includeCount]", options),
+                 "[\"included\",1]");
+    ASSERT_INT_EQ(bsTestFetchBatchMax, 3);
+    ASSERT_VALUE(bsTestExecuteOptions("include 'a.bare'\ninclude 'fail.bare'\ninclude 'b.bare'", options), "null");
+    ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Include of \"fail.bare\" failed");
+    bsOptionsFree(options);
+
+    /* An include that an earlier include of its batch included itself executes once, from the text
+       the batch fetched - it is not fetched again */
+    options = bsTestOptions();
+    options->fetchFn = bsTestFetchFn;
+    bsTestFetchRequests = 0;
+    ASSERT_VALUE(bsTestExecuteOptions("include 'nestedCount.bare'\ninclude 'count.bare'\nreturn includeCount",
+                                      options), "1");
+    ASSERT_INT_EQ(bsTestFetchRequests, 2);
+    bsOptionsFree(options);
+
+    /* An include repeated in a statement is fetched once */
+    options = bsTestOptions();
+    options->fetchFn = bsTestFetchFn;
+    bsTestFetchRequests = 0;
+    ASSERT_VALUE(bsTestExecuteOptions("include 'a.bare'\ninclude 'a.bare'\nreturn includedGlobal", options),
+                 "\"included\"");
+    ASSERT_INT_EQ(bsTestFetchRequests, 1);
     bsOptionsFree(options);
 
     /* No fetch function */
@@ -1043,6 +1087,12 @@ TEST(runtime_include_bundled_model)
     bsSystemIncludeRegister("badmodel.bare", "{\"statements\":[{}]}");
     ASSERT_VALUE(bsTestExecute("include <badmodel.bare>"), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Include of \"badmodel.bare\" failed");
+    bsSystemIncludeClear();
+
+    /* A registered system include whose text is a valid JSON model executes it */
+    bsSystemIncludeRegister("model.bare",
+                            "{\"statements\":[{\"expr\":{\"name\":\"modelGlobal\",\"expr\":{\"string\":\"from model\"}}}]}");
+    ASSERT_VALUE(bsTestExecute("include <model.bare>\nreturn modelGlobal"), "\"from model\"");
     bsSystemIncludeClear();
 
     /* A registered system include whose text is source is parsed */

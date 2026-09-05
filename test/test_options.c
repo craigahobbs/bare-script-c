@@ -12,6 +12,8 @@
 
 #include "test.h"
 
+#include "../src/internal.h"
+
 
 /* Resolve a URL relative to a file, returning the result as a value */
 static BSValue bsTestUrl(const char *file, const char *url)
@@ -77,37 +79,34 @@ TEST(options_log_stdout)
 }
 
 
+/* Fetch one request through a fetch function - the response arrives as a null value, as the fetch
+   function signature requires - and return the owned response */
+static BSValue bsTestFetch(BSFetchFn fetchFn, const BSFetchRequest *request)
+{
+    BSValue response = bsNull();
+    fetchFn(request, &response, 1, NULL);
+    return response;
+}
+
+
 TEST(options_fetch_file)
 {
     const char *path = bsTestTempFile("read.txt", "file contents");
 
     BSFetchRequest request = {.url = path, .headers = bsNull()};
-
-    size_t size = 0;
-    char *text = bsFetchReadOnly(&request, &size, NULL);
-    ASSERT_NOT_NULL(text);
-    ASSERT_STR_EQ(text, "file contents");
-    ASSERT_INT_EQ(size, 13);
-    free(text);
-
-    /* Read without a size output */
-    text = bsFetchReadWrite(&request, NULL, NULL);
-    ASSERT_NOT_NULL(text);
-    free(text);
+    ASSERT_VALUE(bsTestFetch(bsFetchReadOnly, &request), "\"file contents\"");
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "\"file contents\"");
 
     /* A missing file */
     request.url = "no-such-file-xyz";
-    ASSERT_NULL(bsFetchReadOnly(&request, &size, NULL));
-    ASSERT_NULL(bsFetchReadWrite(&request, &size, NULL));
+    ASSERT_VALUE(bsTestFetch(bsFetchReadOnly, &request), "null");
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "null");
 
     /* A large file exercises the read buffer growth */
     BSValue big = bsTestRepeat(NULL, "0123456789", 10000, NULL);
     const char *bigPath = bsTestTempFile("big.txt", bsStringData(big));
     request.url = bigPath;
-    text = bsFetchReadOnly(&request, &size, NULL);
-    ASSERT_NOT_NULL(text);
-    ASSERT_INT_EQ(size, 100000);
-    free(text);
+    ASSERT_VALUE_STRING(bsTestFetch(bsFetchReadOnly, &request), bsStringData(big));
     bsRelease(big);
 }
 
@@ -118,32 +117,18 @@ TEST(options_fetch_file_write)
     snprintf(path, sizeof(path), "%s/write.txt", bsTestTempDir());
 
     BSFetchRequest request = {.url = path, .body = "written", .bodySize = 7, .headers = bsNull()};
-
-    size_t size = 0;
-    char *result = bsFetchReadWrite(&request, &size, NULL);
-    ASSERT_NOT_NULL(result);
-    ASSERT_STR_EQ(result, "{}");
-    ASSERT_INT_EQ(size, 2);
-    free(result);
-
-    /* Write without a size output */
-    result = bsFetchReadWrite(&request, NULL, NULL);
-    ASSERT_NOT_NULL(result);
-    free(result);
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "\"{}\"");
 
     /* The read-only fetch function refuses writes */
-    ASSERT_NULL(bsFetchReadOnly(&request, &size, NULL));
+    ASSERT_VALUE(bsTestFetch(bsFetchReadOnly, &request), "null");
 
     /* An unwritable path */
     request.url = "no-such-directory-xyz/write.txt";
-    ASSERT_NULL(bsFetchReadWrite(&request, &size, NULL));
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "null");
 
     /* Read back what was written */
     request = (BSFetchRequest) {.url = path, .headers = bsNull()};
-    char *text = bsFetchReadOnly(&request, &size, NULL);
-    ASSERT_NOT_NULL(text);
-    ASSERT_STR_EQ(text, "written");
-    free(text);
+    ASSERT_VALUE(bsTestFetch(bsFetchReadOnly, &request), "\"written\"");
 }
 
 
@@ -151,12 +136,23 @@ TEST(options_fetch_http)
 {
     /* A non-URL request is not an HTTP fetch */
     BSFetchRequest request = {.url = "not-a-url", .headers = bsNull()};
-    ASSERT_NULL(bsFetchHTTP(&request, NULL, NULL));
+    ASSERT_VALUE(bsTestFetch(bsFetchHTTP, &request), "null");
 
     /* An unreachable host fails rather than hanging */
     request.url = "http://127.0.0.1:1/nope";
-    ASSERT_NULL(bsFetchHTTP(&request, NULL, NULL));
-    ASSERT_NULL(bsFetchReadOnly(&request, NULL, NULL));
+    ASSERT_VALUE(bsTestFetch(bsFetchHTTP, &request), "null");
+    ASSERT_VALUE(bsTestFetch(bsFetchReadOnly, &request), "null");
+
+    /* An unreachable HTTPS host, whose transfer would wait to multiplex, fails the same way */
+    request.url = "https://127.0.0.1:1/nope";
+    ASSERT_VALUE(bsTestFetch(bsFetchHTTP, &request), "null");
+
+    /* Only http and https URLs are fetched - as with a browser's fetch, a file URL fails */
+    char fileUrl[600];
+    snprintf(fileUrl, sizeof(fileUrl), "file://%s", bsTestTempFile("scheme.txt", "local"));
+    request.url = fileUrl;
+    ASSERT_VALUE(bsTestFetch(bsFetchHTTP, &request), "null");
+    ASSERT_VALUE(bsTestFetch(bsFetchReadOnly, &request), "null");
 
     /* HTTP availability reflects the build configuration */
 #ifdef BARESCRIPT_CURL
@@ -174,7 +170,7 @@ TEST(options_version)
 
 
 /*
- * A minimal single-request HTTP server, for exercising the libcurl fetch function
+ * A minimal HTTP server, for exercising the libcurl fetch function
  */
 
 #include <arpa/inet.h>
@@ -184,12 +180,18 @@ TEST(options_version)
 #include <sys/wait.h>
 
 
-/* Serve one HTTP request on a fresh port in a child process; returns the port, or zero on failure */
-static int bsTestHTTPServe(pid_t *child, const char *status, const char *body)
+/*
+ * Serve "count" HTTP requests from a child process on a fresh port, answering each with the status
+ * (which may carry further header lines) and body. Each request arrives on a connection of its
+ * own, closed after its response - or, with "keepAlive", all arrive on the first connection, and
+ * the listener closes behind it so that a client opening another connection is refused rather than
+ * left waiting. Returns the port, or zero on failure.
+ */
+static int bsTestHTTPServe(pid_t *child, const char *status, const char *body, int count, bool keepAlive)
 {
     int listener = socket(AF_INET, SOCK_STREAM, 0);
     if (listener < 0) {
-        return 0; /* GCOV_EXCL_LINE */
+        return 0;
     }
     int reuse = 1;
     setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
@@ -199,40 +201,58 @@ static int bsTestHTTPServe(pid_t *child, const char *status, const char *body)
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = inet_addr("127.0.0.1");
     address.sin_port = 0;
-    /* GCOV_EXCL_START */
-    if (bind(listener, (struct sockaddr *) &address, sizeof(address)) != 0 || listen(listener, 1) != 0) {
+    if (bind(listener, (struct sockaddr *) &address, sizeof(address)) != 0 || listen(listener, 16) != 0) {
         close(listener);
         return 0;
     }
-    /* GCOV_EXCL_STOP */
 
     socklen_t addressSize = sizeof(address);
     getsockname(listener, (struct sockaddr *) &address, &addressSize);
     int port = ntohs(address.sin_port);
 
     pid_t pid = fork();
-    /* GCOV_EXCL_START */
     if (pid < 0) {
         close(listener);
         return 0;
     }
-    /* GCOV_EXCL_STOP */
     if (pid == 0) {
-        /* The child serves one request and exits without running the test framework's cleanup */
-        int connection = accept(listener, NULL, NULL);
-        if (connection >= 0) {
+        /* The child serves and exits without running the test framework's cleanup - and dies rather
+           than wait forever for a request that never comes */
+        alarm(10);
+        const char *closeHeader = keepAlive ? "" : "Connection: close\r\n";
+        size_t responseCapacity = strlen(status) + strlen(body) + strlen(closeHeader) + 64;
+        char *response = malloc(responseCapacity);
+        int size = snprintf(response, responseCapacity, "HTTP/1.1 %s\r\nContent-Length: %zu\r\n%s\r\n%s",
+                            status, strlen(body), closeHeader, body);
+        int connection = -1;
+        for (int served = 0; served < count; served++) {
+            if (connection < 0) {
+                connection = accept(listener, NULL, NULL);
+                if (connection < 0) {
+                    break;
+                }
+                if (keepAlive) {
+                    close(listener);
+                    listener = -1;
+                }
+            }
             char request[4096];
-            ssize_t read = recv(connection, request, sizeof(request) - 1, 0);
-            (void) read;
-            char response[8192];
-            int size = snprintf(response, sizeof(response),
-                                "HTTP/1.1 %s\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
-                                status, strlen(body), body);
+            if (recv(connection, request, sizeof(request) - 1, 0) <= 0) {
+                break;
+            }
             ssize_t written = send(connection, response, (size_t) size, 0);
             (void) written;
+            if (!keepAlive) {
+                close(connection);
+                connection = -1;
+            }
+        }
+        if (connection >= 0) {
             close(connection);
         }
-        close(listener);
+        if (listener >= 0) {
+            close(listener);
+        }
         _exit(0);
     }
 
@@ -242,10 +262,12 @@ static int bsTestHTTPServe(pid_t *child, const char *status, const char *body)
 }
 
 
+/* Reap the server child, which must have exited on its own rather than been killed by its alarm */
 static void bsTestHTTPWait(pid_t child)
 {
     int status = 0;
     waitpid(child, &status, 0);
+    ASSERT_TRUE(WIFEXITED(status));
 }
 
 
@@ -257,9 +279,9 @@ static bool bsTestHTTPRequest(pid_t *child, BSFetchRequest *request, const char 
 {
     static char url[64];
     if (!bsFetchHTTPAvailable()) {
-        return false; /* GCOV_EXCL_LINE */
+        return false;
     }
-    int port = bsTestHTTPServe(child, status, body);
+    int port = bsTestHTTPServe(child, status, body, 1, false);
     ASSERT_TRUE(port != 0);
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", port);
     *request = (BSFetchRequest) {.url = url, .headers = bsNull()};
@@ -272,15 +294,11 @@ TEST(options_fetch_http_get)
     pid_t child = 0;
     BSFetchRequest request;
     if (!bsTestHTTPRequest(&child, &request, "200 OK", "hello from http")) {
-        return; /* GCOV_EXCL_LINE */
+        return;
     }
-    size_t size = 0;
-    char *text = bsFetchHTTP(&request, &size, NULL);
+    BSValue response = bsTestFetch(bsFetchHTTP, &request);
     bsTestHTTPWait(child);
-    ASSERT_NOT_NULL(text);
-    ASSERT_STR_EQ(text, "hello from http");
-    ASSERT_INT_EQ(size, 15);
-    free(text);
+    ASSERT_VALUE(response, "\"hello from http\"");
 }
 
 
@@ -289,18 +307,16 @@ TEST(options_fetch_http_post)
     pid_t child = 0;
     BSFetchRequest request;
     if (!bsTestHTTPRequest(&child, &request, "200 OK", "posted")) {
-        return; /* GCOV_EXCL_LINE */
+        return;
     }
     BSValue headers = bsObjectNew();
     bsObjectSet(headers, "X-Test", bsStringNew("value"));
     request.body = "body text";
     request.bodySize = 9;
     request.headers = headers;
-    char *text = bsFetchReadOnly(&request, NULL, NULL);
+    BSValue response = bsTestFetch(bsFetchReadOnly, &request);
     bsTestHTTPWait(child);
-    ASSERT_NOT_NULL(text);
-    ASSERT_STR_EQ(text, "posted");
-    free(text);
+    ASSERT_VALUE(response, "\"posted\"");
     bsRelease(headers);
 }
 
@@ -311,20 +327,17 @@ TEST(options_fetch_http_empty_and_error)
     pid_t child = 0;
     BSFetchRequest request;
     if (!bsTestHTTPRequest(&child, &request, "200 OK", "")) {
-        return; /* GCOV_EXCL_LINE */
+        return;
     }
-    size_t size = 1;
-    char *text = bsFetchHTTP(&request, &size, NULL);
+    BSValue response = bsTestFetch(bsFetchHTTP, &request);
     bsTestHTTPWait(child);
-    ASSERT_NOT_NULL(text);
-    ASSERT_STR_EQ(text, "");
-    ASSERT_INT_EQ(size, 0);
-    free(text);
+    ASSERT_VALUE(response, "\"\"");
 
     /* A non-200 status is a failed fetch */
     bsTestHTTPRequest(&child, &request, "404 Not Found", "missing");
-    ASSERT_NULL(bsFetchHTTP(&request, NULL, NULL));
+    response = bsTestFetch(bsFetchHTTP, &request);
     bsTestHTTPWait(child);
+    ASSERT_VALUE(response, "null");
 }
 
 
@@ -336,14 +349,112 @@ TEST(options_fetch_http_large)
     pid_t child = 0;
     BSFetchRequest request;
     if (!bsTestHTTPRequest(&child, &request, "200 OK", bsStringData(body))) {
-        bsRelease(body); /* GCOV_EXCL_LINE */
-        return; /* GCOV_EXCL_LINE */
+        bsRelease(body);
+        return;
     }
-    size_t size = 0;
-    char *text = bsFetchHTTP(&request, &size, NULL);
+    BSValue response = bsTestFetch(bsFetchHTTP, &request);
     bsTestHTTPWait(child);
-    ASSERT_NOT_NULL(text);
-    ASSERT_INT_EQ(size, 6000);
-    free(text);
+    ASSERT_VALUE_STRING(response, bsStringData(body));
     bsRelease(body);
+}
+
+
+TEST(options_fetch_http_redirect)
+{
+    if (!bsFetchHTTPAvailable()) {
+        return;
+    }
+
+    /* A redirect is followed */
+    pid_t childTarget = 0;
+    int portTarget = bsTestHTTPServe(&childTarget, "200 OK", "landed", 1, false);
+    ASSERT_TRUE(portTarget != 0);
+    char status[128];
+    snprintf(status, sizeof(status), "302 Found\r\nLocation: http://127.0.0.1:%d/target", portTarget);
+    pid_t childRedirect = 0;
+    int portRedirect = bsTestHTTPServe(&childRedirect, status, "", 1, false);
+    ASSERT_TRUE(portRedirect != 0);
+    char url[64];
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", portRedirect);
+    BSFetchRequest request = {.url = url, .headers = bsNull()};
+    BSValue response = bsTestFetch(bsFetchHTTP, &request);
+    bsTestHTTPWait(childRedirect);
+    bsTestHTTPWait(childTarget);
+    ASSERT_VALUE(response, "\"landed\"");
+
+    /* A redirect to another scheme is not followed - here to a file URL, which libcurl can read */
+    char fileStatus[700];
+    snprintf(fileStatus, sizeof(fileStatus), "302 Found\r\nLocation: file://%s",
+             bsTestTempFile("redirect.txt", "local"));
+    pid_t childFile = 0;
+    int portFile = bsTestHTTPServe(&childFile, fileStatus, "", 1, false);
+    ASSERT_TRUE(portFile != 0);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", portFile);
+    response = bsTestFetch(bsFetchHTTP, &request);
+    bsTestHTTPWait(childFile);
+    ASSERT_VALUE(response, "null");
+}
+
+
+TEST(options_fetch_http_batch)
+{
+    if (!bsFetchHTTPAvailable()) {
+        return;
+    }
+
+    /* Three requests to one server and one to another, among a file read and a missing file - each
+       response lands on its request */
+    pid_t childA = 0;
+    pid_t childB = 0;
+    int portA = bsTestHTTPServe(&childA, "200 OK", "from a", 3, false);
+    ASSERT_TRUE(portA != 0);
+    int portB = bsTestHTTPServe(&childB, "200 OK", "from b", 1, false);
+    ASSERT_TRUE(portB != 0);
+    char urlA[64];
+    char urlB[64];
+    snprintf(urlA, sizeof(urlA), "http://127.0.0.1:%d/a", portA);
+    snprintf(urlB, sizeof(urlB), "http://127.0.0.1:%d/b", portB);
+    const char *path = bsTestTempFile("batch.txt", "file contents");
+    BSFetchRequest requests[] = {
+        {.url = urlA, .headers = bsNull()},
+        {.url = path, .headers = bsNull()},
+        {.url = urlB, .headers = bsNull()},
+        {.url = urlA, .headers = bsNull()},
+        {.url = "no-such-file-xyz", .headers = bsNull()},
+        {.url = urlA, .headers = bsNull()}
+    };
+    BSValue responses[6] = {0};
+    bsFetchReadOnly(requests, responses, 6, NULL);
+    bsTestHTTPWait(childA);
+    bsTestHTTPWait(childB);
+    const char *expected[] = {"\"from a\"", "\"file contents\"", "\"from b\"", "\"from a\"", "null", "\"from a\""};
+    for (size_t ix = 0; ix < 6; ix++) {
+        ASSERT_VALUE(responses[ix], expected[ix]);
+    }
+}
+
+
+TEST(options_fetch_http_reuse)
+{
+    if (!bsFetchHTTPAvailable()) {
+        return;
+    }
+
+    /* The server accepts one connection and serves two requests on it, refusing any other - so the
+       second fetch succeeds only over the first's pooled connection */
+    pid_t child = 0;
+    int port = bsTestHTTPServe(&child, "200 OK", "again", 2, true);
+    ASSERT_TRUE(port != 0);
+    char url[64];
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", port);
+    BSFetchRequest request = {.url = url, .headers = bsNull()};
+    ASSERT_VALUE(bsTestFetch(bsFetchHTTP, &request), "\"again\"");
+    BSValue response = bsTestFetch(bsFetchHTTP, &request);
+    /* Releasing the pool closes its connection, so a server still reading it exits either way */
+    bsFetchCleanup();
+    bsTestHTTPWait(child);
+    ASSERT_VALUE(response, "\"again\"");
+
+    /* Releasing an empty pool is a no-op */
+    bsFetchCleanup();
 }

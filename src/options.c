@@ -15,9 +15,12 @@
 #include "internal.h"
 
 #ifdef BARESCRIPT_CURL
+/* The redirect-protocol option's long form is deprecated in the header, and is the form used here */
+#define CURL_DISABLE_DEPRECATION
 #include <curl/curl.h>
 #include <dlfcn.h>
 #include <stdatomic.h>
+#include <time.h>
 #endif
 
 
@@ -144,22 +147,37 @@ void bsLogStdout(const char *text, void *data)
  * This is the runtime's one piece of process-wide state. libcurl is loaded and globally
  * initialized once, by the first thread to fetch, behind an atomic state: 0 before, 1 while that
  * thread loads, 2 after. Every other thread waits for 2 and reads the entry points published
- * before it.
+ * before it. curl_multi_poll, from libcurl 7.66, is optional; the rest are far older.
  */
 typedef struct BSCurl {
     void *handle;
     CURLcode (*globalInit)(long);
     CURL *(*easyInit)(void);
     CURLcode (*easySetopt)(CURL *, CURLoption, ...);
-    CURLcode (*easyPerform)(CURL *);
     CURLcode (*easyGetinfo)(CURL *, CURLINFO, ...);
     void (*easyCleanup)(CURL *);
+    CURLM *(*multiInit)(void);
+    CURLMcode (*multiSetopt)(CURLM *, CURLMoption, ...);
+    CURLMcode (*multiAddHandle)(CURLM *, CURL *);
+    CURLMcode (*multiRemoveHandle)(CURLM *, CURL *);
+    CURLMcode (*multiPerform)(CURLM *, int *);
+    CURLMcode (*multiWait)(CURLM *, struct curl_waitfd *, unsigned int, int, int *);
+    CURLMcode (*multiPoll)(CURLM *, struct curl_waitfd *, unsigned int, int, int *);
+    CURLMsg *(*multiInfoRead)(CURLM *, int *);
+    CURLMcode (*multiCleanup)(CURLM *);
     struct curl_slist *(*slistAppend)(struct curl_slist *, const char *);
     void (*slistFreeAll)(struct curl_slist *);
 } BSCurl;
 
 static BSCurl bsCurl;
 static atomic_int bsCurlState;
+
+/*
+ * The thread's multi handle. It owns the connection pool - a connection stays open after its
+ * transfer for the next fetch to the same host - and it runs a batch's transfers concurrently,
+ * multiplexing those that share an HTTP/2 connection.
+ */
+static _Thread_local CURLM *bsCurlMulti;
 
 #ifdef __APPLE__
 static const char *const bsCurlLibraries[] = {"libcurl.4.dylib", "libcurl.dylib"};
@@ -191,9 +209,16 @@ static const BSCurl *bsCurlLoad(void)
             (!bsCurlSymbol(handle, "curl_global_init", &bsCurl.globalInit) ||
              !bsCurlSymbol(handle, "curl_easy_init", &bsCurl.easyInit) ||
              !bsCurlSymbol(handle, "curl_easy_setopt", &bsCurl.easySetopt) ||
-             !bsCurlSymbol(handle, "curl_easy_perform", &bsCurl.easyPerform) ||
              !bsCurlSymbol(handle, "curl_easy_getinfo", &bsCurl.easyGetinfo) ||
              !bsCurlSymbol(handle, "curl_easy_cleanup", &bsCurl.easyCleanup) ||
+             !bsCurlSymbol(handle, "curl_multi_init", &bsCurl.multiInit) ||
+             !bsCurlSymbol(handle, "curl_multi_setopt", &bsCurl.multiSetopt) ||
+             !bsCurlSymbol(handle, "curl_multi_add_handle", &bsCurl.multiAddHandle) ||
+             !bsCurlSymbol(handle, "curl_multi_remove_handle", &bsCurl.multiRemoveHandle) ||
+             !bsCurlSymbol(handle, "curl_multi_perform", &bsCurl.multiPerform) ||
+             !bsCurlSymbol(handle, "curl_multi_wait", &bsCurl.multiWait) ||
+             !bsCurlSymbol(handle, "curl_multi_info_read", &bsCurl.multiInfoRead) ||
+             !bsCurlSymbol(handle, "curl_multi_cleanup", &bsCurl.multiCleanup) ||
              !bsCurlSymbol(handle, "curl_slist_append", &bsCurl.slistAppend) ||
              !bsCurlSymbol(handle, "curl_slist_free_all", &bsCurl.slistFreeAll))) {
             dlclose(handle);
@@ -201,6 +226,7 @@ static const BSCurl *bsCurlLoad(void)
         }
         /* GCOV_EXCL_STOP */
         if (handle != NULL) {
+            bsCurlSymbol(handle, "curl_multi_poll", &bsCurl.multiPoll);
             /* curl_global_init is not thread-safe before libcurl 7.84 - so it runs here, once */
             bsCurl.globalInit(CURL_GLOBAL_DEFAULT);
             bsCurl.handle = handle;
@@ -232,57 +258,139 @@ static bool bsCurlHeaderIter(BSValue key, BSValue item, void *data)
 }
 
 
-char *bsFetchHTTP(const BSFetchRequest *request, size_t *responseSize, void *data)
+/* True for an http or https URL - the schemes a browser's fetch accepts */
+static bool bsUrlIsHTTP(const char *url)
 {
-    if (!bsUrlIsURL(request->url)) {
-        return NULL;
-    }
+    return strncmp(url, "http:", 5) == 0 || strncmp(url, "https:", 6) == 0;
+}
 
-    const BSCurl *lib = bsCurlLoad();
-    CURL *curl = lib != NULL ? lib->easyInit() : NULL;
-    /* GCOV_EXCL_START */
-    if (curl == NULL) {
-        return NULL;
-    }
-    /* GCOV_EXCL_STOP */
 
+/*
+ * Wait for transfer activity. curl_multi_wait returns at once with no descriptors while a transfer
+ * has no socket yet - a name resolving in a thread, a connection being waited for - so without
+ * curl_multi_poll, which waits through that, the wait pauses briefly rather than spin.
+ */
+static CURLMcode bsCurlWait(const BSCurl *lib)
+{
+    CURLMcode code;
+    if (lib->multiPoll != NULL) {
+        code = lib->multiPoll(bsCurlMulti, NULL, 0, 1000, NULL);
+    } else {
+        /* GCOV_EXCL_START - libcurl before 7.66 */
+        int descriptors = 0;
+        code = lib->multiWait(bsCurlMulti, NULL, 0, 1000, &descriptors);
+        if (code == CURLM_OK && descriptors == 0) {
+            nanosleep(&(struct timespec) {0, 10000000}, NULL);
+        }
+        /* GCOV_EXCL_STOP */
+    }
+    return code;
+}
+
+
+/* One URL request's transfer */
+typedef struct BSCurlTransfer {
+    CURL *easy;
+    struct curl_slist *headers;
     BSStringBuilder buffer;
-    bsSBInit(&buffer);
-    struct curl_slist *headers = NULL;
-    bsObjectIter(request->headers, bsCurlHeaderIter, &headers);
+    BSValue *response;
+} BSCurlTransfer;
 
-    lib->easySetopt(curl, CURLOPT_URL, request->url);
-    lib->easySetopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    lib->easySetopt(curl, CURLOPT_WRITEFUNCTION, bsCurlWrite);
-    lib->easySetopt(curl, CURLOPT_WRITEDATA, &buffer);
-    lib->easySetopt(curl, CURLOPT_USERAGENT, "bare-script-c");
-    if (request->body != NULL) {
-        lib->easySetopt(curl, CURLOPT_POSTFIELDS, request->body);
-        lib->easySetopt(curl, CURLOPT_POSTFIELDSIZE, (long) request->bodySize);
+
+void bsFetchHTTP(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data)
+{
+    /* A request that is not an http or https URL fails; the rest fetch together */
+    size_t urlCount = 0;
+    for (size_t ix = 0; ix < count; ix++) {
+        urlCount += bsUrlIsHTTP(requests[ix].url);
     }
-    if (headers != NULL) {
-        lib->easySetopt(curl, CURLOPT_HTTPHEADER, headers);
+    const BSCurl *lib = urlCount != 0 ? bsCurlLoad() : NULL;
+    if (lib == NULL) {
+        return;
+    }
+    if (bsCurlMulti == NULL) {
+        bsCurlMulti = lib->multiInit();
+        /* A browser's limit on connections to one host, which keeps a batch from swamping a
+           server's accept queue; an HTTP/2 connection multiplexes the batch regardless */
+        lib->multiSetopt(bsCurlMulti, CURLMOPT_MAX_HOST_CONNECTIONS, 6L);
     }
 
-    CURLcode status = lib->easyPerform(curl);
-    long responseCode = 0;
-    lib->easyGetinfo(curl, CURLINFO_RESPONSE_CODE, &responseCode);
-    lib->slistFreeAll(headers);
-    lib->easyCleanup(curl);
+    /* Start each URL request's transfer */
+    BSCurlTransfer *transfers = bsAlloc(urlCount * sizeof(BSCurlTransfer));
+    size_t transferCount = 0;
+    for (size_t ix = 0; ix < count; ix++) {
+        const BSFetchRequest *request = &requests[ix];
+        if (!bsUrlIsHTTP(request->url)) {
+            continue;
+        }
+        BSCurlTransfer *transfer = &transfers[transferCount++];
+        *transfer = (BSCurlTransfer) {.easy = lib->easyInit(), .response = &responses[ix]};
+        bsSBInit(&transfer->buffer);
+        bsObjectIter(request->headers, bsCurlHeaderIter, &transfer->headers);
 
-    if (status != CURLE_OK || (responseCode != 0 && responseCode != 200)) {
-        bsSBFree(&buffer);
-        return NULL;
+        CURL *easy = transfer->easy;
+        lib->easySetopt(easy, CURLOPT_URL, request->url);
+        lib->easySetopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
+        /* A redirect to any other scheme fails - libcurl would follow one to FTP by default. The
+           option's long form, deprecated for a string form since libcurl 7.85, is the one every
+           libcurl has, whatever version the loader finds at runtime. */
+        lib->easySetopt(easy, CURLOPT_REDIR_PROTOCOLS, (long) (CURLPROTO_HTTP | CURLPROTO_HTTPS));
+        lib->easySetopt(easy, CURLOPT_WRITEFUNCTION, bsCurlWrite);
+        lib->easySetopt(easy, CURLOPT_WRITEDATA, &transfer->buffer);
+        lib->easySetopt(easy, CURLOPT_USERAGENT, "bare-script-c");
+        lib->easySetopt(easy, CURLOPT_PRIVATE, transfer);
+        /* No signals - a transfer would otherwise swap the process's SIGPIPE handler in and out,
+           which threads fetching at once race on */
+        lib->easySetopt(easy, CURLOPT_NOSIGNAL, 1L);
+        /* libcurl negotiates HTTP/2 with a TLS server by default and multiplexes the transfers that
+           share such a connection - so an HTTPS transfer waits for a connection already opening to
+           its host, to learn whether it multiplexes, rather than open one of its own. A plain HTTP
+           transfer cannot multiplex, and would only wait for that connection's first response. */
+        if (strncmp(request->url, "https:", 6) == 0) {
+            lib->easySetopt(easy, CURLOPT_PIPEWAIT, 1L);
+        }
+        if (request->body != NULL) {
+            lib->easySetopt(easy, CURLOPT_POSTFIELDS, request->body);
+            lib->easySetopt(easy, CURLOPT_POSTFIELDSIZE, (long) request->bodySize);
+        }
+        if (transfer->headers != NULL) {
+            lib->easySetopt(easy, CURLOPT_HTTPHEADER, transfer->headers);
+        }
+        lib->multiAddHandle(bsCurlMulti, easy);
     }
-    /* The caller frees the response, so it leaves the builder's string block for a plain buffer */
-    char *text = bsAlloc(buffer.size + 1);
-    memcpy(text, buffer.data != NULL ? buffer.data : "", buffer.size);
-    text[buffer.size] = '\0';
-    if (responseSize != NULL) {
-        *responseSize = buffer.size;
+
+    /* Run the transfers to completion - or until libcurl itself fails, leaving them unfinished */
+    CURLMcode code;
+    int running = 0;
+    do {
+        code = lib->multiPerform(bsCurlMulti, &running);
+        if (code == CURLM_OK && running != 0) {
+            code = bsCurlWait(lib);
+        }
+    } while (code == CURLM_OK && running != 0);
+
+    /* A transfer that completed without error and with a 200 status is its request's response */
+    int queued = 0;
+    for (CURLMsg *message = lib->multiInfoRead(bsCurlMulti, &queued); message != NULL;
+         message = lib->multiInfoRead(bsCurlMulti, &queued)) {
+        char *transferData = NULL;
+        lib->easyGetinfo(message->easy_handle, CURLINFO_PRIVATE, &transferData);
+        BSCurlTransfer *transfer = (BSCurlTransfer *) transferData;
+        long responseCode = 0;
+        lib->easyGetinfo(message->easy_handle, CURLINFO_RESPONSE_CODE, &responseCode);
+        if (message->data.result == CURLE_OK && responseCode == 200) {
+            *transfer->response = bsSBToValue(&transfer->buffer);
+        }
     }
-    bsSBFree(&buffer);
-    return text;
+
+    for (size_t ix = 0; ix < transferCount; ix++) {
+        BSCurlTransfer *transfer = &transfers[ix];
+        lib->multiRemoveHandle(bsCurlMulti, transfer->easy);
+        lib->easyCleanup(transfer->easy);
+        lib->slistFreeAll(transfer->headers);
+        bsSBFree(&transfer->buffer);
+    }
+    free(transfers);
 }
 
 
@@ -291,17 +399,31 @@ bool bsFetchHTTPAvailable(void)
     return bsCurlLoad() != NULL;
 }
 
+
+void bsFetchCleanup(void)
+{
+    if (bsCurlMulti != NULL) {
+        bsCurl.multiCleanup(bsCurlMulti);
+        bsCurlMulti = NULL;
+    }
+}
+
 #else
 
-char *bsFetchHTTP(const BSFetchRequest *request, size_t *responseSize, void *data)
+void bsFetchHTTP(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data)
 {
-    return NULL;
+    /* Every request fails, so the responses stay as they arrived - null values */
 }
 
 
 bool bsFetchHTTPAvailable(void)
 {
     return false;
+}
+
+
+void bsFetchCleanup(void)
+{
 }
 
 #endif
@@ -312,79 +434,69 @@ bool bsFetchHTTPAvailable(void)
  */
 
 
-static char *bsFileRead(const char *path, size_t *responseSize)
+/* Read a file into a string value, or a null value if it cannot be read */
+static BSValue bsFileRead(const char *path)
 {
     FILE *file = fopen(path, "rb");
     if (file == NULL) {
-        return NULL;
+        return bsNull();
     }
-    size_t capacity = 4096;
-    size_t size = 0;
-    char *buffer = bsAlloc(capacity);
-    while (true) {
-        if (size + 4096 + 1 > capacity) {
-            capacity *= 2;
-            buffer = bsRealloc(buffer, capacity);
-        }
-        size_t read = fread(buffer + size, 1, 4096, file);
-        size += read;
-        if (read != 4096) {
-            break;
-        }
-    }
+
+    /* Read into a string builder's spare room, so the text becomes the string uncopied */
+    BSStringBuilder sb;
+    bsSBInit(&sb);
+    size_t read;
+    do {
+        bsSBReserve(&sb, 4096);
+        read = fread(sb.data + sb.size, 1, sb.capacity - sb.size - 1, file);
+        sb.size += read;
+    } while (read != 0);
     bool failed = (ferror(file) != 0);
     fclose(file);
     if (failed) {
-        free(buffer); /* GCOV_EXCL_LINE */
-        return NULL;  /* GCOV_EXCL_LINE */
+        bsSBFree(&sb);   /* GCOV_EXCL_LINE */
+        return bsNull(); /* GCOV_EXCL_LINE */
     }
-    buffer[size] = '\0';
-    if (responseSize != NULL) {
-        *responseSize = size;
-    }
-    return buffer;
+    return bsSBToValue(&sb);
 }
 
 
-static char *bsFetchFile(const BSFetchRequest *request, size_t *responseSize, bool write)
+static bool bsFileWrite(const char *path, const char *body, size_t bodySize)
 {
-    /* An HTTP(S) URL */
-    if (bsUrlIsURL(request->url)) {
-        return bsFetchHTTP(request, responseSize, NULL);
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) {
+        return false;
     }
-
-    /* A file write */
-    if (request->body != NULL) {
-        if (!write) {
-            return NULL;
-        }
-        FILE *file = fopen(request->url, "wb");
-        if (file == NULL) {
-            return NULL;
-        }
-        size_t written = fwrite(request->body, 1, request->bodySize, file);
-        bool failed = (written != request->bodySize);
-        failed = (fclose(file) != 0) || failed;
-        if (failed) {
-            return NULL; /* GCOV_EXCL_LINE */
-        }
-        if (responseSize != NULL) {
-            *responseSize = 2;
-        }
-        return bsStrdup("{}");
-    }
-
-    return bsFileRead(request->url, responseSize);
+    bool written = (fwrite(body, 1, bodySize, file) == bodySize);
+    return (fclose(file) == 0) && written;
 }
 
 
-char *bsFetchReadWrite(const BSFetchRequest *request, size_t *responseSize, void *data)
+static void bsFetchFile(const BSFetchRequest *requests, BSValue *responses, size_t count, bool write)
 {
-    return bsFetchFile(request, responseSize, true);
+    /* The URL requests fetch together; the rest are file reads and, when allowed, file writes */
+    bsFetchHTTP(requests, responses, count, NULL);
+    for (size_t ix = 0; ix < count; ix++) {
+        const BSFetchRequest *request = &requests[ix];
+        if (bsUrlIsURL(request->url)) {
+            continue;
+        }
+        if (request->body == NULL) {
+            responses[ix] = bsFileRead(request->url);
+        } else if (write && bsFileWrite(request->url, request->body, request->bodySize)) {
+            responses[ix] = bsStringNew("{}");
+        }
+    }
 }
 
 
-char *bsFetchReadOnly(const BSFetchRequest *request, size_t *responseSize, void *data)
+void bsFetchReadWrite(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data)
 {
-    return bsFetchFile(request, responseSize, false);
+    bsFetchFile(requests, responses, count, true);
+}
+
+
+void bsFetchReadOnly(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data)
+{
+    bsFetchFile(requests, responses, count, false);
 }
