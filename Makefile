@@ -423,43 +423,44 @@ cover: $(COVER_BIN)
 # project's own suite. Each suite is its own target, so under "make -j" they run at once.
 #
 
-# The binary under test. The release build is what ships, and PGO and LTO are the two things most
-# able to change behaviour without changing a source line, so "test-release" runs these same suites
-# against it - see the pre-commit gate.
-TEST_CLI ?= $(CLI_BIN)
-
 .PHONY: test-include test-include-lint test-include-markdownup test-include-run test-language
 test-include: test-include-lint test-include-markdownup test-include-run
 
-test-include-lint: $(TEST_CLI)
-	$(TEST_CLI) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
-	$(TEST_CLI) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
+test-include-lint: $(CLI_BIN)
+	$(CLI_BIN) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
+	$(CLI_BIN) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
 
-test-include-markdownup: $(TEST_CLI)
-	$(TEST_CLI) -d -v vUnittestReport true \
+test-include-markdownup: $(CLI_BIN)
+	$(CLI_BIN) -d -v vUnittestReport true \
 	    $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
 
-test-include-run: $(TEST_CLI)
-	$(TEST_CLI) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
+test-include-run: $(CLI_BIN)
+	$(CLI_BIN) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
 
-test-language: $(TEST_CLI)
-	$(TEST_CLI) -d -m $(TEST_DIR)/include/runTests.bare
+test-language: $(CLI_BIN)
+	$(CLI_BIN) -d -m $(TEST_DIR)/include/runTests.bare
 
 # The release build under the same suites. The shipped binary is built by a different pipeline -
 # profile-guided, link-time optimized - than the one every other target tests; running the suites
 # against it is what catches a miscompile, or a profile that silently failed to apply. Each suite
 # is its own target, mirroring the development-build targets, so one suite can be run alone
-# against the release binary - "make test-release-run" is the suite's timed report. Each sub-make
-# depends only on the release binary, which is complete, so it cannot race the outer make's
-# development build.
+# against the release binary - "make test-release-run" is the suite's timed report.
 .PHONY: test-release test-release-lint test-release-markdownup test-release-run test-release-language
 test-release: test-release-lint test-release-markdownup test-release-run test-release-language
 
-test-release-lint test-release-markdownup test-release-run: test-release-%: $(RELEASE_CLI)
-	$(MAKE) test-include-$* TEST_CLI=$(RELEASE_CLI)
+test-release-lint: $(RELEASE_CLI)
+	$(RELEASE_CLI) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
+	$(RELEASE_CLI) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
+
+test-release-markdownup: $(RELEASE_CLI)
+	$(RELEASE_CLI) -d -v vUnittestReport true \
+	    $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
+
+test-release-run: $(RELEASE_CLI)
+	$(RELEASE_CLI) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
 
 test-release-language: $(RELEASE_CLI)
-	$(MAKE) test-language TEST_CLI=$(RELEASE_CLI)
+	$(RELEASE_CLI) -d -m $(TEST_DIR)/include/runTests.bare
 
 
 #
