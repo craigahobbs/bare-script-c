@@ -153,6 +153,7 @@ help:
 	@echo "  test-include  run the BareScript include library test suite"
 	@echo "  test-language run this project's own BareScript language tests"
 	@echo "  test-release  run those suites again against the release build"
+	@echo "                test-release-{lint,markdownup,run,language} run one of them"
 	@echo "  perf          run the performance suite against the release build"
 	@echo "  perfx         run the cross-language application suite against the release build"
 	@echo "  perfx-check   verify that every perfx port computes the same result"
@@ -446,12 +447,19 @@ test-language: $(TEST_CLI)
 
 # The release build under the same suites. The shipped binary is built by a different pipeline -
 # profile-guided, link-time optimized - than the one every other target tests; running the suites
-# against it is what catches a miscompile, or a profile that silently failed to apply. The
-# sub-make depends only on the release binary, which is complete, so it cannot race the outer
-# make's development build.
-.PHONY: test-release
-test-release: $(RELEASE_CLI)
-	$(MAKE) test-include test-language TEST_CLI=$(RELEASE_CLI)
+# against it is what catches a miscompile, or a profile that silently failed to apply. Each suite
+# is its own target, mirroring the development-build targets, so one suite can be run alone
+# against the release binary - "make test-release-run" is the suite's timed report. Each sub-make
+# depends only on the release binary, which is complete, so it cannot race the outer make's
+# development build.
+.PHONY: test-release test-release-lint test-release-markdownup test-release-run test-release-language
+test-release: test-release-lint test-release-markdownup test-release-run test-release-language
+
+test-release-lint test-release-markdownup test-release-run: test-release-%: $(RELEASE_CLI)
+	$(MAKE) test-include-$* TEST_CLI=$(RELEASE_CLI)
+
+test-release-language: $(RELEASE_CLI)
+	$(MAKE) test-language TEST_CLI=$(RELEASE_CLI)
 
 
 #
