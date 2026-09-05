@@ -238,17 +238,23 @@ neutral so it is not retried.
 
 ### The simplification loop
 
-Review, simplify, verify, measure, commit, repeat until the reviews come back thin:
+A full-code review for simplification and improvement opportunities, then each worthwhile idea
+implemented and validated on its own - the gate, the suite diff, and before/after performance,
+memory, and size - and committed if it holds up or reverted if not, until the ideas run out:
 
-- Review the diff since the last pass and each source file group (value/json/options/include;
-  model/library/runtime/regex; parser/bare/tests). A repeated-window scan (normalized six-line
-  windows across `src/*.c`) and an unused-declaration scan (each name in `internal.h` and the
-  public headers counted across `src/`) find what reading misses.
+- Review the whole codebase, not the diff: every source file group (value/json/options/include;
+  model/library/runtime/regex; parser/bare/tests), the headers, and the tests. A repeated-window
+  scan (normalized six-line windows across `src/*.c`) and an unused-declaration scan (each name in
+  `internal.h` and the public headers counted across `src/`) find what reading misses.
 - A candidate is fewer lines for identical behavior: a shared helper for a repeated sequence, an
   unread field or parameter, a special case a general path already covers, a flag that restates
-  state another value carries. Prefer deleting unreachable code to excluding it from coverage.
+  state another value carries. Prefer deleting unreachable code to excluding it from coverage. An
+  improvement - fewer instructions, less memory, a smaller binary - is a candidate too, judged by
+  its measurement.
 - Apply in per-file batches, gate each batch, and measure. A simplification inside `bsRunCode`,
-  `rxRun`, or the emitter's dispatch is judged by the numbers, not the line count.
+  `rxRun`, or the emitter's dispatch is judged by the numbers, not the line count. A candidate that
+  comes out line-neutral, or that trades an invariant the code relies on for a few lines, is not
+  one - trace what a change to a container's shape lets later operations assume before taking it.
 - Threaded dispatch gotcha: a `}` after a threaded jump (`BS_NEXT()`, `RX_NEXT()`) is a line
   coverage never reaches; keep the label and `goto dispatch` form that leaves no such brace.
 - A refcount change gets `leaks --atExit -- build/bare -c '...'` on the dev build as well as the
