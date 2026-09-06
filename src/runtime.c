@@ -1067,6 +1067,39 @@ static BS_NOINLINE bool bsIntrinStringLength(const BSCode *code, const BSInst *i
     return true;
 }
 
+static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+                                            BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_STRING_SLICE);
+    size_t begin;
+    size_t end;
+    if (args == NULL) {
+        return false;
+    }
+    BSValue string = bsOperandRead(code, regs, args->a);
+    if (string.type != BS_STRING || !bsIntrinsicIndex(bsOperandRead(code, regs, args->b), &begin)) {
+        return false;
+    }
+    size_t length = string.u.string->length;
+    BSValue endValue = inst->c == 3 ? bsOperandRead(code, regs, args->c) : bsNull();
+    if (endValue.type == BS_NULL) {
+        end = length;
+    } else if (!bsIntrinsicIndex(endValue, &end)) {
+        return false;
+    }
+    /* The library's range rules: both within the string, a reversed range empty */
+    if (begin > length || end > length) {
+        return false;
+    }
+    BSValue slice = bsStringSlice(string, begin, end < begin ? begin : end);
+    if (inst->a != BS_REG_DISCARD) {
+        bsAssign(&regs[inst->a], slice);
+    } else {
+        bsRelease(slice);
+    }
+    return true;
+}
+
 
 /*
  * The binary operator handlers that differ only by their operator. Each opcode keeps its own
@@ -1199,7 +1232,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG, &&op_NOT, &&op_BNOT,
         &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT, &&op_CALL_ARRAY_GET,
         &&op_CALL_ARRAY_LENGTH, &&op_CALL_ARRAY_PUSH, &&op_CALL_ARRAY_SET, &&op_CALL_OBJECT_GET,
-        &&op_CALL_OBJECT_SET, &&op_CALL_STRING_LENGTH
+        &&op_CALL_OBJECT_SET, &&op_CALL_STRING_LENGTH, &&op_CALL_STRING_SLICE
     };
 #define BS_CASE(name) op_##name:
 #define BS_NEXT() \
@@ -1290,6 +1323,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CALL_INTRIN(CALL_OBJECT_GET, bsIntrinObjectGet)
         BS_CALL_INTRIN(CALL_OBJECT_SET, bsIntrinObjectSet)
         BS_CALL_INTRIN(CALL_STRING_LENGTH, bsIntrinStringLength)
+        BS_CALL_INTRIN(CALL_STRING_SLICE, bsIntrinStringSlice)
 #undef BS_CALL_INTRIN
 
         BS_CASE(CALL_NAME)

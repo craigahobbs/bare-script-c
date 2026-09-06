@@ -203,8 +203,7 @@ static const BSArgModel stringArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}
 static const BSArgModel valueArgs[] = {{"value", BS_ARG_ANY, 0, 0, 0, 0, 0}};
 
 
-/* The substring between two code point indexes, as an owned string value */
-static BSValue bsStringSlice(BSValue string, size_t begin, size_t end)
+BSValue bsStringSlice(BSValue string, size_t begin, size_t end)
 {
     const BSString *source = string.u.string;
     if (source->length == source->size) {
@@ -2045,7 +2044,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
     {"stringNew", bsFnStringNewFn, "text", 0},
     {"stringRepeat", bsFnStringRepeat, "rept", 0},
     {"stringReplace", bsFnStringReplace, "replace", 0},
-    {"stringSlice", bsFnStringSlice, "slice", 0},
+    {"stringSlice", bsFnStringSlice, "slice", BS_INTRIN_STRING_SLICE},
     {"stringSplit", bsFnStringSplit, NULL, 0},
     {"stringSplitLines", bsFnStringSplitLines, NULL, 0},
     {"stringStartsWith", bsFnStringStartsWith, "startsWith", BS_INTRIN_STRING_STARTS_WITH},

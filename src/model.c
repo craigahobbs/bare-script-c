@@ -769,7 +769,7 @@ static uint8_t bsCallOpcode(const char *name, size_t argCount)
         {"arrayGet", 2, 2, BS_OP_CALL_ARRAY_GET}, {"arrayLength", 1, 1, BS_OP_CALL_ARRAY_LENGTH},
         {"arrayPush", 2, 2, BS_OP_CALL_ARRAY_PUSH}, {"arraySet", 3, 3, BS_OP_CALL_ARRAY_SET},
         {"objectGet", 2, 3, BS_OP_CALL_OBJECT_GET}, {"objectSet", 3, 3, BS_OP_CALL_OBJECT_SET},
-        {"stringLength", 1, 1, BS_OP_CALL_STRING_LENGTH}
+        {"stringLength", 1, 1, BS_OP_CALL_STRING_LENGTH}, {"stringSlice", 2, 3, BS_OP_CALL_STRING_SLICE}
     };
     for (size_t ix = 0; ix < sizeof(table) / sizeof(table[0]); ix++) {
         if (argCount >= table[ix].argMin && argCount <= table[ix].argMax && strcmp(table[ix].name, name) == 0) {

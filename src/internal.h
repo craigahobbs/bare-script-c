@@ -207,6 +207,7 @@ enum {
     BS_OP_CALL_OBJECT_GET,
     BS_OP_CALL_OBJECT_SET,
     BS_OP_CALL_STRING_LENGTH,
+    BS_OP_CALL_STRING_SLICE,
     BS_OP_DATA = 0xFF  /* call operands, or a trap's line; never dispatched */
 };
 
@@ -370,6 +371,7 @@ enum {
     BS_INTRIN_STRING_ENDS_WITH,
     BS_INTRIN_STRING_LENGTH,
     BS_INTRIN_STRING_STARTS_WITH,
+    BS_INTRIN_STRING_SLICE,
     BS_INTRIN_SYSTEM_BOOLEAN,
     BS_INTRIN_SYSTEM_TYPE,
     BS_INTRIN_REGEX_MATCH
@@ -380,6 +382,9 @@ BSValue bsRegexMatchImpl(BSValue regex, BSValue string);
 
 /* A value's interned type name string - "array", "boolean", ... - as an owned value */
 BSValue bsSystemTypeName(BSValue value);
+
+/* The substring of a string between two code point indexes, both within it, as an owned string value */
+BSValue bsStringSlice(BSValue string, size_t begin, size_t end);
 
 /*
  * The line of the statement containing the instruction at "pc" - the last of "count" statements

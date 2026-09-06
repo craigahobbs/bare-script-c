@@ -1197,8 +1197,22 @@ TEST(runtime_intrinsic_opcodes)
         "return barescriptEvaluateExpression({'function': {'name': 'arrayLength', 'args': [{'variable': 'a'}]}}, "
         "{'a': [1, 2, 3]})"), "3");
 
+    /* stringSlice: two or three arguments, a null end, a reversed range, and the shapes that fall back */
+    ASSERT_VALUE(bsTestExecute(
+        "s = 'abcdef'\n"
+        "return [stringSlice(s, 2), stringSlice(s, 1, 3), stringSlice(s, 1, null), stringSlice(s, 4, 2), "
+        "stringSlice(s, 6), stringSlice(s, 0, 6), stringSlice('\xc3\xa9\xc3\xa9x', 1, 2)]"),
+        "[\"cdef\",\"bc\",\"bcdef\",\"\",\"\",\"abcdef\",\"\xc3\xa9\"]");
+    ASSERT_VALUE(bsTestExecute("return [stringSlice('abc', 4), stringSlice('abc', 0, 4), stringSlice('abc', 1.5), "
+                               "stringSlice('abc', 0, 'x'), stringSlice(1, 0), stringSlice('abc', -1)]"),
+                 "[null,null,null,null,null,null]");
+    ASSERT_VALUE(bsTestExecute("stringSlice('abc', 1)\nreturn 1"), "1");
+    ASSERT_VALUE(bsTestExecute("function stringSlice(s, b):\n    return 'mine'\nendfunction\nreturn stringSlice('abc', 1)"),
+                 "\"mine\"");
+
     /* Called through a local holding the function, the library function itself runs */
     ASSERT_VALUE(bsTestExecute(
-        "function g():\n    f = arrayGet\n    h = objectGet\n    return [f([1, 2], 1), h({'k': 3}, 'k'), h({}, 'k', 4)]\n"
-        "endfunction\nreturn g()"), "[2,3,4]");
+        "function g():\n    f = arrayGet\n    h = objectGet\n    k = stringSlice\n"
+        "    return [f([1, 2], 1), h({'k': 3}, 'k'), h({}, 'k', 4), k('abcdef', 1, 3)]\n"
+        "endfunction\nreturn g()"), "[2,3,4,\"bc\"]");
 }
