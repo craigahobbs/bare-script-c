@@ -250,7 +250,7 @@ size_t bsUTF8Length(const char *data, size_t size)
  * share a value and never contend - see README's "Threads". They are one struct so a function that
  * touches several of them computes the thread-local address once.
  */
-#define BS_STRING_POOL_CLASSES 4
+#define BS_STRING_POOL_CLASSES 5
 #define BS_ARRAY_BUF_CLASS_COUNT 4
 #define BS_ENTRY_POOL_CLASS_COUNT 2
 
@@ -289,7 +289,7 @@ static _Thread_local BSValueState bsTS;
  */
 #define BS_STRING_POOL_MAX 4096
 #define BS_STR_POOL_SHIFT 4
-static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128};
+static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128, 192};
 
 
 /* Set up a string allocation's header for "size" data bytes; the caller fills them and sets the length */
@@ -547,7 +547,7 @@ BSString *bsStringAppendValue(BSString *string, BSValue value)
     size_t newSize = string->size + size;
     if (newSize > string->capacity) {
         size_t total = sizeof(BSString) + newSize + 1;
-        if (total <= bsStringPoolSize[BS_STRING_POOL_CLASSES - 1]) {
+        if (total <= 128) {
             /* Still a pooled size: move up a size class, block for block, with no allocator call */
             BSString *grown = bsStringAlloc(newSize);
             memcpy(grown->data, string->data, string->size);
