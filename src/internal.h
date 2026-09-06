@@ -239,6 +239,13 @@ BSValue bsStringIntern(const char *data, size_t size);
 /* Reuse an interned string if present; otherwise a new ordinary string. Does not grow the table. */
 BSValue bsStringInternExisting(const char *data, size_t size);
 
+/*
+ * Append a value's string representation to a string that nothing else references - the caller
+ * holds its only reference and has checked that - growing the allocation in place. Returns the
+ * string, which may have moved.
+ */
+BSString *bsStringAppendValue(BSString *string, BSValue value);
+
 /* Allocate a string whose bytes are already known to be ASCII (length == size). */
 BSValue bsStringNewAscii(const char *text, size_t size);
 

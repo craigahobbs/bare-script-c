@@ -1039,6 +1039,48 @@ TEST(runtime_many_arguments)
 }
 
 
+TEST(runtime_string_append)
+{
+    /* "s = s + x" on a function local holding the string's only reference appends in place: within
+       the recycled block's room, then growing it out of its size class, then doubling repeatedly. A
+       global loads into a temporary first, so it never does. */
+    ASSERT_VALUE(bsTestExecute(
+        "function f():\n"
+        "    s = stringSlice('abc', 0, 1)\n"
+        "    i = 0\n    while i < 40:\n        s = s + 'xy'\n        i = i + 1\n    endwhile\n"
+        "    return [stringLength(s), stringSlice(s, 0, 5), stringSlice(s, 79)]\n"
+        "endfunction\nreturn f()"), "[81,\"axyxy\",\"xy\"]");
+    ASSERT_VALUE(bsTestExecute(
+        "function f():\n"
+        "    s = stringSlice('abc', 0, 1)\n    s = s + stringRepeat('z', 300)\n"
+        "    return [stringLength(s), stringSlice(s, 299)]\n"
+        "endfunction\nreturn f()"), "[301,\"zz\"]");
+
+    /* The right operand's string representation, and the code point length and index of a
+       non-ASCII string */
+    ASSERT_VALUE(bsTestExecute(
+        "function f():\n"
+        "    s = stringSlice('abc', 0, 1)\n    s = s + 1.5\n    s = s + true\n    s = s + null\n    return s\n"
+        "endfunction\nreturn f()"), "\"a1.5truenull\"");
+    ASSERT_VALUE(bsTestExecute(
+        "function f():\n"
+        "    s = stringSlice('\xc3\xa9\xc3\xa9x', 0, 2)\n    c = stringCharAt(s, 1)\n    s = s + '\xc3\xa9'\n"
+        "    return [stringLength(s), s, c, stringCharAt(s, 2)]\n"
+        "endfunction\nreturn f()"), "[3,\"\xc3\xa9\xc3\xa9\xc3\xa9\",\"\xc3\xa9\",\"\xc3\xa9\"]");
+
+    /* Not in place: a string appended to itself, one another variable shares, a literal, a global */
+    ASSERT_VALUE(bsTestExecute(
+        "function f():\n    s = stringSlice('abc', 0, 2)\n    s = s + s\n    return s\nendfunction\nreturn f()"),
+        "\"abab\"");
+    ASSERT_VALUE(bsTestExecute(
+        "function f():\n    s = stringSlice('abc', 0, 1)\n    t = s\n    s = s + 'q'\n    return t + s\n"
+        "endfunction\nreturn f()"), "\"aaq\"");
+    ASSERT_VALUE(bsTestExecute("function f():\n    s = 'abc'\n    s = s + 'd'\n    return s\nendfunction\nreturn f()"),
+                 "\"abcd\"");
+    ASSERT_VALUE(bsTestExecute("s = stringSlice('abc', 0, 1)\ns = s + 'd'\nreturn s"), "\"ad\"");
+}
+
+
 TEST(runtime_concat_all_types)
 {
     /* String concatenation formats every value type */

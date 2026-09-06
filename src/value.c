@@ -506,6 +506,37 @@ BSValue bsStringConcat(BSValue left, BSValue right)
 }
 
 
+BSString *bsStringAppendValue(BSString *string, BSValue value)
+{
+    char buffer[64];
+    const char *data;
+    size_t size;
+    size_t length;
+    BSValue text = bsStringBytes(value, buffer, sizeof(buffer), &data, &size, &length);
+    size_t newSize = string->size + size;
+    if (newSize > string->capacity) {
+        /* Grown geometrically, so a string built by repeated appends copies each byte a bounded
+           number of times; a recycled block outgrows its size class and is freed like any other */
+        size_t capacity = string->capacity < 32 ? 64 : string->capacity * 2;
+        while (capacity < newSize) {
+            capacity *= 2;
+        }
+        string = bsRealloc(string, sizeof(BSString) + capacity + 1);
+        string->capacity = (uint32_t) capacity;
+        string->flags &= (uint8_t) ((1u << BS_STR_POOL_SHIFT) - 1);
+    }
+    memcpy(string->data + string->size, data, size);
+    string->size = (uint32_t) newSize;
+    string->length += (uint32_t) length;
+    string->data[newSize] = '\0';
+    string->flags &= (uint8_t) ~BS_STR_HASHED;
+    free(string->index);
+    string->index = NULL;
+    bsReleaseInline(text);
+    return string;
+}
+
+
 const char *bsStringData(BSValue value)
 {
     return value.type == BS_STRING ? value.u.string->data : "";

@@ -1194,8 +1194,16 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CASE(ADD) {
             BSValue left = BS_READ(inst->b);
             BSValue right = BS_READ(inst->c);
-            bsAssign(&regs[inst->a], (left.type == BS_NUMBER && right.type == BS_NUMBER) ?
-                     bsArithmetic(left.u.number + right.u.number) : bsAddSlow(left, right));
+            if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
+                bsAssign(&regs[inst->a], bsArithmetic(left.u.number + right.u.number));
+            } else if (left.type == BS_STRING && inst->a == inst->b && left.u.string->refcount == 1 &&
+                       (left.u.string->flags & BS_STR_INTERNED) == 0 &&
+                       !(right.type == BS_STRING && right.u.string == left.u.string)) {
+                /* "s = s + x" with the register holding s's only reference appends in place */
+                regs[inst->a].u.string = bsStringAppendValue(left.u.string, right);
+            } else {
+                bsAssign(&regs[inst->a], bsAddSlow(left, right));
+            }
         }
         BS_NEXT();
 

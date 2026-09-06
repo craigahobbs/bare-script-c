@@ -50,10 +50,15 @@ The reference counting rules are uniform:
 **Strings** are immutable, reference-counted UTF-8 buffers: a 32-byte header followed by the
 NUL-terminated payload in the same allocation. They cache their code point length, so an
 all-ASCII string - the common case - indexes by byte. Construction skips the UTF-8 walk when the
-buffer has no high bit. Non-ASCII indexing keeps a cursor and, after a backward lookup, a sparse
-stride-16 offset table. String library functions index by Unicode code point. Strings are the
-runtime's most frequent allocation and most are short, so an allocation that fits one of four size
-classes is rounded up and recycled through that class's free list.
+buffer has no high bit. Non-ASCII indexing keeps, in an index block allocated on first use, a
+cursor and, for a string of thirty-two code points or more, a sparse stride-16 offset table.
+String library functions index by Unicode code point. The header also caches the string's content
+hash, for object lookups, and records the allocation's capacity: the `+` operator appends in
+place when its left operand is a function local holding the string's only reference - so
+`s = s + piece` in a loop is linear rather than quadratic - growing the allocation geometrically
+(a global loads into a temporary first, and never qualifies). Strings are the runtime's most
+frequent allocation and most are short, so an allocation that fits one of four size classes is
+rounded up and recycled through that class's free list.
 
 **Arrays** are vectors of values with amortized growth.
 
