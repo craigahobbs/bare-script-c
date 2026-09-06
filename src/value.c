@@ -1348,14 +1348,41 @@ static BS_NOINLINE void bsObjectIndexBuild(BSObject *object, size_t capacity)
 }
 
 
-/* The entry holding a key, or NULL - "key" is the sought key's string, or NULL for a C string */
+/*
+ * The entry holding a key, or NULL - "key" is the sought key's string, or NULL for a C string
+ *
+ * A scan of the entries compares pointers first, over every entry, and content only on a miss:
+ * the keys compiled code and the library look up are interned, as are the keys they store, so the
+ * pointer pass finds them without touching a stored key's header. A sought key that is interned
+ * can then only match a stored key that is not - two distinct interned strings never compare
+ * equal - so the content pass skips the interned ones.
+ */
 static inline BSObjectEntry *bsObjectFind(const BSObject *object, BSString *key, const char *data, size_t size)
 {
     BSObjectEntry *entries = object->entries;
     const BSObjectIndex *index = object->index;
     if (index == NULL) {
-        for (size_t ix = 0; ix < object->count; ix++) {
-            if (bsKeyEqual(entries[ix].key, key, data, size)) {
+        size_t count = object->count;
+        if (key != NULL) {
+            for (size_t ix = 0; ix < count; ix++) {
+                if (entries[ix].key == key) {
+                    return &entries[ix];
+                }
+            }
+            if ((key->flags & BS_STR_INTERNED) != 0) {
+                for (size_t ix = 0; ix < count; ix++) {
+                    const BSString *stored = entries[ix].key;
+                    if ((stored->flags & BS_STR_INTERNED) == 0 && stored->size == size &&
+                        memcmp(stored->data, data, size) == 0) {
+                        return &entries[ix];
+                    }
+                }
+                return NULL;
+            }
+        }
+        for (size_t ix = 0; ix < count; ix++) {
+            const BSString *stored = entries[ix].key;
+            if (stored->size == size && memcmp(stored->data, data, size) == 0) {
                 return &entries[ix];
             }
         }
