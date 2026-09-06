@@ -1216,3 +1216,50 @@ TEST(runtime_intrinsic_opcodes)
         "    return [f([1, 2], 1), h({'k': 3}, 'k'), h({}, 'k', 4), k('abcdef', 1, 3)]\n"
         "endfunction\nreturn g()"), "[2,3,4,\"bc\"]");
 }
+
+
+TEST(runtime_compare_jumps)
+{
+    /* A jump on a comparison is one instruction on the comparison's operands: each comparison,
+       taken and not, on numbers, strings, and null; a jump on true; a group; the conditional
+       function; a while loop */
+    ASSERT_VALUE(bsTestExecute(
+        "function t(a, b):\n"
+        "    r = []\n"
+        "    if a == b:\n        arrayPush(r, 'eq')\n    endif\n"
+        "    if a != b:\n        arrayPush(r, 'ne')\n    endif\n"
+        "    if a < b:\n        arrayPush(r, 'lt')\n    endif\n"
+        "    if a <= b:\n        arrayPush(r, 'le')\n    endif\n"
+        "    if a > b:\n        arrayPush(r, 'gt')\n    endif\n"
+        "    if a >= b:\n        arrayPush(r, 'ge')\n    endif\n"
+        "    return arrayJoin(r, ',')\n"
+        "endfunction\n"
+        "return [t(1, 2), t(2, 2), t(3, 2), t('a', 'b'), t('b', 'b'), t(null, 1), t(1, null)]"),
+        "[\"ne,lt,le\",\"eq,le,ge\",\"ne,gt,ge\",\"ne,lt,le\",\"eq,le,ge\",\"ne,lt,le\",\"ne,gt,ge\"]");
+    ASSERT_VALUE(bsTestExecute("a = 1\njumpif (a < 2) yes\nreturn 'no'\nyes:\nreturn 'yes'"), "\"yes\"");
+    ASSERT_VALUE(bsTestExecute("a = 1\njumpif ((a > 2)) yes\nreturn 'no'\nyes:\nreturn 'yes'"), "\"no\"");
+    ASSERT_VALUE(bsTestExecute("return [if(1 < 2, 'a', 'b'), if(1 >= 2, 'a', 'b'), if((1 == 1), 'a')]"),
+                 "[\"a\",\"b\",\"a\"]");
+    ASSERT_VALUE(bsTestExecute("i = 0\nwhile i != 3:\n    i = i + 1\nendwhile\nreturn i"), "3");
+
+    /* A comparison whose value is the result - a logical operator's left side - is still computed */
+    ASSERT_VALUE(bsTestExecute("return [1 < 2 && 'x', 1 > 2 || 'y', 1 < 2 || 'z']"), "[\"x\",\"y\",true]");
+
+    /* A comparison jump to a missing label errors only when taken */
+    ASSERT_VALUE(bsTestExecute("jumpif (2 < 1) nowhere\nreturn 1"), "1");
+    ASSERT_VALUE(bsTestExecute("jumpif (1 < 2) nowhere\nreturn 1"), "null");
+    ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Unknown jump label \"nowhere\"");
+
+    /* A comparison whose operand is malformed is rejected like any other */
+    ASSERT_VALUE(bsTestExecute("return barescriptEvaluateExpression("
+                               "{'function': {'name': 'if', 'args': [{'binary': {'op': '<', 'left': {'bogus': 1}, 'right': {'number': 1}}}]}})"),
+                 "null");
+
+    /* Under coverage, a taken comparison jump records the label statement it lands on */
+    BSValue coverage;
+    BSOptions *options = bsTestCoverageOptions(&coverage, true);
+    ASSERT_VALUE(bsTestExecuteOptions("i = 0\nloop:\ni = i + 1\njumpif (i < 3) loop\nreturn i", options), "3");
+    BSValue covered = bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), "test.bare"), "covered");
+    ASSERT_TRUE(bsObjectGet(bsObjectGet(covered, "2"), "count").u.number >= 3);
+    bsOptionsFree(options);
+}

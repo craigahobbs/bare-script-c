@@ -1118,18 +1118,35 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
     } \
     BS_NEXT()
 
+/* The three-way comparison of the instruction's operands, in "cmp" */
+#define BS_COMPARE_OPERANDS(cmp) \
+    BSValue left = BS_READ(inst->b); \
+    BSValue right = BS_READ(inst->c); \
+    int cmp; \
+    if (left.type == BS_NUMBER && right.type == BS_NUMBER) { \
+        double ln = left.u.number, rn = right.u.number; \
+        cmp = ln < rn ? -1 : (ln > rn ? 1 : 0); \
+    } else { \
+        cmp = bsValueCompare(left, right); \
+    }
+
 #define BS_COMPARE(name, test) \
     BS_CASE(name) { \
-        BSValue left = BS_READ(inst->b); \
-        BSValue right = BS_READ(inst->c); \
-        int cmp; \
-        if (left.type == BS_NUMBER && right.type == BS_NUMBER) { \
-            double ln = left.u.number, rn = right.u.number; \
-            cmp = ln < rn ? -1 : (ln > rn ? 1 : 0); \
-        } else { \
-            cmp = bsValueCompare(left, right); \
-        } \
+        BS_COMPARE_OPERANDS(cmp) \
         bsAssign(&regs[inst->a], bsBoolean(test)); \
+    } \
+    BS_NEXT()
+
+/* A jump on a comparison - the target is in the data word that follows, stepped over when not taken */
+#define BS_JUMP_COMPARE(name, test) \
+    BS_CASE(name) { \
+        BS_COMPARE_OPERANDS(cmp) \
+        if (test) { \
+            BS_JUMP_COVER(insts[pc].w); \
+            pc = insts[pc].w; \
+        } else { \
+            pc++; \
+        } \
     } \
     BS_NEXT()
 
@@ -1232,7 +1249,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG, &&op_NOT, &&op_BNOT,
         &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT, &&op_CALL_ARRAY_GET,
         &&op_CALL_ARRAY_LENGTH, &&op_CALL_ARRAY_PUSH, &&op_CALL_ARRAY_SET, &&op_CALL_OBJECT_GET,
-        &&op_CALL_OBJECT_SET, &&op_CALL_STRING_LENGTH, &&op_CALL_STRING_SLICE
+        &&op_CALL_OBJECT_SET, &&op_CALL_STRING_LENGTH, &&op_CALL_STRING_SLICE, &&op_JUMP_EQ,
+        &&op_JUMP_NE, &&op_JUMP_LT, &&op_JUMP_LE, &&op_JUMP_GT, &&op_JUMP_GE
     };
 #define BS_CASE(name) op_##name:
 #define BS_NEXT() \
@@ -1403,6 +1421,13 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_COMPARE(LE, cmp <= 0);
         BS_COMPARE(GT, cmp > 0);
         BS_COMPARE(GE, cmp >= 0);
+
+        BS_JUMP_COMPARE(JUMP_EQ, cmp == 0);
+        BS_JUMP_COMPARE(JUMP_NE, cmp != 0);
+        BS_JUMP_COMPARE(JUMP_LT, cmp < 0);
+        BS_JUMP_COMPARE(JUMP_LE, cmp <= 0);
+        BS_JUMP_COMPARE(JUMP_GT, cmp > 0);
+        BS_JUMP_COMPARE(JUMP_GE, cmp >= 0);
 
         BS_BITWISE(BAND, leftInt & rightInt);
         BS_BITWISE(BOR, leftInt | rightInt);

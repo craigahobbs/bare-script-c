@@ -25,7 +25,7 @@
  * A system script is never statement-counted or coverage-recorded, so its STMT markers only cost
  * dispatch: they are stripped in place, with jump targets remapped and each statement's start
  * index kept in coverPcs for error line numbers. Data words (call operands, a trap's line) are
- * never STMT and never jumps.
+ * never STMT and never jumps; a comparison jump's target is the data word that follows it.
  */
 static void bsCodeStripStatements(BSCode *code)
 {
@@ -45,6 +45,9 @@ static void bsCodeStripStatements(BSCode *code)
     for (size_t pc = 0; pc < stripped; pc++) {
         uint8_t op = inst[pc].op;
         if (op == BS_OP_JUMP || op == BS_OP_JUMP_FALSE || op == BS_OP_JUMP_TRUE) {
+            inst[pc].w = map[inst[pc].w];
+        } else if (op >= BS_OP_JUMP_EQ && op <= BS_OP_JUMP_GE) {
+            pc++;
             inst[pc].w = map[inst[pc].w];
         }
     }
@@ -729,6 +732,68 @@ static bool bsEmitArgOrNull(BSEmit *e, BSValue args, size_t ix, size_t argCount,
 }
 
 
+/*
+ * The comparison jump opcode for a jump on "expr" being "jumpIfTrue", when expr is a comparison -
+ * its operand models are returned - or zero. A jump on false takes the opposite comparison: EQ
+ * and NE, LT and GE, LE and GT are the pairs.
+ */
+static uint8_t bsCompareJumpOpcode(BSValue expr, bool jumpIfTrue, BSValue *left, BSValue *right)
+{
+    static const uint8_t opposite[] = {BS_OP_NE, BS_OP_EQ, BS_OP_GE, BS_OP_GT, BS_OP_LE, BS_OP_LT};
+    BSValue member;
+    BSString *kind = bsModelKind(expr, &member);
+    while (BS_KIND(kind, group)) {
+        kind = bsModelKind(member, &member);
+    }
+    if (!BS_KIND(kind, binary) || member.type != BS_OBJECT) {
+        return 0;
+    }
+    BSValue op = bsObjectGetString(member, bsKeys.op);
+    uint8_t opcode = op.type == BS_STRING ? bsBinaryOpcode(bsStringData(op)) : 0;
+    if (opcode < BS_OP_EQ || opcode > BS_OP_GE) {
+        return 0;
+    }
+    if (!jumpIfTrue) {
+        opcode = opposite[opcode - BS_OP_EQ];
+    }
+    *left = bsObjectGetString(member, bsKeys.left);
+    *right = bsObjectGetString(member, bsKeys.right);
+    return (uint8_t) (BS_OP_JUMP_EQ + (opcode - BS_OP_EQ));
+}
+
+
+/*
+ * Compile a jump's condition. A comparison emits its comparison jump, on the comparison's operands,
+ * and the word to follow - which the caller emits with the target - is a DATA word; any other
+ * condition computes into an operand, and the word to follow is the jump on it.
+ */
+static bool bsEmitCondition(BSEmit *e, BSValue expr, bool jumpIfTrue, uint8_t *jumpOp, BSOperand *cond)
+{
+    uint16_t base = e->tempTop;
+    BSValue left;
+    BSValue right;
+    uint8_t compareJump = bsCompareJumpOpcode(expr, jumpIfTrue, &left, &right);
+    if (compareJump != 0) {
+        BSOperand leftOperand;
+        BSOperand rightOperand;
+        if (!bsEmitExprOperand(e, left, &leftOperand) || !bsEmitExprOperand(e, right, &rightOperand)) {
+            return false;
+        }
+        e->tempTop = base;
+        bsEmitInst(e, compareJump, 0, leftOperand, rightOperand);
+        *jumpOp = BS_OP_DATA;
+        *cond = 0;
+        return true;
+    }
+    if (!bsEmitExprOperand(e, expr, cond)) {
+        return false;
+    }
+    e->tempTop = base;
+    *jumpOp = jumpIfTrue ? BS_OP_JUMP_TRUE : BS_OP_JUMP_FALSE;
+    return true;
+}
+
+
 /* The conditional: if(cond, then, else) - the value of the branch taken, or null */
 static bool bsEmitIfTo(BSEmit *e, BSValue args, uint16_t dst)
 {
@@ -737,13 +802,12 @@ static bool bsEmitIfTo(BSEmit *e, BSValue args, uint16_t dst)
         bsEmitInst(e, BS_OP_MOVE, dst, e->nullConst, 0);
         return true;
     }
-    uint16_t base = e->tempTop;
+    uint8_t jumpOp;
     BSOperand cond;
-    if (!bsEmitExprOperand(e, bsArrayGet(args, 0), &cond)) {
+    if (!bsEmitCondition(e, bsArrayGet(args, 0), false, &jumpOp, &cond)) {
         return false;
     }
-    e->tempTop = base;
-    uint32_t jumpElse = bsEmitJumpInst(e, BS_OP_JUMP_FALSE, cond, 0);
+    uint32_t jumpElse = bsEmitJumpInst(e, jumpOp, cond, 0);
     if (!bsEmitArgOrNull(e, args, 1, argCount, dst)) {
         return false;
     }
@@ -1045,22 +1109,21 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         }
         /* "jumpif (!expr)" - the NOT folds into the jump */
         BSValue expr = bsObjectGetString(value, bsKeys.expr);
-        uint8_t op = BS_OP_JUMP_TRUE;
+        bool jumpIfTrue = true;
         BSValue unary = expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.unary) : bsNull();
         if (unary.type == BS_OBJECT) {
             BSValue unaryOp = bsObjectGetString(unary, bsKeys.op);
             if (unaryOp.type == BS_STRING && strcmp(bsStringData(unaryOp), "!") == 0) {
                 expr = bsObjectGetString(unary, bsKeys.expr);
-                op = BS_OP_JUMP_FALSE;
+                jumpIfTrue = false;
             }
         }
-        uint16_t base = e->tempTop;
+        uint8_t jumpOp;
         BSOperand cond;
-        if (!bsEmitExprOperand(e, expr, &cond)) {
+        if (!bsEmitCondition(e, expr, jumpIfTrue, &jumpOp, &cond)) {
             return false;
         }
-        e->tempTop = base;
-        bsEmitJump(e, op, cond, label);
+        bsEmitJump(e, jumpOp, cond, label);
         return true;
     }
 

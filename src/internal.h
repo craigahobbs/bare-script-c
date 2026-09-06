@@ -208,7 +208,18 @@ enum {
     BS_OP_CALL_OBJECT_SET,
     BS_OP_CALL_STRING_LENGTH,
     BS_OP_CALL_STRING_SLICE,
-    BS_OP_DATA = 0xFF  /* call operands, or a trap's line; never dispatched */
+    /*
+     * A jump on a comparison: if b op c, pc = the target in the DATA word that follows, else past
+     * that word. A jump on a comparison being true takes the comparison's own opcode, a jump on it
+     * being false the opposite comparison's.
+     */
+    BS_OP_JUMP_EQ,
+    BS_OP_JUMP_NE,
+    BS_OP_JUMP_LT,
+    BS_OP_JUMP_LE,
+    BS_OP_JUMP_GT,
+    BS_OP_JUMP_GE,
+    BS_OP_DATA = 0xFF  /* call operands, a comparison jump's target, or a trap's line; never dispatched */
 };
 
 
