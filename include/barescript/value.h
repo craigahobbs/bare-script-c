@@ -127,7 +127,7 @@ typedef struct BSObjectIndex {
  *
  * The entries are an array in insertion order - matching the reference implementations, whose
  * objects are JavaScript objects and Python dictionaries - held in the object itself until they
- * outgrow it, then on a buffer that doubles. An object of more than eight keys also carries a
+ * outgrow it, then on a buffer that doubles. An object of more than sixteen keys also carries a
  * hash index over its entries. JSON encoding and value comparison sort the entries on demand.
  */
 struct BSObject {

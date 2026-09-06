@@ -1008,7 +1008,9 @@ TEST(value_object_index)
     ASSERT_FALSE(bsObjectHas(object, "k3"));
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k16").u.number, 16);
     ASSERT_INT_EQ(bsObjectCount(object), 16);
-    ASSERT_VALUE_KEEP(bsArrayGet(bsObjectKeys(object), 3), "\"k4\"");
+    BSValue keys = bsObjectKeys(object);
+    ASSERT_VALUE_KEEP(bsArrayGet(keys, 3), "\"k4\"");
+    bsRelease(keys);
     bsRelease(object);
 
     /* Past the scan threshold, lookups by interned and ordinary keys probe the index */

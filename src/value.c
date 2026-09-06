@@ -970,7 +970,7 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
  *
  * An object is an insertion-ordered array of key/value entries. Up to three entries live in the
  * object itself; past that they move to a heap buffer that doubles as it fills. An object of more
- * than eight keys also carries a hash index over its entries - an open-addressing table of
+ * than sixteen keys also carries a hash index over its entries - an open-addressing table of
  * (hash, entry) slots keyed by the content hash the key string caches - so a lookup probes the
  * index and compares one key, while a smaller object scans its entries. Iteration is entry order,
  * which is insertion order (matching the reference implementations, whose objects are JavaScript
