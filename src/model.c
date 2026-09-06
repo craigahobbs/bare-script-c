@@ -1107,16 +1107,17 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
             bsEmitJump(e, BS_OP_JUMP, 0, label);
             return true;
         }
-        /* "jumpif (!expr)" - the NOT folds into the jump */
+        /* "jumpif (!expr)" - each NOT folds into the jump's sense */
         BSValue expr = bsObjectGetString(value, bsKeys.expr);
         bool jumpIfTrue = true;
-        BSValue unary = expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.unary) : bsNull();
-        if (unary.type == BS_OBJECT) {
-            BSValue unaryOp = bsObjectGetString(unary, bsKeys.op);
-            if (unaryOp.type == BS_STRING && strcmp(bsStringData(unaryOp), "!") == 0) {
-                expr = bsObjectGetString(unary, bsKeys.expr);
-                jumpIfTrue = false;
+        for (;;) {
+            BSValue unary = expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.unary) : bsNull();
+            BSValue unaryOp = unary.type == BS_OBJECT ? bsObjectGetString(unary, bsKeys.op) : bsNull();
+            if (unaryOp.type != BS_STRING || strcmp(bsStringData(unaryOp), "!") != 0) {
+                break;
             }
+            expr = bsObjectGetString(unary, bsKeys.expr);
+            jumpIfTrue = !jumpIfTrue;
         }
         uint8_t jumpOp;
         BSOperand cond;
