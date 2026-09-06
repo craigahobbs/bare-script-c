@@ -123,7 +123,7 @@ layout and the ownership rules (returns are owned, arguments and container acces
 which are uniform and the single easiest thing to get wrong.
 
 Object invariants the code relies on: an object is one insertion-ordered entry array - in the
-object itself up to three entries, on a heap buffer past that - and past eight keys it has a hash
+object itself up to three entries, on a heap buffer past that - and past sixteen keys it has a hash
 index over the entries, keyed by the content hash cached on the key string; a value-slot pointer
 is valid until a key is added or removed. Two distinct interned strings never compare equal, so
 interned key compares are pointer compares and the bytes are compared only when the two keys are

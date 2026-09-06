@@ -35,7 +35,7 @@ static void bsThreadFail(BSThreadTask *task, const char *what, const char *detai
 /*
  * Parse, lint, and execute a script that touches every piece of per-thread state - the parser and
  * linter bootstraps, a bundled include, the thread's own system include registry, the intern table
- * and an indexed object (past eight keys), the regex match keys, mathRandom - and check the result
+ * and an indexed object (past sixteen keys), the regex match keys, mathRandom - and check the result
  */
 static void *bsThreadRun(void *data)
 {

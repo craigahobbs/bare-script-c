@@ -995,19 +995,20 @@ static bool bsTestIterStop(BSValue key, BSValue item, void *data)
 
 TEST(value_object_index)
 {
-    /* The ninth key builds the index; deleting back to eight drops it */
+    /* The seventeenth key builds the index; deleting back to sixteen drops it */
     BSValue object = bsObjectNew();
-    bsTestObjectFill(object, "k%d", 0, 8);
+    bsTestObjectFill(object, "k%d", 0, 16);
     ASSERT_TRUE(object.u.object->index == NULL);
-    bsObjectSet(object, "k8", bsNumber(8));
+    bsObjectSet(object, "k16", bsNumber(16));
     ASSERT_NOT_NULL(object.u.object->index);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k7").u.number, 7);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k8").u.number, 8);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k15").u.number, 15);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k16").u.number, 16);
     ASSERT_TRUE(bsObjectDelete(object, "k3"));
     ASSERT_TRUE(object.u.object->index == NULL);
     ASSERT_FALSE(bsObjectHas(object, "k3"));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k8").u.number, 8);
-    ASSERT_VALUE(bsObjectKeys(object), "[\"k0\",\"k1\",\"k2\",\"k4\",\"k5\",\"k6\",\"k7\",\"k8\"]");
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k16").u.number, 16);
+    ASSERT_INT_EQ(bsObjectCount(object), 16);
+    ASSERT_VALUE_KEEP(bsArrayGet(bsObjectKeys(object), 3), "\"k4\"");
     bsRelease(object);
 
     /* Past the scan threshold, lookups by interned and ordinary keys probe the index */

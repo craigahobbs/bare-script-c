@@ -986,7 +986,7 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
 #define BS_OBJECT_POOL_MAX 16384
 
 /* Entries scanned in place before an object builds its hash index */
-#define BS_OBJECT_LINEAR 8
+#define BS_OBJECT_LINEAR 16
 
 /* Recycled entry buffers, in the two capacities an object outgrows its inline entries into first */
 #define BS_ENTRY_POOL_CAPACITY 8

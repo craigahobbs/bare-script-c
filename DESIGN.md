@@ -65,7 +65,7 @@ rounded up and recycled through that class's free list.
 **Objects** are an insertion-ordered array of key/value entries, so objects iterate in insertion
 order (matching the reference implementations, whose objects are JavaScript objects and Python
 dictionaries). Up to three entries are stored in the 104-byte object itself; past that they move
-to a heap buffer that doubles as it fills, and past eight keys the object builds a hash index
+to a heap buffer that doubles as it fills, and past sixteen keys the object builds a hash index
 over them - an open-addressing table of `(hash, entry)` slots keyed by the content hash the key
 string caches in its header - so a lookup probes the index and compares one key, while a smaller
 object scans its entries. The operations defined over sorted keys - JSON encoding, comparison,
