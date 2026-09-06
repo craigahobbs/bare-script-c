@@ -362,7 +362,7 @@ TEST(value_object)
     ASSERT_VALUE(bsObjectKeysSorted(object), "[\"a\",\"b\",\"c\"]");
     ASSERT_VALUE_KEEP(object, "{\"a\":1,\"b\":2,\"c\":3}");
 
-    /* 5-32 key objects stringify sorted without promoting to a treap */
+    /* A 20-key object - indexed, sorted through the merge sort - stringifies in key order */
     {
         BSValue many = bsObjectNew();
         char key[8];
@@ -370,11 +370,10 @@ TEST(value_object)
             snprintf(key, sizeof(key), "k%02d", 19 - ix);
             bsObjectSet(many, key, bsNumber(ix));
         }
-        ASSERT_TRUE(many.u.object->u.tree.root == NULL);
+        ASSERT_NOT_NULL(many.u.object->index);
         ASSERT_VALUE(bsObjectKeysSorted(many),
                      "[\"k00\",\"k01\",\"k02\",\"k03\",\"k04\",\"k05\",\"k06\",\"k07\",\"k08\",\"k09\","
                      "\"k10\",\"k11\",\"k12\",\"k13\",\"k14\",\"k15\",\"k16\",\"k17\",\"k18\",\"k19\"]");
-        ASSERT_TRUE(many.u.object->u.tree.root == NULL);
         bsRelease(many);
     }
 
@@ -387,7 +386,7 @@ TEST(value_object)
     ASSERT_VALUE(bsObjectKeys(copy), "[\"b\",\"a\",\"c\"]");
     bsRelease(copy);
 
-    /* Delete from the head, middle, and tail of the insertion list */
+    /* Delete from the head, middle, and tail of the entries */
     ASSERT_TRUE(bsObjectDelete(object, "b"));
     ASSERT_FALSE(bsObjectDelete(object, "b"));
     ASSERT_VALUE(bsObjectKeys(object), "[\"a\",\"c\"]");
@@ -412,14 +411,15 @@ TEST(value_object)
 
 TEST(value_object_new_capacity)
 {
-    /* A large expected count starts the object with its lookup table; a small one stays packed */
+    /* A large expected count starts the object with its entries and index; a small one stays inline */
     BSValue object = bsObjectNewCapacity(100);
-    ASSERT_INT_EQ(object.u.object->packed, 0);
-    ASSERT_NOT_NULL(object.u.object->u.tree.lookup);
-    ASSERT_INT_EQ(object.u.object->u.tree.lookupMask + 1, 256);
+    ASSERT_TRUE(object.u.object->entries != object.u.object->inline_);
+    ASSERT_INT_EQ(object.u.object->capacity, 128);
+    ASSERT_NOT_NULL(object.u.object->index);
+    ASSERT_INT_EQ(object.u.object->index->mask + 1, 256);
     bsTestObjectFill(object, "cap%d", 0, 100);
     ASSERT_INT_EQ(bsObjectCount(object), 100);
-    ASSERT_INT_EQ(object.u.object->u.tree.lookupMask + 1, 256);
+    ASSERT_INT_EQ(object.u.object->index->mask + 1, 256);
     ASSERT_VALUE(bsRetain(bsObjectGet(object, "cap99")), "99");
     ASSERT_VALUE(bsRetain(bsObjectGet(object, "cap0")), "0");
     ASSERT_TRUE(bsObjectDelete(object, "cap50"));
@@ -427,16 +427,16 @@ TEST(value_object_new_capacity)
     bsRelease(object);
 
     object = bsObjectNewCapacity(3);
-    ASSERT_INT_EQ(object.u.object->packed, 1);
+    ASSERT_TRUE(object.u.object->entries == object.u.object->inline_);
     bsObjectSet(object, "a", bsNumber(1));
     ASSERT_VALUE(bsRetain(bsObjectGet(object, "a")), "1");
     bsRelease(object);
 }
 
 
-TEST(value_object_treap_remove)
+TEST(value_object_delete_all)
 {
-    /* Deleting every key of a large content-keyed object rotates nodes down on both sides */
+    /* Deleting every key of a large ordinary-keyed object, evens forward then odds backward */
     BSValue object = bsObjectNew();
     char key[16];
     for (int ix = 0; ix < 200; ix++) {
@@ -507,12 +507,12 @@ TEST(value_object_intern)
     ASSERT_FALSE(bsObjectHas(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "a"));
-    ASSERT_TRUE(object.u.object->u.tree.lookup != NULL);
+    ASSERT_NOT_NULL(object.u.object->index);
     ASSERT_TRUE(bsObjectDelete(object, "k0"));
     ASSERT_FALSE(bsObjectHas(object, "k0"));
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
 
-    /* Further inserts grow the interned-pointer hash table */
+    /* Further inserts grow the entries and the index */
     bsTestObjectFill(object, "k%d", 40, 80);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k79").u.number, 79);
 
@@ -545,7 +545,7 @@ TEST(value_object_intern)
 
 TEST(value_object_small_update)
 {
-    /* A long (non-interned) key updated on a list-only object (past the packed limit) */
+    /* A long (non-interned) key updated on an object whose entries are on the heap, below the index threshold */
     BSValue object = bsObjectNew();
     bsObjectSet(object, "a", bsNumber(0));
     bsObjectSet(object, "b", bsNumber(0));
@@ -566,10 +566,10 @@ TEST(value_object_small_update)
 }
 
 
-TEST(value_object_set_interned_twin)
+TEST(value_object_set_ordinary_key)
 {
-    /* A key built at run time that matches an interned name is stored as the interned string, which
-       gains one reference for the object and no more */
+    /* A key built at run time that matches an interned name is stored as it is and found by
+       content - by the interned name, and by the key itself on the object's small scan and its index */
     BSValue holder = bsObjectNew();
     bsObjectSet(holder, "twin", bsNull());
     BSValue keys = bsObjectKeys(holder);
@@ -581,19 +581,27 @@ TEST(value_object_set_interned_twin)
     BSValue object = bsObjectNew();
     bsObjectSetString(object, key, bsNumber(1));
     bsObjectSetString(object, key, bsNumber(2));
+    ASSERT_INT_EQ(bsObjectCount(object), 1);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "twin").u.number, 2);
-    ASSERT_INT_EQ(interned->refcount, refcount + 1);
-    bsRelease(object);
+    ASSERT_DOUBLE_EQ(bsObjectGetString(object, bsArrayGet(keys, 0)).u.number, 2);
     ASSERT_INT_EQ(interned->refcount, refcount);
+    ASSERT_INT_EQ(key.u.string->refcount, 2);
+    bsTestObjectFill(object, "more%d", 0, 20);
+    ASSERT_NOT_NULL(object.u.object->index);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "twin").u.number, 2);
+    ASSERT_DOUBLE_EQ(bsObjectGetString(object, key).u.number, 2);
+    ASSERT_DOUBLE_EQ(bsObjectGetString(object, bsArrayGet(keys, 0)).u.number, 2);
+    bsRelease(object);
+    ASSERT_INT_EQ(key.u.string->refcount, 1);
     bsRelease(key);
     bsRelease(keys);
     bsRelease(holder);
 }
 
 
-TEST(value_object_packed)
+TEST(value_object_inline)
 {
-    /* Four keys stay inline; the fifth spills onto the insertion list */
+    /* Three keys stay in the object; the fourth moves the entries to a heap buffer */
     BSValue object = bsObjectNew();
     bsObjectSet(object, "d", bsNumber(4));
     bsObjectSet(object, "c", bsNumber(3));
@@ -621,7 +629,7 @@ TEST(value_object_packed)
     ASSERT_VALUE(bsObjectKeys(object), "[\"b\",\"c\"]");
     bsRelease(object);
 
-    /* Long (non-interned) keys on a packed object */
+    /* Long (non-interned) keys on an inline object */
     BSValue tiny = bsObjectNew();
     char longA[80];
     char longB[80];
@@ -659,9 +667,9 @@ TEST(value_object_pool)
 }
 
 
-TEST(value_object_tree)
+TEST(value_object_large)
 {
-    /* Insert enough keys, in sorted and reverse order, to exercise both treap rotations */
+    /* Insert enough keys, in sorted and reverse order, to grow the entries and the index several times */
     BSValue object = bsObjectNew();
     char key[16];
     bsTestObjectFill(object, "k%03d", 0, 200);
@@ -985,46 +993,54 @@ static bool bsTestIterStop(BSValue key, BSValue item, void *data)
 }
 
 
-TEST(value_object_lazy_treap)
+TEST(value_object_index)
 {
-    /* Past 32 keys, an all-interned object answers lookups from its hash table without a treap */
+    /* The ninth key builds the index; deleting back to eight drops it */
     BSValue object = bsObjectNew();
-    bsTestObjectFill(object, "k%d", 0, 40);
-    ASSERT_TRUE(object.u.object->u.tree.root == NULL);
-    ASSERT_TRUE(object.u.object->u.tree.lookup != NULL);
+    bsTestObjectFill(object, "k%d", 0, 8);
+    ASSERT_TRUE(object.u.object->index == NULL);
+    bsObjectSet(object, "k8", bsNumber(8));
+    ASSERT_NOT_NULL(object.u.object->index);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k7").u.number, 7);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k8").u.number, 8);
+    ASSERT_TRUE(bsObjectDelete(object, "k3"));
+    ASSERT_TRUE(object.u.object->index == NULL);
+    ASSERT_FALSE(bsObjectHas(object, "k3"));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k8").u.number, 8);
+    ASSERT_VALUE(bsObjectKeys(object), "[\"k0\",\"k1\",\"k2\",\"k4\",\"k5\",\"k6\",\"k7\",\"k8\"]");
+    bsRelease(object);
 
-    /* A key with no interned form cannot be present */
+    /* Past the scan threshold, lookups by interned and ordinary keys probe the index */
+    object = bsObjectNew();
+    bsTestObjectFill(object, "k%d", 0, 40);
+    ASSERT_NOT_NULL(object.u.object->index);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k7").u.number, 7);
+    BSValue ordinary = bsStringNewSize("k7", 2);
+    ASSERT_DOUBLE_EQ(bsObjectGetString(object, ordinary).u.number, 7);
+    bsRelease(ordinary);
     BSValue absent = bsStringNew("k7-with-no-interned-form");
     ASSERT_FALSE(bsObjectHasString(object, absent));
-    ASSERT_TRUE(object.u.object->u.tree.root == NULL);
     bsRelease(absent);
-
-    /* A sorted walk builds the treap */
     BSValue sorted = bsObjectKeysSorted(object);
     ASSERT_INT_EQ(bsArrayCount(sorted), 40);
     ASSERT_VALUE_KEEP(bsArrayGet(sorted, 0), "\"k0\"");
     ASSERT_VALUE_KEEP(bsArrayGet(sorted, 39), "\"k9\"");
-    ASSERT_TRUE(object.u.object->u.tree.root != NULL);
     bsRelease(sorted);
 
-    /* Updates, lookups, and deletes go through the treap once it exists */
+    /* Updates keep the entry; a delete rebuilds the index over the entries that moved down */
     bsObjectSet(object, "k7", bsNumber(70));
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k7").u.number, 70);
     ASSERT_INT_EQ(bsObjectCount(object), 40);
     ASSERT_TRUE(bsObjectDelete(object, "k7"));
     ASSERT_FALSE(bsObjectHas(object, "k7"));
     ASSERT_INT_EQ(bsObjectCount(object), 39);
-    bsRelease(object);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k8").u.number, 8);
 
-    /* An uninterned key inserted past 32 keys builds the treap, since it is matched by content */
-    object = bsObjectNew();
-    bsTestObjectFill(object, "k%d", 0, 40);
-    ASSERT_TRUE(object.u.object->u.tree.root == NULL);
+    /* An ordinary key past the threshold is found by content */
     BSValue longKey = bsStringNew("a key longer than the sixty-four byte limit of the intern table is never interned");
     bsObjectSetString(object, longKey, bsNumber(1));
-    ASSERT_TRUE(object.u.object->u.tree.root != NULL);
-    ASSERT_INT_EQ(bsObjectCount(object), 41);
+    ASSERT_INT_EQ(bsObjectCount(object), 40);
     ASSERT_DOUBLE_EQ(bsObjectGetString(object, longKey).u.number, 1);
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k3").u.number, 3);
     bsRelease(longKey);
@@ -1047,7 +1063,7 @@ TEST(value_object_iterate)
     ASSERT_FALSE(bsObjectIterSorted(object, bsTestIterStop, &count));
     ASSERT_INT_EQ(count, 1);
 
-    /* Stop after descending a left child so the in-order walk unwinds from the left */
+    /* Stop on the first sorted key, which is the second inserted */
     BSValue leftObject = bsObjectNew();
     bsObjectSet(leftObject, "m", bsNumber(1));
     bsObjectSet(leftObject, "a", bsNumber(2));
@@ -1056,7 +1072,7 @@ TEST(value_object_iterate)
     ASSERT_INT_EQ(count, 1);
     bsRelease(leftObject);
 
-    /* A spilled (list-only) object also stops iteration on the first pair */
+    /* An object whose entries moved to the heap also stops iteration on the first pair */
     BSValue listObject = bsObjectNew();
     bsObjectSet(listObject, "a", bsNumber(1));
     bsObjectSet(listObject, "b", bsNumber(2));
@@ -1084,7 +1100,7 @@ static bool bsTestIterStopDeep(BSValue key, BSValue item, void *data)
 {
     size_t *count = data;
     (*count)++;
-    /* Stop on a key that sorts in the middle, so the sorted walk unwinds from a right subtree */
+    /* Stop on a key that sorts in the middle of a merge-sorted walk */
     return strcmp(bsStringData(key), "k050") != 0;
 }
 
@@ -1100,13 +1116,18 @@ TEST(value_object_iterate_deep)
 }
 
 
-TEST(value_object_node_pool)
+TEST(value_object_entry_pool)
 {
-    /* Overflow the recycled-node pool so further frees go to the allocator */
-    BSValue object = bsObjectNew();
-    bsTestObjectFill(object, "p%04d", 0, 8193);
-    ASSERT_INT_EQ(bsObjectCount(object), 8193);
-    bsRelease(object);
+    /* Overflow both recycled entry-buffer classes so further frees go to the allocator */
+    enum { COUNT = 1100 };
+    BSValue objects = bsArrayNewCapacity(COUNT);
+    for (int ix = 0; ix < COUNT; ix++) {
+        BSValue object = bsObjectNew();
+        bsTestObjectFill(object, "p%d", 0, ix % 2 == 0 ? 5 : 12);
+        bsArrayPush(objects, object);
+    }
+    ASSERT_INT_EQ(bsObjectCount(bsArrayGet(objects, 1)), 12);
+    bsRelease(objects);
 }
 
 
@@ -1126,12 +1147,9 @@ TEST(value_header_pools)
 }
 
 
-TEST(value_object_delete_rotations)
+TEST(value_object_delete_scattered)
 {
-    /*
-     * Delete interior nodes in a scattered order so the treap's remove rotates both ways on its
-     * way down to a leaf
-     */
+    /* Delete interior entries in a scattered order, so each delete moves a different run down */
     BSValue object = bsObjectNew();
     char key[16];
     for (int ix = 0; ix < 300; ix++) {
@@ -1168,7 +1186,7 @@ TEST(value_object_intern_cap)
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "c65999").u.number, 65999);
     ASSERT_TRUE(bsObjectDelete(object, "c65999"));
     ASSERT_FALSE(bsObjectHas(object, "c65999"));
-    /* An interned name that is not a key of this object misses the pointer hash and scans */
+    /* An interned name that is not a key of this object misses the index */
     ASSERT_FALSE(bsObjectHas(object, "a"));
     bsRelease(object);
 }

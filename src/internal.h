@@ -20,6 +20,13 @@
 void bsFetchCleanup(void);
 
 
+/* Keep a function out of line - a slow path whose inlining would bloat every hot call site */
+#if defined(__GNUC__) || defined(__clang__)
+#define BS_NOINLINE __attribute__((noinline))
+#else
+#define BS_NOINLINE
+#endif
+
 /* Allocation helpers - these abort the process on allocation failure */
 void *bsAlloc(size_t size);
 void *bsRealloc(void *ptr, size_t size);

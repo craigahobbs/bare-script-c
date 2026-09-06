@@ -57,26 +57,26 @@ classes is rounded up and recycled through that class's free list.
 
 **Arrays** are vectors of values with amortized growth.
 
-**Objects** are key/value pairs in insertion order, with a sorted view for the operations defined
-over sorted keys. Up to four pairs are stored in the 112-byte object itself; past that, pairs
-live on a doubly-linked list of nodes, so objects iterate in insertion order (matching the
-reference implementations, whose objects are JavaScript objects and Python dictionaries). Objects
-of more than 32 keys index the list with an interned-pointer hash table for lookup, and the two
-storage forms share the object's storage since an object is only ever one of them.
+**Objects** are an insertion-ordered array of key/value entries, so objects iterate in insertion
+order (matching the reference implementations, whose objects are JavaScript objects and Python
+dictionaries). Up to three entries are stored in the 104-byte object itself; past that they move
+to a heap buffer that doubles as it fills, and past eight keys the object builds a hash index
+over them - an open-addressing table of `(hash, entry)` slots keyed by the content hash the key
+string caches in its header - so a lookup probes the index and compares one key, while a smaller
+object scans its entries. The operations defined over sorted keys - JSON encoding, comparison,
+`bsObjectKeysSorted` - sort an index of the entries on demand: an insertion sort of a short run,
+a merge sort above that.
 
-The sorted view is a *treap*: a binary search tree ordered by key that also satisfies a max-heap
-property on a pseudo-random per-node priority, which keeps it balanced in expectation without the
-bookkeeping of an AVL or red-black tree - BareScript code routinely inserts keys in sorted order,
-the worst case for a plain binary search tree. It is built lazily, over the same nodes, the first
-time an object past 32 keys is JSON-encoded, compared, or given a key that can only be matched
-by content; an object whose keys are all interned never builds it otherwise. C-string keys and
-compiled names of at most 64 bytes are interned, so a hit compares interned `BSString` pointers
-instead of `memcmp` - and two distinct interned strings are known to differ without one. JSON
-and computed keys reuse an interned name when it is already in the table and otherwise stay
-ordinary strings, so untrusted unique keys cannot grow the table. The intern table is also
-capped. Interned names on the compiled script skip hashing entirely. A hash-table miss is
-definitive unless the object also has uninterned keys. The intern table holds one reference;
-interned strings live until the thread's `bsValueCleanup`.
+A lookup compares a stored key to the key sought by pointer first: C-string keys and compiled
+names of at most 64 bytes are interned, so a name from compiled code or the library hits without
+a `memcmp`, and two distinct interned strings are known to differ without one. Only when the two
+are not both interned are the bytes compared - after the hash and size agree, in an indexed
+object. JSON keys reuse an interned name when it is already in the table and otherwise stay
+ordinary strings, so untrusted unique keys cannot grow the table, which is also capped. The
+intern table holds one reference; interned strings live until the thread's `bsValueCleanup`.
+The hash is FNV-1a over the bytes followed by an avalanche step: a multiply alone leaves the low
+bits, which the index probes by, depending on one byte of each word, and keys like IP addresses
+and paths then cluster.
 
 Allocation failure is fatal: there is no useful way for a script runtime to continue without
 memory, and threading an out-of-memory result through every value operation would obscure the code
@@ -233,7 +233,7 @@ The thirty-two scripts of the BareScript include library - `args.bare`, `markdow
 script models and embedded in the library. Including one costs a JSON decode rather than a run of
 the parser - and a streaming one: `bsScriptFromModelJSON` decodes the model a statement at a
 time, compiling and releasing each before the next, so the model - about seven times the size of
-its JSON, most of it 112-byte objects - is never whole in memory. Loading the parser peaks at a
+its JSON, most of it 104-byte objects - is never whole in memory. Loading the parser peaks at a
 few hundred kilobytes rather than a megabyte and a half.
 
 The models are gzip-compressed at level 9 by `gzip.bare` (`gzipCompress` / `gzipUncompress`, byte
@@ -390,7 +390,7 @@ inlining `-O2` and `-O3` do is worth more than the 11% of text section `-Os` giv
 
 Link-time optimization is the single largest flag-level win - 7% on its own, and still 6% on top
 of PGO - because the value system is small functions across translation unit boundaries:
-`bsRetain`, `bsRelease`, and the object treap's comparisons are called from everywhere and can
+`bsRetain`, `bsRelease`, and the object key comparisons are called from everywhere and can
 only be inlined across the library at link time.
 
 Under PGO and LTO, `-O2` emits about 10% less text than `-O3` at the same speed. Also

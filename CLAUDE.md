@@ -122,11 +122,12 @@ so an include's own includes must be listed with it.
 layout and the ownership rules (returns are owned, arguments and container accessors are borrowed),
 which are uniform and the single easiest thing to get wrong.
 
-Object invariants the code relies on: past 32 keys the interned-pointer hash table exists; if the
-object has any uninterned key past 32 keys, the treap exists (otherwise it is built lazily, for a
-sorted walk or a key matched by content). Two distinct interned strings never compare equal, so
-interned key compares are pointer compares. Strings, arrays, objects, and nodes are recycled
-through free lists.
+Object invariants the code relies on: an object is one insertion-ordered entry array - in the
+object itself up to three entries, on a heap buffer past that - and past eight keys it has a hash
+index over the entries, keyed by the content hash cached on the key string; a value-slot pointer
+is valid until a key is added or removed. Two distinct interned strings never compare equal, so
+interned key compares are pointer compares and the bytes are compared only when the two keys are
+not both interned. Strings, arrays, objects, and entry buffers are recycled through free lists.
 
 Allocation failure is fatal (`bsAlloc` aborts); do not thread out-of-memory results through value
 operations.
@@ -168,7 +169,7 @@ subset BareScript exposes - see DESIGN.md's **Regular Expressions** table.
 | Path                      | Role                                                          |
 | ------------------------- | ------------------------------------------------------------- |
 | `include/barescript/`     | the public API; `barescript.h` includes the rest              |
-| `src/value.c`             | values, refcounting, strings, arrays, the object treap        |
+| `src/value.c`             | values, refcounting, strings, arrays, objects, the intern table |
 | `src/runtime.c`           | bytecode interpreter, includes, coverage                      |
 | `src/library.c`           | the built-in library and `bsArgsValidate`                     |
 | `src/model.c`             | BareScript model -> bytecode; saved model for lint/coverage   |

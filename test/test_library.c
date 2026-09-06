@@ -122,20 +122,20 @@ TEST(library_array)
 
 TEST(library_object_append)
 {
-    /* Append records an uninterned key while packed, and links into a treap once one exists */
+    /* Append stores an ordinary key on an inline object, and indexes one past the scan threshold */
     BSValue object = bsObjectNew();
     BSValue longKey = bsStringNew("a key longer than the sixty-four byte limit of the intern table is never interned");
     bsObjectAppend(object, longKey, bsNumber(1));
     ASSERT_INT_EQ(bsObjectCount(object), 1);
     ASSERT_DOUBLE_EQ(bsObjectGetString(object, longKey).u.number, 1);
-    ASSERT_TRUE(object.u.object->uninterned);
+    ASSERT_TRUE(object.u.object->entries == object.u.object->inline_);
     bsRelease(longKey);
     bsRelease(object);
 
     object = bsObjectNew();
     bsTestObjectFill(object, "k%d", 0, 40);
     bsRelease(bsObjectKeysSorted(object));
-    ASSERT_TRUE(object.u.object->u.tree.root != NULL);
+    ASSERT_NOT_NULL(object.u.object->index);
     BSValue appended = bsStringIntern("k40", 3);
     bsObjectAppend(object, appended, bsNumber(40));
     ASSERT_INT_EQ(bsObjectCount(object), 41);

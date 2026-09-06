@@ -387,7 +387,7 @@ TEST(model_expression_shapes)
 
 TEST(model_statement_list_form)
 {
-    /* A statement object that spilled to a list and shrank back to one member is still a node */
+    /* A statement object whose entries moved to the heap and shrank back to one member is still a node */
     static const char *returnJSON = "{\"expr\":{\"number\":7}}";
     BSValue statement = bsObjectNew();
     bsTestObjectFill(statement, "extra%d", 0, 5);
@@ -398,7 +398,7 @@ TEST(model_statement_list_form)
         ASSERT_TRUE(bsObjectDelete(statement, key));
     }
     ASSERT_INT_EQ(bsObjectCount(statement), 1);
-    ASSERT_INT_EQ(statement.u.object->packed, 0);
+    ASSERT_TRUE(statement.u.object->entries != statement.u.object->inline_);
     BSValue statements = bsArrayNew();
     bsArrayPush(statements, statement);
     BSValue model = bsObjectNew();

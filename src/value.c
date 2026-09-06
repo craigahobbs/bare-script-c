@@ -246,12 +246,13 @@ size_t bsUTF8Length(const char *data, size_t size)
 /*
  * The thread's value state
  *
- * The free lists, the treap priority source, and the intern table are per thread, so threads never
+ * The free lists and the intern table are per thread, so threads never
  * share a value and never contend - see README's "Threads". They are one struct so a function that
  * touches several of them computes the thread-local address once.
  */
 #define BS_STRING_POOL_CLASSES 4
 #define BS_ARRAY_BUF_CLASS_COUNT 4
+#define BS_ENTRY_POOL_CLASS_COUNT 2
 
 typedef struct {
     BSString *string;
@@ -267,15 +268,14 @@ typedef struct {
     unsigned arrayBufPoolCount[BS_ARRAY_BUF_CLASS_COUNT];
     BSObject *objectPool;
     unsigned objectPoolCount;
-    BSObjectNode *nodePool;
-    unsigned nodePoolCount;
-    uint32_t priorityState;
+    BSObjectEntry *entryPool[BS_ENTRY_POOL_CLASS_COUNT];
+    unsigned entryPoolCount[BS_ENTRY_POOL_CLASS_COUNT];
     BSInternSlot *internSlots; /* NULL until the thread's first intern */
     size_t internMask;
     size_t internCount;
 } BSValueState;
 
-static _Thread_local BSValueState bsTS = {.priorityState = 0x9E3779B9u};
+static _Thread_local BSValueState bsTS;
 
 
 /*
@@ -284,7 +284,7 @@ static _Thread_local BSValueState bsTS = {.priorityState = 0x9E3779B9u};
  * Strings are the runtime's most frequent allocation - a match group, a slice, a computed key -
  * and most are short. An allocation that fits one of four size classes is rounded up to it and
  * recycled through that class's free list; the class is kept in the string's flags so release
- * knows where the block goes. The free-list link reuses the offsets pointer.
+ * knows where the block goes. The free-list link reuses the index pointer.
  */
 #define BS_STRING_POOL_MAX 4096
 #define BS_STR_POOL_SHIFT 4
@@ -292,28 +292,29 @@ static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128}
 
 
 /* Set up a string allocation's header for "size" data bytes; the caller fills them and sets the length */
-static void bsStringInit(BSString *string, size_t size, uint8_t flags)
+static void bsStringInit(BSString *string, size_t size, size_t capacity, uint8_t flags)
 {
     string->refcount = 1;
     string->flags = flags;
     string->size = (uint32_t) size;
-    string->offsets = NULL;
-    string->cursorIndex = 0;
-    string->cursorOffset = 0;
+    string->capacity = (uint32_t) capacity;
+    string->index = NULL;
     string->data[size] = '\0';
 }
 
 static BSString *bsStringAlloc(size_t size)
 {
     size_t total = sizeof(BSString) + size + 1;
+    size_t capacity = size;
     BSString *string = NULL;
     uint8_t flags = 0;
     for (unsigned ix = 0; ix < BS_STRING_POOL_CLASSES; ix++) {
         if (total <= bsStringPoolSize[ix]) {
             flags = (uint8_t) ((ix + 1) << BS_STR_POOL_SHIFT);
+            capacity = bsStringPoolSize[ix] - sizeof(BSString) - 1;
             if (bsTS.stringPool[ix] != NULL) {
                 string = bsTS.stringPool[ix];
-                bsTS.stringPool[ix] = (BSString *) string->offsets;
+                bsTS.stringPool[ix] = (BSString *) string->index;
                 bsTS.stringPoolCount[ix]--;
             } else {
                 string = bsAlloc(bsStringPoolSize[ix]);
@@ -324,7 +325,7 @@ static BSString *bsStringAlloc(size_t size)
     if (string == NULL) {
         string = bsAlloc(total);
     }
-    bsStringInit(string, size, flags);
+    bsStringInit(string, size, capacity, flags);
     return string;
 }
 
@@ -353,12 +354,10 @@ static bool bsUtf8IsAscii(const char *data, size_t size)
 
 static void bsStringFree(BSString *string)
 {
-    if (string->offsets != NULL) {
-        free(string->offsets);
-    }
+    free(string->index);
     unsigned class = string->flags >> BS_STR_POOL_SHIFT;
     if (class != 0 && bsTS.stringPoolCount[class - 1] < BS_STRING_POOL_MAX) {
-        string->offsets = (uint32_t *) bsTS.stringPool[class - 1];
+        string->index = (uint32_t *) bsTS.stringPool[class - 1];
         bsTS.stringPool[class - 1] = string;
         bsTS.stringPoolCount[class - 1]++;
         return;
@@ -527,27 +526,42 @@ size_t bsStringLength(BSValue value)
 
 #define BS_STRING_INDEX_STRIDE 16
 
-static void bsStringIndexBuild(BSString *string)
+/*
+ * A non-ASCII string's code point index, built on its first indexed access: a cursor - the last
+ * code point index looked up and its byte offset - and, for a string long enough to want them, the
+ * byte offset of every sixteenth code point, so a backward lookup starts near its target
+ */
+static uint32_t *bsStringIndex(BSString *string)
 {
+    uint32_t *index = string->index;
+    if (index != NULL) {
+        return index;
+    }
     size_t length = string->length;
-    size_t markCount = length / BS_STRING_INDEX_STRIDE + 1;
-    uint32_t *offsets = bsAlloc(markCount * sizeof(uint32_t));
-    size_t offset = 0;
-    size_t position = 0;
-    size_t mark = 1;
-    size_t next = BS_STRING_INDEX_STRIDE;
-    offsets[0] = 0;
-    while (position < length && mark < markCount) {
-        size_t codeSize;
-        bsUTF8Decode(string->data, string->size, offset, &codeSize);
-        offset += codeSize;
-        position++;
-        if (position == next) {
-            offsets[mark++] = (uint32_t) offset;
-            next += BS_STRING_INDEX_STRIDE;
+    size_t markCount = length >= 2 * BS_STRING_INDEX_STRIDE ? length / BS_STRING_INDEX_STRIDE + 1 : 0;
+    index = bsAlloc((2 + markCount) * sizeof(uint32_t));
+    index[0] = 0;
+    index[1] = 0;
+    if (markCount != 0) {
+        uint32_t *offsets = index + 2;
+        size_t offset = 0;
+        size_t position = 0;
+        size_t mark = 1;
+        size_t next = BS_STRING_INDEX_STRIDE;
+        offsets[0] = 0;
+        while (position < length && mark < markCount) {
+            size_t codeSize;
+            bsUTF8Decode(string->data, string->size, offset, &codeSize);
+            offset += codeSize;
+            position++;
+            if (position == next) {
+                offsets[mark++] = (uint32_t) offset;
+                next += BS_STRING_INDEX_STRIDE;
+            }
         }
     }
-    string->offsets = offsets;
+    string->index = index;
+    return index;
 }
 
 
@@ -556,27 +570,19 @@ size_t bsStringOffsetSlow(BSValue value, size_t index)
     BSString *string = value.u.string;
     size_t length = string->length;
     if (index >= length) {
-        string->cursorIndex = (uint32_t) length;
-        string->cursorOffset = (uint32_t) string->size;
         return string->size;
     }
 
-    size_t position;
-    size_t offset;
-    if (index >= string->cursorIndex) {
-        position = string->cursorIndex;
-        offset = string->cursorOffset;
-    } else {
-        position = 0;
-        offset = 0;
-        if (length >= BS_STRING_INDEX_STRIDE * 2) {
-            if (string->offsets == NULL) {
-                bsStringIndexBuild(string);
-            }
-            size_t mark = index / BS_STRING_INDEX_STRIDE;
-            position = mark * BS_STRING_INDEX_STRIDE;
-            offset = string->offsets[mark];
-        }
+    uint32_t *cursor = bsStringIndex(string);
+    size_t position = 0;
+    size_t offset = 0;
+    if (index >= cursor[0]) {
+        position = cursor[0];
+        offset = cursor[1];
+    } else if (length >= 2 * BS_STRING_INDEX_STRIDE) {
+        size_t mark = index / BS_STRING_INDEX_STRIDE;
+        position = mark * BS_STRING_INDEX_STRIDE;
+        offset = cursor[2 + mark];
     }
     while (offset < string->size && position < index) {
         size_t codeSize;
@@ -584,8 +590,8 @@ size_t bsStringOffsetSlow(BSValue value, size_t index)
         offset += codeSize;
         position++;
     }
-    string->cursorIndex = (uint32_t) position;
-    string->cursorOffset = (uint32_t) offset;
+    cursor[0] = (uint32_t) position;
+    cursor[1] = (uint32_t) offset;
     return offset;
 }
 
@@ -703,7 +709,7 @@ BSValue bsSBToValue(BSStringBuilder *sb)
         return bsStringNewSize("", 0);
     }
     /* The buffer becomes the string, uncopied; built this way it is freed rather than pooled */
-    bsStringInit(string, sb->size, 0);
+    bsStringInit(string, sb->size, sb->capacity - 1, 0);
     BSValue value = bsStringFinish(string, sb->size);
     bsSBInit(sb);
     return value;
@@ -929,17 +935,38 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
 
 
 /*
- * Object values - a treap, a binary search tree ordered by key with a max-heap on node priority
+ * Object values
+ *
+ * An object is an insertion-ordered array of key/value entries. Up to three entries live in the
+ * object itself; past that they move to a heap buffer that doubles as it fills. An object of more
+ * than eight keys also carries a hash index over its entries - an open-addressing table of
+ * (hash, entry) slots keyed by the content hash the key string caches - so a lookup probes the
+ * index and compares one key, while a smaller object scans its entries. Iteration is entry order,
+ * which is insertion order (matching the reference implementations, whose objects are JavaScript
+ * objects and Python dictionaries); the operations defined over sorted keys sort an index of the
+ * entries on demand.
+ *
+ * A lookup compares an entry's key to the key sought by pointer first - interned names, which
+ * compiled code and the library use, hit that way - and by content only when the two are not both
+ * interned, since two distinct interned strings never have the same content.
  */
 
 
 #define BS_OBJECT_POOL_MAX 16384
 
+/* Entries scanned in place before an object builds its hash index */
+#define BS_OBJECT_LINEAR 8
+
+/* Recycled entry buffers, in the two capacities an object outgrows its inline entries into first */
+#define BS_ENTRY_POOL_CAPACITY 8
+#define BS_ENTRY_POOL_MAX 1024
+
+
 static BSObject *bsObjectAlloc(void)
 {
     if (bsTS.objectPool != NULL) {
         BSObject *object = bsTS.objectPool;
-        bsTS.objectPool = (BSObject *) object->u.tree.insertHead;
+        bsTS.objectPool = (BSObject *) object->entries;
         bsTS.objectPoolCount--;
         return object;
     }
@@ -948,14 +975,11 @@ static BSObject *bsObjectAlloc(void)
 
 static void bsObjectRecycle(BSObject *object)
 {
-    if (!object->packed && object->u.tree.lookup != NULL) {
-        free(object->u.tree.lookup);
-    }
     if (bsTS.objectPoolCount >= BS_OBJECT_POOL_MAX) {
         free(object);
         return;
     }
-    object->u.tree.insertHead = (BSObjectNode *) bsTS.objectPool;
+    object->entries = (BSObjectEntry *) bsTS.objectPool;
     bsTS.objectPool = object;
     bsTS.objectPoolCount++;
 }
@@ -965,10 +989,11 @@ BSValue bsObjectNew(void)
 {
     BSObject *object = bsObjectAlloc();
     object->refcount = 1;
-    object->packed = 1;
-    object->uninterned = 0;
     object->count = 0;
+    object->capacity = BS_OBJECT_INLINE;
     object->generation = 0;
+    object->entries = object->inline_;
+    object->index = NULL;
 
     BSValue value;
     value.type = BS_OBJECT;
@@ -983,62 +1008,57 @@ size_t bsObjectCount(BSValue value)
 }
 
 
-/* Recycled treap nodes - BareScript allocates and frees objects constantly */
-#define BS_OBJECT_NODE_POOL_MAX 16384
-
-static BSObjectNode *bsObjectNodeAlloc(void)
+/* The pool class of an entry buffer capacity, or -1 for a capacity the pool does not hold */
+static int bsEntryPoolClass(size_t capacity)
 {
-    if (bsTS.nodePool != NULL) {
-        BSObjectNode *node = bsTS.nodePool;
-        bsTS.nodePool = node->left;
-        bsTS.nodePoolCount--;
-        return node;
-    }
-    return bsAlloc(sizeof(BSObjectNode));
+    return capacity == BS_ENTRY_POOL_CAPACITY ? 0 : (capacity == 2 * BS_ENTRY_POOL_CAPACITY ? 1 : -1);
 }
 
-static void bsObjectNodeRecycle(BSObjectNode *node)
+static BSObjectEntry *bsEntriesAlloc(size_t capacity)
 {
-    if (bsTS.nodePoolCount >= BS_OBJECT_NODE_POOL_MAX) {
-        free(node);
+    int classIndex = bsEntryPoolClass(capacity);
+    if (classIndex >= 0 && bsTS.entryPool[classIndex] != NULL) {
+        BSObjectEntry *entries = bsTS.entryPool[classIndex];
+        bsTS.entryPool[classIndex] = (BSObjectEntry *) entries[0].key;
+        bsTS.entryPoolCount[classIndex]--;
+        return entries;
+    }
+    return bsAlloc(capacity * sizeof(BSObjectEntry));
+}
+
+static void bsEntriesFree(BSObjectEntry *entries, size_t capacity)
+{
+    int classIndex = bsEntryPoolClass(capacity);
+    if (classIndex >= 0 && bsTS.entryPoolCount[classIndex] < BS_ENTRY_POOL_MAX) {
+        entries[0].key = (BSString *) bsTS.entryPool[classIndex];
+        bsTS.entryPool[classIndex] = entries;
+        bsTS.entryPoolCount[classIndex]++;
         return;
     }
-    node->left = bsTS.nodePool;
-    bsTS.nodePool = node;
-    bsTS.nodePoolCount++;
-}
-
-/*
- * The node priority source
- *
- * A deterministic xorshift keeps object layout - and therefore test behavior - reproducible from
- * run to run while still keeping the tree balanced in expectation.
- */
-static uint32_t bsObjectPriority(void)
-{
-    uint32_t state = bsTS.priorityState;
-    state ^= state << 13;
-    state ^= state >> 17;
-    state ^= state << 5;
-    bsTS.priorityState = state;
-    return state;
+    free(entries);
 }
 
 
 /*
- * Interned object keys
+ * Interned strings
  *
- * Short C-string keys (script names, bsObjectSet) are interned so lookup can compare pointers.
- * JSON and computed objectSet keys reuse an interned string when the name is already interned
- * and otherwise stay ordinary, so untrusted unique keys cannot grow the table. The table holds
- * one reference; interned strings live until bsValueCleanup. New intern entries stop at COUNT_MAX.
+ * Short C-string keys (script names, bsObjectSet) and compiled names are interned so a lookup can
+ * compare pointers. The table holds one reference; interned strings live until bsValueCleanup.
+ * New intern entries stop at COUNT_MAX.
  */
 #define BS_INTERN_MAX 64
 #define BS_INTERN_INITIAL 32
 #define BS_INTERN_COUNT_MAX 65536
 
 
-static uint32_t bsInternHash(const char *data, size_t size, bool *ascii)
+/*
+ * The content hash of a string's bytes, and whether they are ASCII
+ *
+ * FNV-1a a word at a time, then mixed: a multiply alone leaves the hash's low bits depending on
+ * each word's low byte only, and the object index probes by the low bits, so keys that differ in
+ * their other bytes - "/item/123", "10.0.0.7" - would share slots.
+ */
+static BS_NOINLINE uint32_t bsHashBytes(const char *data, size_t size, bool *ascii)
 {
     const unsigned char *bytes = (const unsigned char *) data;
     uint32_t hash = 2166136261u;
@@ -1059,8 +1079,26 @@ static uint32_t bsInternHash(const char *data, size_t size, bool *ascii)
         hash *= 16777619u;
     }
     *ascii = (high & 0x80808080u) == 0;
+    hash ^= hash >> 16;
+    hash *= 0x85ebca6bu;
+    hash ^= hash >> 13;
+    hash *= 0xc2b2ae35u;
+    hash ^= hash >> 16;
     return hash;
 }
+
+
+/* A string's content hash, computed once and kept on the string */
+static uint32_t bsStringHash(BSString *string)
+{
+    if ((string->flags & BS_STR_HASHED) == 0) {
+        bool ascii;
+        string->hash = bsHashBytes(string->data, string->size, &ascii);
+        string->flags |= BS_STR_HASHED;
+    }
+    return string->hash;
+}
+
 
 /* Store an interned string in the first empty slot of its probe sequence */
 static void bsInternPut(BSString *string, uint32_t hash)
@@ -1113,25 +1151,21 @@ static BSString *bsInternLookupHash(const char *data, size_t size, uint32_t hash
     }
 }
 
-static BSString *bsInternLookup(const char *data, size_t size)
-{
-    bool ascii;
-    return bsInternLookupHash(data, size, bsInternHash(data, size, &ascii));
-}
-
 BSValue bsStringIntern(const char *data, size_t size)
 {
     if (size > BS_INTERN_MAX) {
         return bsStringNewSize(data, size);
     }
     bool ascii = false;
-    uint32_t hash = bsInternHash(data, size, &ascii);
+    uint32_t hash = bsHashBytes(data, size, &ascii);
     BSString *found = bsInternLookupHash(data, size, hash);
     if (found != NULL) {
         found->refcount++;
         return bsStringTake(found);
     }
     BSValue value = ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
+    value.u.string->hash = hash;
+    value.u.string->flags |= BS_STR_HASHED;
     if (bsTS.internCount >= BS_INTERN_COUNT_MAX) {
         return value;
     }
@@ -1148,7 +1182,8 @@ BSValue bsStringIntern(const char *data, size_t size)
 BSValue bsStringInternExisting(const char *data, size_t size)
 {
     if (size <= BS_INTERN_MAX) {
-        BSString *found = bsInternLookup(data, size);
+        bool ascii;
+        BSString *found = bsInternLookupHash(data, size, bsHashBytes(data, size, &ascii));
         if (found != NULL) {
             found->refcount++;
             return bsStringTake(found);
@@ -1179,7 +1214,7 @@ void bsValueCleanup(void)
     for (unsigned ix = 0; ix < BS_STRING_POOL_CLASSES; ix++) {
         while (bsTS.stringPool[ix] != NULL) {
             BSString *string = bsTS.stringPool[ix];
-            bsTS.stringPool[ix] = (BSString *) string->offsets;
+            bsTS.stringPool[ix] = (BSString *) string->index;
             free(string);
         }
         bsTS.stringPoolCount[ix] = 0;
@@ -1200,17 +1235,20 @@ void bsValueCleanup(void)
     }
     while (bsTS.objectPool != NULL) {
         BSObject *object = bsTS.objectPool;
-        bsTS.objectPool = (BSObject *) object->u.tree.insertHead;
+        bsTS.objectPool = (BSObject *) object->entries;
         free(object);
     }
     bsTS.objectPoolCount = 0;
-    while (bsTS.nodePool != NULL) {
-        BSObjectNode *node = bsTS.nodePool;
-        bsTS.nodePool = node->left;
-        free(node);
+    for (int ix = 0; ix < BS_ENTRY_POOL_CLASS_COUNT; ix++) {
+        while (bsTS.entryPool[ix] != NULL) {
+            BSObjectEntry *entries = bsTS.entryPool[ix];
+            bsTS.entryPool[ix] = (BSObjectEntry *) entries[0].key;
+            free(entries);
+        }
+        bsTS.entryPoolCount[ix] = 0;
     }
-    bsTS.nodePoolCount = 0;
 }
+
 
 static int bsKeyCompare(const BSString *key1, const char *key2, size_t size2)
 {
@@ -1227,436 +1265,149 @@ static int bsKeyCompare(const BSString *key1, const char *key2, size_t size2)
 }
 
 
-static BSObjectNode *bsObjectRotateRight(BSObjectNode *node)
+/*
+ * Whether a stored key is the key sought: "key" is the sought key's string when the lookup has
+ * one, or NULL for a C-string lookup, and "data" and "size" are its bytes either way
+ */
+static inline bool bsKeyEqual(const BSString *stored, const BSString *key, const char *data, size_t size)
 {
-    BSObjectNode *left = node->left;
-    node->left = left->right;
-    left->right = node;
-    return left;
-}
-
-
-static BSObjectNode *bsObjectRotateLeft(BSObjectNode *node)
-{
-    BSObjectNode *right = node->right;
-    node->right = right->left;
-    right->left = node;
-    return right;
-}
-
-
-#define BS_OBJECT_LOOKUP_EMPTY ((BSObjectNode *) 0)
-#define BS_OBJECT_LOOKUP_TOMB  ((BSObjectNode *) (uintptr_t) 1)
-
-static uint32_t bsPtrHash(const BSString *key)
-{
-    uintptr_t x = (uintptr_t) key;
-    x ^= x >> 16;
-    x *= 0x7feb352d;
-    return (uint32_t) x;
-}
-
-static void bsObjectLookupGrow(BSObject *object);
-
-static void bsObjectLookupPut(BSObject *object, BSObjectNode *node)
-{
-    if (object->u.tree.lookup == NULL || (node->key->flags & BS_STR_INTERNED) == 0) {
-        return;
+    if (stored == key) {
+        return true;
     }
-    if ((object->count + 1) * 2 > object->u.tree.lookupMask + 1) {
-        bsObjectLookupGrow(object);
+    if (key != NULL && (stored->flags & key->flags & BS_STR_INTERNED) != 0) {
+        return false;
     }
-    uint32_t hash = bsPtrHash(node->key);
-    for (uint32_t probe = 0;; probe++) {
-        uint32_t slot = (hash + probe) & object->u.tree.lookupMask;
-        BSObjectNode *entry = object->u.tree.lookup[slot];
-        if (entry == BS_OBJECT_LOOKUP_EMPTY || entry == BS_OBJECT_LOOKUP_TOMB || entry->key == node->key) {
-            object->u.tree.lookup[slot] = node;
+    return stored->size == size && (size == 0 || memcmp(stored->data, data, size) == 0);
+}
+
+
+
+/*
+ * The hash index
+ */
+
+
+static void bsObjectIndexPut(BSObjectIndex *index, uint32_t hash, uint32_t entry)
+{
+    for (uint32_t probe = hash;; probe++) {
+        BSObjectSlot *slot = &index->slots[probe & index->mask];
+        if (slot->entry == 0) {
+            slot->hash = hash;
+            slot->entry = entry + 1;
             return;
         }
     }
 }
 
-/* Allocate an empty table with room for "count" keys at half load */
-static void bsObjectLookupAlloc(BSObject *object, size_t count)
+
+/* Build - or rebuild - the index over the entries, sized for "capacity" keys at half load */
+static BS_NOINLINE void bsObjectIndexBuild(BSObject *object, size_t capacity)
 {
-    uint32_t capacity = 16;
-    while (capacity < (uint32_t) count * 2 + 2) {
-        capacity *= 2;
+    uint32_t size = 32;
+    while (size < capacity * 2) {
+        size *= 2;
     }
-    object->u.tree.lookup = bsAlloc(capacity * sizeof(BSObjectNode *));
-    memset(object->u.tree.lookup, 0, capacity * sizeof(BSObjectNode *));
-    object->u.tree.lookupMask = capacity - 1;
+    free(object->index);
+    object->index = bsAlloc(sizeof(BSObjectIndex) + size * sizeof(BSObjectSlot));
+    object->index->mask = size - 1;
+    memset(object->index->slots, 0, size * sizeof(BSObjectSlot));
+    for (uint32_t ix = 0; ix < object->count; ix++) {
+        bsObjectIndexPut(object->index, bsStringHash(object->entries[ix].key), ix);
+    }
 }
 
-static void bsObjectLookupGrow(BSObject *object)
+
+/* The entry holding a key, or NULL - "key" is the sought key's string, or NULL for a C string */
+static inline BSObjectEntry *bsObjectFind(const BSObject *object, BSString *key, const char *data, size_t size)
 {
-    BSObjectNode **old = object->u.tree.lookup;
-    uint32_t oldMask = object->u.tree.lookupMask;
-    bsObjectLookupAlloc(object, object->count);
-    if (old != NULL) {
-        for (uint32_t ix = 0; ix <= oldMask; ix++) {
-            BSObjectNode *node = old[ix];
-            if (node != BS_OBJECT_LOOKUP_EMPTY && node != BS_OBJECT_LOOKUP_TOMB) {
-                bsObjectLookupPut(object, node);
+    BSObjectEntry *entries = object->entries;
+    const BSObjectIndex *index = object->index;
+    if (index == NULL) {
+        for (size_t ix = 0; ix < object->count; ix++) {
+            if (bsKeyEqual(entries[ix].key, key, data, size)) {
+                return &entries[ix];
             }
         }
-        free(old);
-    } else {
-        for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
-            bsObjectLookupPut(object, node);
-        }
+        return NULL;
     }
-}
-
-/* The table slot holding the node keyed by "interned", or the empty slot its probe sequence ends at */
-static BSObjectNode **bsObjectLookupSlot(const BSObject *object, BSString *interned)
-{
-    uint32_t hash = bsPtrHash(interned);
-    for (uint32_t probe = 0;; probe++) {
-        uint32_t slot = (hash + probe) & object->u.tree.lookupMask;
-        BSObjectNode *entry = object->u.tree.lookup[slot];
-        if (entry == BS_OBJECT_LOOKUP_EMPTY || (entry != BS_OBJECT_LOOKUP_TOMB && entry->key == interned)) {
-            return &object->u.tree.lookup[slot];
-        }
-    }
-}
-
-static void bsObjectLookupDel(BSObject *object, BSString *interned)
-{
-    if (object->u.tree.lookup != NULL) {
-        BSObjectNode **slot = bsObjectLookupSlot(object, interned);
-        if (*slot != BS_OBJECT_LOOKUP_EMPTY) {
-            *slot = BS_OBJECT_LOOKUP_TOMB;
-        }
-    }
-}
-
-static BSObjectNode *bsObjectLookupGet(const BSObject *object, BSString *interned)
-{
-    BSObjectNode *entry = *bsObjectLookupSlot(object, interned);
-    return entry != BS_OBJECT_LOOKUP_EMPTY ? entry : NULL;
-}
-
-
-/* Tiny objects store up to four pairs in the object itself. Past that they become a list. */
-#define BS_OBJECT_PACKED 4
-
-/* Past this, interned keys are indexed by pointer. The treap is built only for a sorted walk
- * or a key that must be matched by content. */
-#define BS_OBJECT_SMALL 32
-
-static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *object);
-static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t size,
-                                     BSString *interned);
-
-static int bsObjectKeyEqual(const BSString *stored, const char *key, size_t size, BSString *interned)
-{
-    if (interned != NULL) {
-        /* The intern table holds one string per content, so two distinct interned strings differ */
-        if (stored == interned) {
-            return 1;
-        }
-        if ((stored->flags & BS_STR_INTERNED) != 0) {
-            return 0;
-        }
-    }
-    return stored->size == size && (size == 0 || memcmp(stored->data, key, size) == 0);
-}
-
-static int bsObjectPackedFind(const BSObject *object, const char *key, size_t size,
-                              BSString *interned)
-{
-    for (size_t ix = 0; ix < object->count; ix++) {
-        if (bsObjectKeyEqual(object->u.small.keys[ix], key, size, interned)) {
-            return (int) ix;
-        }
-    }
-    return -1;
-}
-
-
-/* Resolve a key to its interned string, if it has one, and then to that string's bytes */
-static BSString *bsInternResolve(const char **key, size_t *size, BSString *interned)
-{
-    if (interned == NULL && *size <= BS_INTERN_MAX) {
-        interned = bsInternLookup(*key, *size);
-        if (interned != NULL) {
-            *key = interned->data;
-            *size = interned->size;
-        }
-    }
-    return interned;
-}
-
-
-static BSValue *bsObjectFindValue(BSObject *object, const char *key, size_t size,
-                                  BSString *interned)
-{
-    interned = bsInternResolve(&key, &size, interned);
-    if (object->packed) {
-        int found = bsObjectPackedFind(object, key, size, interned);
-        return found >= 0 ? &object->u.small.values[found] : NULL;
-    }
-    BSObjectNode *node = bsObjectFindKey(object, key, size, interned);
-    return node != NULL ? &node->value : NULL;
-}
-
-/* Make an object an empty list, discarding its packed pairs */
-static void bsObjectListInit(BSObject *object)
-{
-    object->packed = 0;
-    object->count = 0;
-    object->u.tree.root = NULL;
-    object->u.tree.insertHead = NULL;
-    object->u.tree.insertTail = NULL;
-    object->u.tree.lookup = NULL;
-    object->u.tree.lookupMask = 0;
-}
-
-/* Move a full packed object's pairs onto a list */
-static void bsObjectSpill(BSObject *object)
-{
-    BSString *keys[BS_OBJECT_PACKED];
-    BSValue values[BS_OBJECT_PACKED];
-    size_t n = object->count;
-    for (size_t ix = 0; ix < n; ix++) {
-        keys[ix] = object->u.small.keys[ix];
-        values[ix] = object->u.small.values[ix];
-    }
-    bsObjectListInit(object);
-    for (size_t ix = 0; ix < n; ix++) {
-        BSValue key = bsStringTake(keys[ix]);
-        bsObjectNodeCreate(key, values[ix], object);
-        bsReleaseInline(key);
-    }
-}
-
-/* The key's interned string, or NULL if the key is not an interned string */
-static inline BSString *bsKeyInterned(BSValue key)
-{
-    return (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) != 0) ? key.u.string : NULL;
-}
-
-
-static BSObjectNode *bsObjectNodeCreate(BSValue key, BSValue item, BSObject *object)
-{
-    BSObjectNode *created = bsObjectNodeAlloc();
-    created->left = NULL;
-    created->right = NULL;
-    /* A priority is drawn only for a node that joins a treap - bsObjectBuildTreap draws the rest */
-    created->priority = object->u.tree.root != NULL ? bsObjectPriority() : 0;
-    created->key = bsRetainInline(key).u.string;
-    created->value = item;
-    if (bsKeyInterned(key) == NULL) {
-        object->uninterned = 1;
-    }
-
-    created->insertPrev = object->u.tree.insertTail;
-    created->insertNext = NULL;
-    if (object->u.tree.insertTail != NULL) {
-        object->u.tree.insertTail->insertNext = created;
-    } else {
-        object->u.tree.insertHead = created;
-    }
-    object->u.tree.insertTail = created;
-
-    object->count++;
-    object->generation++;
-    bsObjectLookupPut(object, created);
-    return created;
-}
-
-
-/* Rotate a newly linked node up its insertion path until the heap property holds again */
-static void bsObjectTreapBubbleUp(BSObject *object, BSObjectNode *const *path, const signed char *dirs,
-                                  int depth)
-{
-    while (depth > 0) {
-        int d = depth - 1;
-        BSObjectNode *parent = path[d];
-        BSObjectNode *child = dirs[d] < 0 ? parent->left : parent->right;
-        if (child->priority <= parent->priority) {
-            break;
-        }
-        BSObjectNode *rotated = dirs[d] < 0 ? bsObjectRotateRight(parent) : bsObjectRotateLeft(parent);
-        if (d == 0) {
-            object->u.tree.root = rotated;
-        } else if (dirs[d - 1] < 0) {
-            path[d - 1]->left = rotated;
-        } else {
-            path[d - 1]->right = rotated;
-        }
-        depth--;
-    }
-}
-
-/*
- * Descend the treap to a key, recording the path taken. Returns the node with that key, or NULL
- * with "*attach" pointing at the empty child where a node for it belongs.
- */
-static BSObjectNode *bsObjectTreapDescend(BSObject *object, const char *keyData, size_t keySize,
-                                          BSObjectNode **path, signed char *dirs, int *depth,
-                                          BSObjectNode ***attach)
-{
-    int d = 0;
-    BSObjectNode *node = object->u.tree.root;
-    for (;;) {
-        int compare = bsKeyCompare(node->key, keyData, keySize);
-        if (compare == 0) {
-            return node;
-        }
-        /* GCOV_EXCL_START */
-        if (d >= 128) {
-            abort();
-        }
-        /* GCOV_EXCL_STOP */
-        path[d] = node;
-        dirs[d] = compare > 0 ? -1 : 1;
-        d++;
-        BSObjectNode **child = compare > 0 ? &node->left : &node->right;
-        if (*child == NULL) {
-            *attach = child;
-            *depth = d;
+    bool ascii;
+    uint32_t hash = key != NULL ? bsStringHash(key) : bsHashBytes(data, size, &ascii);
+    for (uint32_t probe = hash;; probe++) {
+        const BSObjectSlot *slot = &index->slots[probe & index->mask];
+        if (slot->entry == 0) {
             return NULL;
         }
-        node = *child;
-    }
-}
-
-
-/* Link an existing list node into the treap. Does not touch the insertion-order list. */
-static void bsObjectTreapLink(BSObject *object, BSObjectNode *created)
-{
-    created->left = NULL;
-    created->right = NULL;
-    if (object->u.tree.root == NULL) {
-        object->u.tree.root = created;
-        return;
-    }
-    BSObjectNode *path[128];
-    signed char dirs[128];
-    int depth;
-    BSObjectNode **attach;
-    /* GCOV_EXCL_START */
-    if (bsObjectTreapDescend(object, created->key->data, created->key->size, path, dirs, &depth, &attach) != NULL) {
-        abort();
-    }
-    /* GCOV_EXCL_STOP */
-    *attach = created;
-    bsObjectTreapBubbleUp(object, path, dirs, depth);
-}
-
-
-/*
- * Link every list node into the treap
- *
- * Past BS_OBJECT_SMALL keys the interned-pointer table answers lookups, so the treap - which
- * orders keys by content - is only built when something needs that order: a sorted walk, or a key
- * that is not interned and so can only be found by content. An object whose keys are all interned
- * (a regex match's groups, most script-built objects) never pays for it unless it is encoded or
- * compared.
- */
-static void bsObjectBuildTreap(BSObject *object)
-{
-    object->u.tree.root = NULL;
-    for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
-        node->priority = bsObjectPriority();
-        bsObjectTreapLink(object, node);
-    }
-}
-
-
-static void bsObjectTreapInsert(BSObject *object, BSValue key, BSValue item)
-{
-    BSObjectNode *path[128];
-    signed char dirs[128];
-    int depth;
-    BSObjectNode **attach;
-    BSObjectNode *node = bsObjectTreapDescend(object, bsStringData(key), bsStringSize(key), path, dirs,
-                                              &depth, &attach);
-    if (node != NULL) {
-        bsReleaseInline(node->value);
-        node->value = item;
-        return;
-    }
-    *attach = bsObjectNodeCreate(key, item, object);
-    bsObjectTreapBubbleUp(object, path, dirs, depth);
-}
-
-
-/* Index the list once it outgrows the insertion-order scan; keys matched by content need the treap */
-static void bsObjectListGrew(BSObject *object)
-{
-    if (object->count > BS_OBJECT_SMALL && object->u.tree.lookup == NULL) {
-        bsObjectLookupGrow(object);
-        if (object->uninterned) {
-            bsObjectBuildTreap(object);
+        if (slot->hash == hash && bsKeyEqual(entries[slot->entry - 1].key, key, data, size)) {
+            return &entries[slot->entry - 1];
         }
     }
 }
 
 
-/* Append a pair to a packed object that has room. Takes ownership of "item" and retains "key". */
-static void bsObjectPackedAppend(BSObject *object, BSValue key, BSValue item)
+/* Double a full object's entry buffer - and its index, whose slot count follows the capacity */
+static BS_NOINLINE void bsObjectEntriesGrow(BSObject *object)
 {
-    if (bsKeyInterned(key) == NULL) {
-        object->uninterned = 1;
+    size_t capacity = object->capacity < BS_ENTRY_POOL_CAPACITY ? BS_ENTRY_POOL_CAPACITY : object->capacity * 2;
+    BSObjectEntry *entries = bsEntriesAlloc(capacity);
+    memcpy(entries, object->entries, object->count * sizeof(BSObjectEntry));
+    if (object->entries != object->inline_) {
+        bsEntriesFree(object->entries, object->capacity);
     }
-    object->u.small.keys[object->count] = bsRetainInline(key).u.string;
-    object->u.small.values[object->count] = item;
-    object->count++;
-    object->generation++;
+    object->entries = entries;
+    object->capacity = (uint32_t) capacity;
+    if (object->index != NULL) {
+        bsObjectIndexBuild(object, capacity);
+    }
 }
 
 
-/* Insert or update a key. Takes ownership of "item"; retains "key" if a node is created.
- * Objects at or under BS_OBJECT_SMALL stay a list. */
+/* Append an entry for a key known to be absent. Takes ownership of "item" and retains "key". */
+static void bsObjectEntryAdd(BSObject *object, BSValue key, BSValue item)
+{
+    if (object->count == object->capacity) {
+        bsObjectEntriesGrow(object);
+    }
+    uint32_t ix = object->count++;
+    BSObjectEntry *entry = &object->entries[ix];
+    entry->key = bsRetainInline(key).u.string;
+    entry->value = item;
+    object->generation++;
+    if (object->index != NULL) {
+        bsObjectIndexPut(object->index, bsStringHash(entry->key), ix);
+    } else if (object->count > BS_OBJECT_LINEAR) {
+        bsObjectIndexBuild(object, object->capacity);
+    }
+}
+
+
+/* Insert or update a key. Takes ownership of "item"; retains "key" if an entry is added. */
 static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
 {
-    BSString *interned = bsKeyInterned(key);
-    const char *keyData = bsStringData(key);
-    size_t keySize = bsStringSize(key);
-    if (object->packed) {
-        int found = bsObjectPackedFind(object, keyData, keySize, interned);
-        if (found >= 0) {
-            bsReleaseInline(object->u.small.values[found]);
-            object->u.small.values[found] = item;
-            return;
-        }
-        if (object->count < BS_OBJECT_PACKED) {
-            bsObjectPackedAppend(object, key, item);
-            return;
-        }
-        bsObjectSpill(object);
-    }
-    if (object->count > BS_OBJECT_SMALL && object->u.tree.root == NULL &&
-        (interned == NULL || object->uninterned)) {
-        /* The key can only be matched by content */
-        bsObjectBuildTreap(object);
-    }
-    if (object->u.tree.root != NULL) {
-        bsObjectTreapInsert(object, key, item);
+    BSObjectEntry *entry = bsObjectFind(object, key.u.string, key.u.string->data, key.u.string->size);
+    if (entry != NULL) {
+        bsReleaseInline(entry->value);
+        entry->value = item;
         return;
     }
-    BSObjectNode *node = bsObjectFindKey(object, keyData, keySize, interned);
-    if (node != NULL) {
-        bsReleaseInline(node->value);
-        node->value = item;
-        return;
-    }
-    bsObjectNodeCreate(key, item, object);
-    bsObjectListGrew(object);
+    bsObjectEntryAdd(object, key, item);
 }
 
 
 BSValue bsObjectNewCapacity(size_t count)
 {
     BSValue value = bsObjectNew();
-    if (count > BS_OBJECT_SMALL) {
-        /* Born in list form with a table sized for every key, so the appends never rebuild it */
-        bsObjectListInit(value.u.object);
-        bsObjectLookupAlloc(value.u.object, count);
+    BSObject *object = value.u.object;
+    if (count > BS_OBJECT_INLINE) {
+        /* Born with entries for every key, and past the scan threshold its index, so appends never rebuild */
+        size_t capacity = BS_ENTRY_POOL_CAPACITY;
+        while (capacity < count) {
+            capacity *= 2;
+        }
+        object->entries = bsEntriesAlloc(capacity);
+        object->capacity = (uint32_t) capacity;
+        if (count > BS_OBJECT_LINEAR) {
+            bsObjectIndexBuild(object, capacity);
+        }
     }
     return value;
 }
@@ -1664,171 +1415,50 @@ BSValue bsObjectNewCapacity(size_t count)
 
 void bsObjectAppend(BSValue value, BSValue key, BSValue item)
 {
-    BSObject *object = value.u.object;
-    if (object->packed) {
-        if (object->count < BS_OBJECT_PACKED) {
-            bsObjectPackedAppend(object, key, item);
-            return;
-        }
-        bsObjectSpill(object);
-    }
-    if (object->u.tree.root != NULL) {
-        bsObjectTreapInsert(object, key, item);
-        return;
-    }
-    bsObjectNodeCreate(key, item, object);
-    bsObjectListGrew(object);
+    bsObjectEntryAdd(value.u.object, key, item);
 }
 
 
-static BSObjectNode *bsObjectFind(BSObjectNode *node, const char *key, size_t size)
+/* Release an object's entries and their buffer */
+static void bsObjectEntriesFree(BSObject *object)
 {
-    while (node != NULL) {
-        int compare = bsKeyCompare(node->key, key, size);
-        if (compare == 0) {
-            return node;
-        }
-        node = compare > 0 ? node->left : node->right;
+    BSObjectEntry *entries = object->entries;
+    for (size_t ix = 0; ix < object->count; ix++) {
+        bsReleaseInline(bsStringTake(entries[ix].key));
+        bsReleaseInline(entries[ix].value);
     }
-    return NULL;
-}
-
-
-/*
- * Find a key in a list-form object. The caller passes the key already through bsInternResolve, so
- * a NULL "interned" means the key provably has no interned form - an object holding only interned
- * keys can then answer a miss without a compare. Calling this with an unresolved key would report
- * a stored interned key as absent.
- */
-static BSObjectNode *bsObjectFindKey(BSObject *object, const char *key, size_t size,
-                                     BSString *interned)
-{
-    if (object->count > BS_OBJECT_SMALL) {
-        if (interned != NULL) {
-            BSObjectNode *node = bsObjectLookupGet(object, interned);
-            if (node != NULL || !object->uninterned) {
-                return node;
-            }
-        } else if (!object->uninterned) {
-            /* Every stored key is interned and this key has no interned form */
-            return NULL;
-        }
-        /* An object with an uninterned key past the threshold always has its treap */
-        return bsObjectFind(object->u.tree.root, key, size);
+    if (entries != object->inline_) {
+        bsEntriesFree(entries, object->capacity);
     }
-    for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
-        if (bsObjectKeyEqual(node->key, key, size, interned)) {
-            return node;
-        }
-    }
-    return NULL;
-}
-
-
-/* Unlink a node from the insertion list and the table, release its pair, and recycle it */
-static void bsObjectNodeUnlink(BSObject *object, BSObjectNode *node)
-{
-    if (node->insertPrev != NULL) {
-        node->insertPrev->insertNext = node->insertNext;
-    } else {
-        object->u.tree.insertHead = node->insertNext;
-    }
-    if (node->insertNext != NULL) {
-        node->insertNext->insertPrev = node->insertPrev;
-    } else {
-        object->u.tree.insertTail = node->insertPrev;
-    }
-    bsObjectLookupDel(object, node->key);
-    bsReleaseInline(bsStringTake(node->key));
-    bsReleaseInline(node->value);
-    bsObjectNodeRecycle(node);
-    object->count--;
-    object->generation++;
-}
-
-
-/* Remove a key known to be in the treap */
-static BSObjectNode *bsObjectRemove(BSObjectNode *node, const char *key, size_t size, BSObject *object)
-{
-    int compare = bsKeyCompare(node->key, key, size);
-    if (compare > 0) {
-        node->left = bsObjectRemove(node->left, key, size, object);
-        return node;
-    }
-    if (compare < 0) {
-        node->right = bsObjectRemove(node->right, key, size, object);
-        return node;
-    }
-
-    /* Rotate the node down until it is a leaf, then unlink it */
-    if (node->left == NULL && node->right == NULL) {
-        bsObjectNodeUnlink(object, node);
-        return NULL;
-    }
-    if (node->right == NULL || (node->left != NULL && node->left->priority > node->right->priority)) {
-        node = bsObjectRotateRight(node);
-        node->right = bsObjectRemove(node->right, key, size, object);
-    } else {
-        node = bsObjectRotateLeft(node);
-        node->left = bsObjectRemove(node->left, key, size, object);
-    }
-    return node;
-}
-
-
-static void bsObjectNodesFree(BSObject *object)
-{
-    if (object->packed) {
-        for (size_t ix = 0; ix < object->count; ix++) {
-            bsReleaseInline(bsStringTake(object->u.small.keys[ix]));
-            bsReleaseInline(object->u.small.values[ix]);
-        }
-        return;
-    }
-    BSObjectNode *node = object->u.tree.insertHead;
-    while (node != NULL) {
-        BSObjectNode *next = node->insertNext;
-        bsReleaseInline(bsStringTake(node->key));
-        bsReleaseInline(node->value);
-        bsObjectNodeRecycle(node);
-        node = next;
-    }
+    free(object->index);
 }
 
 
 void bsObjectSetString(BSValue value, BSValue key, BSValue item)
 {
-    BSObject *object = value.u.object;
-    if (key.type == BS_STRING && (key.u.string->flags & BS_STR_INTERNED) == 0 &&
-        key.u.string->size <= BS_INTERN_MAX) {
-        /* Reuse an interned name when one exists; do not intern untrusted unique keys. */
-        BSString *found = bsInternLookup(key.u.string->data, key.u.string->size);
-        if (found != NULL) {
-            bsObjectInsert(object, bsStringTake(found), item);
-            return;
-        }
-    }
-    bsObjectInsert(object, key, item);
+    bsObjectInsert(value.u.object, key, item);
 }
 
 
 void bsObjectSet(BSValue value, const char *key, BSValue item)
 {
     BSValue keyValue = bsStringIntern(key, strlen(key));
-    bsObjectSetString(value, keyValue, item);
+    bsObjectInsert(value.u.object, keyValue, item);
     bsReleaseInline(keyValue);
 }
 
 
 BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size)
 {
-    return bsObjectFindValue(object.u.object, key, size, NULL);
+    BSObjectEntry *entry = bsObjectFind(object.u.object, NULL, key, size);
+    return entry != NULL ? &entry->value : NULL;
 }
 
 
 BSValue *bsObjectValuePtrString(BSValue object, BSValue key)
 {
-    return bsObjectFindValue(object.u.object, bsStringData(key), bsStringSize(key), bsKeyInterned(key));
+    BSObjectEntry *entry = bsObjectFind(object.u.object, key.u.string, key.u.string->data, key.u.string->size);
+    return entry != NULL ? &entry->value : NULL;
 }
 
 
@@ -1855,24 +1485,16 @@ bool bsObjectSole(BSValue object, BSString **key, BSValue *value)
     if (object.type != BS_OBJECT || object.u.object->count != 1) {
         return false;
     }
-    const BSObject *o = object.u.object;
-    if (o->packed) {
-        *key = o->u.small.keys[0];
-        *value = o->u.small.values[0];
-    } else {
-        *key = o->u.tree.insertHead->key;
-        *value = o->u.tree.insertHead->value;
-    }
+    const BSObjectEntry *entry = object.u.object->entries;
+    *key = entry->key;
+    *value = entry->value;
     return true;
 }
 
 
 bool bsObjectKeyIs(const BSString *stored, BSValue key)
 {
-    const char *data = key.u.string->data;
-    size_t size = key.u.string->size;
-    BSString *interned = bsInternResolve(&data, &size, bsKeyInterned(key));
-    return bsObjectKeyEqual(stored, data, size, interned) != 0;
+    return bsKeyEqual(stored, key.u.string, key.u.string->data, key.u.string->size);
 }
 
 
@@ -1898,79 +1520,66 @@ bool bsObjectHas(BSValue value, const char *key)
 bool bsObjectDelete(BSValue value, const char *key)
 {
     BSObject *object = value.u.object;
-    size_t size = strlen(key);
-    BSString *interned = bsInternResolve(&key, &size, NULL);
-    if (object->packed) {
-        int found = bsObjectPackedFind(object, key, size, interned);
-        if (found < 0) {
-            return false;
-        }
-        bsReleaseInline(bsStringTake(object->u.small.keys[found]));
-        bsReleaseInline(object->u.small.values[found]);
-        object->count--;
-        for (size_t ix = (size_t) found; ix < object->count; ix++) {
-            object->u.small.keys[ix] = object->u.small.keys[ix + 1];
-            object->u.small.values[ix] = object->u.small.values[ix + 1];
-        }
-        object->generation++;
-        return true;
-    }
-    BSObjectNode *node = bsObjectFindKey(object, key, size, interned);
-    if (node == NULL) {
+    BSObjectEntry *entry = bsObjectFind(object, NULL, key, strlen(key));
+    if (entry == NULL) {
         return false;
     }
-    if (object->u.tree.root != NULL) {
-        object->u.tree.root = bsObjectRemove(object->u.tree.root, node->key->data, node->key->size, object);
-    } else {
-        bsObjectNodeUnlink(object, node);
+    bsReleaseInline(bsStringTake(entry->key));
+    bsReleaseInline(entry->value);
+    size_t ix = (size_t) (entry - object->entries);
+    object->count--;
+    memmove(entry, entry + 1, (object->count - ix) * sizeof(BSObjectEntry));
+    object->generation++;
+    if (object->index != NULL) {
+        /* The entries after it moved down, so the index is rebuilt - or dropped, below the threshold */
+        if (object->count > BS_OBJECT_LINEAR) {
+            bsObjectIndexBuild(object, object->capacity);
+        } else {
+            free(object->index);
+            object->index = NULL;
+        }
     }
     return true;
 }
 
 
-static bool bsObjectIterNode(BSObjectNode *node, BSObjectIterFn iter, void *data)
+/* Sort entry indexes by key: an insertion sort of a short run, a merge sort above that */
+static BS_NOINLINE void bsObjectSortIndexes(const BSObjectEntry *entries, uint32_t *order, uint32_t *scratch, size_t count)
 {
-    if (node == NULL) {
-        return true;
-    }
-    if (!bsObjectIterNode(node->left, iter, data)) {
-        return false;
-    }
-    if (!iter(bsStringTake(node->key), node->value, data)) {
-        return false;
-    }
-    return bsObjectIterNode(node->right, iter, data);
-}
-
-
-/* Iterate at most BS_OBJECT_SMALL pairs in sorted key order - an insertion sort of their indexes */
-static bool bsObjectIterSortedPairs(BSString *const *keys, const BSValue *values, size_t n,
-                                    BSObjectIterFn iter, void *data)
-{
-    size_t order[BS_OBJECT_SMALL];
-    for (size_t ix = 0; ix < n; ix++) {
-        order[ix] = ix;
-    }
-    for (size_t i = 1; i < n; i++) {
-        size_t item = order[i];
-        size_t j = i;
-        while (j > 0) {
-            BSString *right = keys[item];
-            if (bsKeyCompare(keys[order[j - 1]], right->data, right->size) <= 0) {
-                break;
+    if (count <= 16) {
+        for (size_t i = 1; i < count; i++) {
+            uint32_t item = order[i];
+            const BSString *key = entries[item].key;
+            size_t j = i;
+            while (j > 0 && bsKeyCompare(entries[order[j - 1]].key, key->data, key->size) > 0) {
+                order[j] = order[j - 1];
+                j--;
             }
-            order[j] = order[j - 1];
-            j--;
+            order[j] = item;
         }
-        order[j] = item;
+        return;
     }
-    for (size_t ix = 0; ix < n; ix++) {
-        size_t k = order[ix];
-        if (!iter(bsStringTake(keys[k]), values[k], data)) {
-            return false;
+    size_t half = count / 2;
+    bsObjectSortIndexes(entries, order, scratch, half);
+    bsObjectSortIndexes(entries, order + half, scratch + half, count - half);
+    size_t ixLeft = 0;
+    size_t ixRight = half;
+    size_t ixOut = 0;
+    while (ixLeft < half && ixRight < count) {
+        const BSString *right = entries[order[ixRight]].key;
+        if (bsKeyCompare(entries[order[ixLeft]].key, right->data, right->size) <= 0) {
+            scratch[ixOut++] = order[ixLeft++];
+        } else {
+            scratch[ixOut++] = order[ixRight++];
         }
     }
-    return true;
+    while (ixLeft < half) {
+        scratch[ixOut++] = order[ixLeft++];
+    }
+    while (ixRight < count) {
+        scratch[ixOut++] = order[ixRight++];
+    }
+    memcpy(order, scratch, count * sizeof(uint32_t));
 }
 
 
@@ -1979,25 +1588,23 @@ bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data)
     if (value.type != BS_OBJECT) {
         return true;
     }
-    BSObject *object = value.u.object;
-    if (object->packed) {
-        return bsObjectIterSortedPairs(object->u.small.keys, object->u.small.values, object->count, iter, data);
+    const BSObject *object = value.u.object;
+    size_t count = object->count;
+    uint32_t orderInline[2 * 32];
+    uint32_t *order = count <= 32 ? orderInline : bsAlloc(2 * count * sizeof(uint32_t));
+    for (uint32_t ix = 0; ix < count; ix++) {
+        order[ix] = ix;
     }
-    if (object->u.tree.root == NULL && object->u.tree.insertHead != NULL) {
-        if (object->count <= BS_OBJECT_SMALL) {
-            BSString *keys[BS_OBJECT_SMALL];
-            BSValue values[BS_OBJECT_SMALL];
-            size_t ix = 0;
-            for (BSObjectNode *node = object->u.tree.insertHead; node != NULL; node = node->insertNext) {
-                keys[ix] = node->key;
-                values[ix] = node->value;
-                ix++;
-            }
-            return bsObjectIterSortedPairs(keys, values, object->count, iter, data);
-        }
-        bsObjectBuildTreap(object);
+    bsObjectSortIndexes(object->entries, order, order + count, count);
+    bool complete = true;
+    for (size_t ix = 0; ix < count && complete; ix++) {
+        const BSObjectEntry *entry = &object->entries[order[ix]];
+        complete = iter(bsStringTake(entry->key), entry->value, data);
     }
-    return bsObjectIterNode(object->u.tree.root, iter, data);
+    if (order != orderInline) {
+        free(order);
+    }
+    return complete;
 }
 
 
@@ -2006,17 +1613,10 @@ bool bsObjectIter(BSValue value, BSObjectIterFn iter, void *data)
     if (value.type != BS_OBJECT) {
         return true;
     }
-    if (value.u.object->packed) {
-        BSObject *object = value.u.object;
-        for (size_t ix = 0; ix < object->count; ix++) {
-            if (!iter(bsStringTake(object->u.small.keys[ix]), object->u.small.values[ix], data)) {
-                return false;
-            }
-        }
-        return true;
-    }
-    for (BSObjectNode *node = value.u.object->u.tree.insertHead; node != NULL; node = node->insertNext) {
-        if (!iter(bsStringTake(node->key), node->value, data)) {
+    const BSObject *object = value.u.object;
+    for (size_t ix = 0; ix < object->count; ix++) {
+        const BSObjectEntry *entry = &object->entries[ix];
+        if (!iter(bsStringTake(entry->key), entry->value, data)) {
             return false;
         }
     }
@@ -2047,30 +1647,24 @@ BSValue bsObjectKeysSorted(BSValue value)
 }
 
 
-static bool bsObjectCopyIter(BSValue key, BSValue item, void *data)
-{
-    bsObjectSetString(*((BSValue *) data), key, bsRetainInline(item));
-    return true;
-}
-
-
-static bool bsObjectAppendIter(BSValue key, BSValue item, void *data)
-{
-    bsObjectAppend(*((BSValue *) data), key, bsRetainInline(item));
-    return true;
-}
-
-
 void bsObjectAssign(BSValue dest, BSValue src)
 {
-    bsObjectIter(src, bsObjectCopyIter, &dest);
+    const BSObject *source = src.u.object;
+    for (size_t ix = 0; ix < source->count; ix++) {
+        const BSObjectEntry *entry = &source->entries[ix];
+        bsObjectInsert(dest.u.object, bsStringTake(entry->key), bsRetainInline(entry->value));
+    }
 }
 
 
 BSValue bsObjectCopy(BSValue value)
 {
-    BSValue copy = bsObjectNewCapacity(bsObjectCount(value));
-    bsObjectIter(value, bsObjectAppendIter, &copy);
+    size_t count = bsObjectCount(value);
+    BSValue copy = bsObjectNewCapacity(count);
+    for (size_t ix = 0; ix < count; ix++) {
+        const BSObjectEntry *entry = &value.u.object->entries[ix];
+        bsObjectEntryAdd(copy.u.object, bsStringTake(entry->key), bsRetainInline(entry->value));
+    }
     return copy;
 }
 
@@ -2136,7 +1730,7 @@ void bsReleaseDestroyed(BSValue value)
     }
     case BS_OBJECT: {
         BSObject *object = value.u.object;
-        bsObjectNodesFree(object);
+        bsObjectEntriesFree(object);
         bsObjectRecycle(object);
         break;
     }

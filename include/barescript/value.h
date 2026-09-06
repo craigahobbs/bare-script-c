@@ -75,6 +75,7 @@ typedef struct BSValue {
 
 /* String flags - the high bits record the allocation's recycling size class */
 #define BS_STR_INTERNED 0x01u /* the intern table holds a reference */
+#define BS_STR_HASHED   0x02u /* the content hash is computed */
 
 /* An immutable, reference-counted UTF-8 string */
 struct BSString {
@@ -82,9 +83,9 @@ struct BSString {
     uint8_t flags;
     uint32_t size;         /* bytes */
     uint32_t length;       /* Unicode code points */
-    uint32_t cursorIndex;  /* last code-point index passed to bsStringOffsetSlow */
-    uint32_t cursorOffset; /* corresponding byte offset */
-    uint32_t *offsets;     /* sparse code-point-to-byte map, or NULL */
+    uint32_t hash;         /* the content hash, once an object lookup needs it */
+    uint32_t capacity;     /* the data bytes the allocation holds, not counting the terminator */
+    uint32_t *index;       /* the non-ASCII code point index - a cursor and sparse offsets - or NULL */
     char data[];           /* NUL-terminated UTF-8; allocated with the header */
 };
 
@@ -98,59 +99,45 @@ struct BSArray {
 };
 
 
-/*
- * A reference-counted object's binary search tree node
- *
- * The tree is a treap - a binary search tree ordered by key, with each node also satisfying the
- * max-heap property on a pseudo-random priority. This keeps the tree balanced in expectation
- * without the bookkeeping of an AVL or red-black tree, which matters because BareScript code
- * routinely inserts keys in sorted order (a worst case for a plain binary search tree).
- */
-typedef struct BSObjectNode {
-    struct BSObjectNode *left;
-    struct BSObjectNode *right;
-    struct BSObjectNode *insertPrev;
-    struct BSObjectNode *insertNext;
-    uint32_t priority;
+/* An object's key/value entry */
+typedef struct BSObjectEntry {
     BSString *key;
     BSValue value;
-} BSObjectNode;
+} BSObjectEntry;
+
+
+/* An object's hash index: open-addressing slots of a key's content hash and its entry index plus one */
+typedef struct BSObjectSlot {
+    uint32_t hash;
+    uint32_t entry; /* zero for an empty slot */
+} BSObjectSlot;
+
+typedef struct BSObjectIndex {
+    uint32_t mask;
+    BSObjectSlot slots[];
+} BSObjectIndex;
+
+
+/* The entries an object holds in itself before they move to a heap buffer */
+#define BS_OBJECT_INLINE 3
 
 
 /*
  * A reference-counted object of key/value pairs
  *
- * Up to four pairs live in the object itself. Past that, keys live on an insertion-order list of
- * nodes; past 32 keys an interned-pointer hash table indexes the list, and a treap over the same
- * nodes - built only when something needs key order, or a key that must be matched by content -
- * gives the sorted traversal. The two storage forms are exclusive, so they share the object's
- * storage. Iteration is insertion order - matching the reference implementations, whose objects
- * are JavaScript objects and Python dictionaries. JSON encoding and value comparison walk sorted
- * keys.
+ * The entries are an array in insertion order - matching the reference implementations, whose
+ * objects are JavaScript objects and Python dictionaries - held in the object itself until they
+ * outgrow it, then on a buffer that doubles. An object of more than eight keys also carries a
+ * hash index over its entries. JSON encoding and value comparison sort the entries on demand.
  */
 struct BSObject {
     int32_t refcount;
-    uint8_t packed;      /* 1 = u.small, 0 = u.tree - an insertion list, indexed past 32 keys */
-    uint8_t uninterned;  /* 1 if any key is not interned; interned hash miss then walks the treap */
     uint32_t count;
+    uint32_t capacity;   /* the entries the buffer holds */
     uint32_t generation; /* incremented when a key is added or removed - value slots then move */
-    union {
-        struct {
-            BSString *keys[4];
-            BSValue values[4];
-        } small;
-        struct {
-            BSObjectNode *root;
-            BSObjectNode *insertHead;
-            BSObjectNode *insertTail;
-            /*
-             * Open-addressing table of interned keys to nodes, built once the object outgrows the
-             * insertion-order scan. NULL until then. Tombstones are a sentinel pointer.
-             */
-            BSObjectNode **lookup;
-            uint32_t lookupMask;
-        } tree;
-    } u;
+    BSObjectEntry *entries;
+    BSObjectIndex *index; /* NULL until the object outgrows a scan of its entries */
+    BSObjectEntry inline_[BS_OBJECT_INLINE];
 };
 
 
