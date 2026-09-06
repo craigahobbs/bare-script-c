@@ -355,7 +355,9 @@ static bool bsUtf8IsAscii(const char *data, size_t size)
 
 static void bsStringFree(BSString *string)
 {
-    free(string->index);
+    if (string->index != NULL) {
+        free(string->index);
+    }
     unsigned class = string->flags >> BS_STR_POOL_SHIFT;
     if (class != 0 && bsTS.stringPoolCount[class - 1] < BS_STRING_POOL_MAX) {
         string->index = (uint32_t *) bsTS.stringPool[class - 1];
@@ -577,8 +579,10 @@ BSString *bsStringAppendValue(BSString *string, BSValue value)
     string->length += (uint32_t) length;
     string->data[newSize] = '\0';
     string->flags &= (uint8_t) ~BS_STR_HASHED;
-    free(string->index);
-    string->index = NULL;
+    if (string->index != NULL) {
+        free(string->index);
+        string->index = NULL;
+    }
     bsReleaseInline(text);
     return string;
 }
@@ -1543,7 +1547,9 @@ static void bsObjectEntriesFree(BSObject *object)
     if (entries != object->inline_) {
         bsEntriesFree(entries, object->capacity);
     }
-    free(object->index);
+    if (object->index != NULL) {
+        free(object->index);
+    }
 }
 
 
