@@ -878,11 +878,26 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
         if (opcode == 0) {
             return false;
         }
+        /*
+         * When dst is the topmost temporary, a left operand that needs one computes straight into
+         * dst - the operator then reads and writes the same register, so a chain like a + b + c
+         * appends to the string it is building in place. A left operand that is a constant or a
+         * local allocates nothing, and dst is taken back before the right operand is compiled.
+         */
         uint16_t base = e->tempTop;
+        bool dstTop = e->tempTop != 0 && dst + 1 == e->slotCount + e->tempTop;
+        if (dstTop) {
+            e->tempTop--;
+        }
         BSOperand left;
         BSOperand right;
-        if (!bsEmitExprOperand(e, bsObjectGetString(binary, bsKeys.left), &left) ||
-            !bsEmitExprOperand(e, bsObjectGetString(binary, bsKeys.right), &right)) {
+        if (!bsEmitExprOperand(e, bsObjectGetString(binary, bsKeys.left), &left)) {
+            return false;
+        }
+        if (dstTop && e->tempTop < base) {
+            e->tempTop = base;
+        }
+        if (!bsEmitExprOperand(e, bsObjectGetString(binary, bsKeys.right), &right)) {
             return false;
         }
         e->tempTop = base;

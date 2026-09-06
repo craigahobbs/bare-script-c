@@ -515,15 +515,33 @@ BSString *bsStringAppendValue(BSString *string, BSValue value)
     BSValue text = bsStringBytes(value, buffer, sizeof(buffer), &data, &size, &length);
     size_t newSize = string->size + size;
     if (newSize > string->capacity) {
-        /* Grown geometrically, so a string built by repeated appends copies each byte a bounded
-           number of times; a recycled block outgrows its size class and is freed like any other */
-        size_t capacity = string->capacity < 32 ? 64 : string->capacity * 2;
-        while (capacity < newSize) {
-            capacity *= 2;
+        size_t total = sizeof(BSString) + newSize + 1;
+        if (total <= bsStringPoolSize[BS_STRING_POOL_CLASSES - 1]) {
+            /* Still a pooled size: move up a size class, block for block, with no allocator call */
+            BSString *grown = bsStringAlloc(newSize);
+            memcpy(grown->data, string->data, string->size);
+            grown->size = string->size;
+            grown->length = string->length;
+            bsStringFree(string);
+            string = grown;
+        } else {
+            /*
+             * Past the pool, a medium string grows to the allocator's own granularity, so a string
+             * kept by the thousands carries no slack; a large one doubles, so a string built by
+             * repeated appends copies each byte a bounded number of times. A recycled block that
+             * outgrows its size class is freed like any other.
+             */
+            size_t capacity = string->capacity * 2;
+            if (total <= 256) {
+                capacity = ((total + 15) & ~(size_t) 15) - sizeof(BSString) - 1;
+            }
+            while (capacity < newSize) {
+                capacity *= 2;
+            }
+            string = bsRealloc(string, sizeof(BSString) + capacity + 1);
+            string->capacity = (uint32_t) capacity;
+            string->flags &= (uint8_t) ((1u << BS_STR_POOL_SHIFT) - 1);
         }
-        string = bsRealloc(string, sizeof(BSString) + capacity + 1);
-        string->capacity = (uint32_t) capacity;
-        string->flags &= (uint8_t) ((1u << BS_STR_POOL_SHIFT) - 1);
     }
     memcpy(string->data + string->size, data, size);
     string->size = (uint32_t) newSize;
