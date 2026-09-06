@@ -757,6 +757,29 @@ static bool bsEmitIfTo(BSEmit *e, BSValue args, uint16_t dst)
 }
 
 
+/* The intrinsic call opcode for a global call by name with "argCount" arguments, or CALL_NAME */
+static uint8_t bsCallOpcode(const char *name, size_t argCount)
+{
+    static const struct {
+        const char *name;
+        uint8_t argMin;
+        uint8_t argMax;
+        uint8_t opcode;
+    } table[] = {
+        {"arrayGet", 2, 2, BS_OP_CALL_ARRAY_GET}, {"arrayLength", 1, 1, BS_OP_CALL_ARRAY_LENGTH},
+        {"arrayPush", 2, 2, BS_OP_CALL_ARRAY_PUSH}, {"arraySet", 3, 3, BS_OP_CALL_ARRAY_SET},
+        {"objectGet", 2, 3, BS_OP_CALL_OBJECT_GET}, {"objectSet", 3, 3, BS_OP_CALL_OBJECT_SET},
+        {"stringLength", 1, 1, BS_OP_CALL_STRING_LENGTH}
+    };
+    for (size_t ix = 0; ix < sizeof(table) / sizeof(table[0]); ix++) {
+        if (argCount >= table[ix].argMin && argCount <= table[ix].argMax && strcmp(table[ix].name, name) == 0) {
+            return table[ix].opcode;
+        }
+    }
+    return BS_OP_CALL_NAME;
+}
+
+
 /* A call: the arguments are operands in the DATA words that follow the call instruction */
 static bool bsEmitCallTo(BSEmit *e, BSValue function, uint16_t dst)
 {
@@ -779,7 +802,7 @@ static bool bsEmitCallTo(BSEmit *e, BSValue function, uint16_t dst)
         if (slot >= 0) {
             bsEmitInst(e, BS_OP_CALL_SLOT, dst, (uint16_t) slot, (uint16_t) argCount);
         } else {
-            bsEmitInst(e, BS_OP_CALL_NAME, dst, bsEmitSite(e, name), (uint16_t) argCount);
+            bsEmitInst(e, bsCallOpcode(bsStringData(name), argCount), dst, bsEmitSite(e, name), (uint16_t) argCount);
         }
         for (size_t ix = 0; ix < argCount; ix += BS_OPERANDS_PER_DATA) {
             bsEmitInst(e, BS_OP_DATA, operands[ix],

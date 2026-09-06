@@ -450,7 +450,9 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
  *
  * Returns true with "*result" set to the owned return value when the arguments are the happy-path
  * shape; false means the caller runs the full library function, which validates the arguments and
- * reports the error.
+ * reports the error. The intrinsics with one argument shape - arrayGet, arrayLength, arraySet,
+ * objectGet, objectSet, stringLength - have call opcodes of their own, which run them in place;
+ * their ids only identify the library function to those opcodes' guard.
  */
 static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
 {
@@ -478,17 +480,6 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
 {
     switch (id) {
     BS_INTRIN(ARRAY_COPY, argCount == 1 && args[0].type == BS_ARRAY, bsArrayCopy(args[0]))
-    case BS_INTRIN_ARRAY_GET: {
-        size_t index;
-        if (argCount == 2 && args[0].type == BS_ARRAY && bsIntrinsicIndex(args[1], &index) &&
-            index < args[0].u.array->count) {
-            *result = bsRetain(args[0].u.array->values[index]);
-            return true;
-        }
-        return false;
-    }
-    BS_INTRIN(ARRAY_LENGTH, argCount == 1 && args[0].type == BS_ARRAY,
-              bsNumber((double) args[0].u.array->count))
     case BS_INTRIN_ARRAY_POP:
         if (argCount == 1 && args[0].type == BS_ARRAY && args[0].u.array->count != 0) {
             size_t index = args[0].u.array->count - 1;
@@ -506,16 +497,6 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
             return true;
         }
         return false;
-    case BS_INTRIN_ARRAY_SET: {
-        size_t index;
-        if (argCount == 3 && args[0].type == BS_ARRAY && bsIntrinsicIndex(args[1], &index) &&
-            index < args[0].u.array->count) {
-            bsArraySet(args[0], index, bsRetain(args[2]));
-            *result = bsRetain(args[2]);
-            return true;
-        }
-        return false;
-    }
     BS_INTRIN(ARRAY_NEW, true, bsArrayFromArgs(args, argCount))
     BS_INTRIN(MATH_ABS, argCount == 1 && args[0].type == BS_NUMBER, bsNumber(fabs(args[0].u.number)))
     BS_INTRIN(MATH_CEIL, argCount == 1 && args[0].type == BS_NUMBER, bsNumber(ceil(args[0].u.number)))
@@ -532,27 +513,9 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
             return true;
         }
         return false;
-    case BS_INTRIN_OBJECT_GET:
-        if (argCount >= 2 && argCount <= 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
-            BSValue found;
-            if (bsObjectLookupString(args[0], args[1], &found)) {
-                *result = bsRetain(found);
-            } else {
-                *result = argCount >= 3 ? bsRetain(args[2]) : bsNull();
-            }
-            return true;
-        }
-        return false;
     BS_INTRIN(OBJECT_HAS, argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING,
               bsBoolean(bsObjectHasString(args[0], args[1])))
     BS_INTRIN(OBJECT_KEYS, argCount == 1 && args[0].type == BS_OBJECT, bsObjectKeys(args[0]))
-    case BS_INTRIN_OBJECT_SET:
-        if (argCount == 3 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
-            bsObjectSetString(args[0], args[1], bsRetain(args[2]));
-            *result = bsRetain(args[2]);
-            return true;
-        }
-        return false;
     case BS_INTRIN_OBJECT_NEW: {
         for (size_t ix = 0; ix < argCount; ix += 2) {
             if (args[ix].type != BS_STRING) {
@@ -568,8 +531,6 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
     }
     BS_INTRIN(STRING_ENDS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
               bsBoolean(bsStringEndsWith(args[0], args[1])))
-    BS_INTRIN(STRING_LENGTH, argCount == 1 && args[0].type == BS_STRING,
-              bsNumber((double) args[0].u.string->length))
     BS_INTRIN(STRING_STARTS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
               bsBoolean(bsStringStartsWith(args[0], args[1])))
     BS_INTRIN(SYSTEM_BOOLEAN, argCount == 1, bsBoolean(bsValueBoolean(args[0])))
@@ -951,6 +912,163 @@ static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t sl
 
 
 /*
+ * The intrinsic call opcodes' fast paths
+ *
+ * A CALL_NAME of one of the six single-shape intrinsics compiles to an opcode of its own, whose
+ * handler runs one of these: the site's cached global must be the library function - the one
+ * function value carrying that intrinsic id, so a script function of the same name is not it - a
+ * locals object must not shadow the name, and the arguments must be the happy-path shape. Any
+ * other case returns false and the general call runs, which validates and reports as the library
+ * function would. They stay out of line so the dispatch loop's own code does not grow.
+ */
+
+/* The intrinsic call's arguments, when the site's global is the library function "id" and no locals
+   object shadows the name - "argCount" of them from the DATA word after the instruction */
+static inline const BSInst *bsIntrinArgs(const BSCode *code, const BSInst *inst, BSValue locals, BSOptions *options,
+                                         unsigned char id)
+{
+    BSCallCache *cache = &code->caches[inst->b];
+    BSValue name = code->constants[cache->nameIndex];
+    if (locals.type == BS_OBJECT && bsObjectHasString(locals, name)) {
+        return NULL;
+    }
+    BSValue *slot = bsGlobalSlot(cache, name, options);
+    if (slot == NULL || slot->type != BS_FUNCTION || slot->u.function->intrinsic != id) {
+        return NULL;
+    }
+    return inst + 1;
+}
+
+/* Store an intrinsic's result - a borrowed value - in the call's destination register */
+static inline void bsIntrinResult(const BSInst *inst, BSValue *regs, BSValue value)
+{
+    if (inst->a != BS_REG_DISCARD) {
+        bsAssign(&regs[inst->a], bsRetain(value));
+    }
+}
+
+static BS_NOINLINE bool bsIntrinArrayGet(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+                                         BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_ARRAY_GET);
+    size_t index;
+    if (args == NULL) {
+        return false;
+    }
+    BSValue array = bsOperandRead(code, regs, args->a);
+    if (array.type != BS_ARRAY || !bsIntrinsicIndex(bsOperandRead(code, regs, args->b), &index) ||
+        index >= array.u.array->count) {
+        return false;
+    }
+    bsIntrinResult(inst, regs, array.u.array->values[index]);
+    return true;
+}
+
+static BS_NOINLINE bool bsIntrinArrayLength(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+                                            BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_ARRAY_LENGTH);
+    if (args == NULL) {
+        return false;
+    }
+    BSValue array = bsOperandRead(code, regs, args->a);
+    if (array.type != BS_ARRAY) {
+        return false;
+    }
+    bsIntrinResult(inst, regs, bsNumber((double) array.u.array->count));
+    return true;
+}
+
+static BS_NOINLINE bool bsIntrinArrayPush(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+                                          BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_ARRAY_PUSH);
+    if (args == NULL) {
+        return false;
+    }
+    BSValue array = bsOperandRead(code, regs, args->a);
+    if (array.type != BS_ARRAY) {
+        return false;
+    }
+    bsArrayPush(array, bsRetain(bsOperandRead(code, regs, args->b)));
+    bsIntrinResult(inst, regs, array);
+    return true;
+}
+
+static BS_NOINLINE bool bsIntrinArraySet(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+                                         BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_ARRAY_SET);
+    size_t index;
+    if (args == NULL) {
+        return false;
+    }
+    BSValue array = bsOperandRead(code, regs, args->a);
+    if (array.type != BS_ARRAY || !bsIntrinsicIndex(bsOperandRead(code, regs, args->b), &index) ||
+        index >= array.u.array->count) {
+        return false;
+    }
+    BSValue value = bsOperandRead(code, regs, args->c);
+    bsArraySet(array, index, bsRetain(value));
+    bsIntrinResult(inst, regs, value);
+    return true;
+}
+
+static BS_NOINLINE bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+                                          BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_OBJECT_GET);
+    if (args == NULL) {
+        return false;
+    }
+    BSValue object = bsOperandRead(code, regs, args->a);
+    BSValue key = bsOperandRead(code, regs, args->b);
+    if (object.type != BS_OBJECT || key.type != BS_STRING) {
+        return false;
+    }
+    BSValue found;
+    if (!bsObjectLookupString(object, key, &found)) {
+        found = inst->c == 3 ? bsOperandRead(code, regs, args->c) : bsNull();
+    }
+    bsIntrinResult(inst, regs, found);
+    return true;
+}
+
+static BS_NOINLINE bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+                                          BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_OBJECT_SET);
+    if (args == NULL) {
+        return false;
+    }
+    BSValue object = bsOperandRead(code, regs, args->a);
+    BSValue key = bsOperandRead(code, regs, args->b);
+    if (object.type != BS_OBJECT || key.type != BS_STRING) {
+        return false;
+    }
+    BSValue value = bsOperandRead(code, regs, args->c);
+    bsObjectSetString(object, key, bsRetain(value));
+    bsIntrinResult(inst, regs, value);
+    return true;
+}
+
+static BS_NOINLINE bool bsIntrinStringLength(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+                                             BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_STRING_LENGTH);
+    if (args == NULL) {
+        return false;
+    }
+    BSValue string = bsOperandRead(code, regs, args->a);
+    if (string.type != BS_STRING) {
+        return false;
+    }
+    bsIntrinResult(inst, regs, bsNumber((double) string.u.string->length));
+    return true;
+}
+
+
+/*
  * The binary operator handlers that differ only by their operator. Each opcode keeps its own
  * handler - and, when dispatch is threaded, its own dispatch - so no operator is chosen at run time.
  * Operands are borrowed reads; only the result is owned, and storing it releases what the
@@ -1079,7 +1197,9 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         &&op_JUMP_UNDEF, &&op_RETURN, &&op_CALL_NAME, &&op_CALL_SLOT, &&op_ADD, &&op_SUB, &&op_MUL,
         &&op_DIV, &&op_MOD, &&op_POW, &&op_EQ, &&op_NE, &&op_LT, &&op_LE, &&op_GT, &&op_GE,
         &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG, &&op_NOT, &&op_BNOT,
-        &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT
+        &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT, &&op_CALL_ARRAY_GET,
+        &&op_CALL_ARRAY_LENGTH, &&op_CALL_ARRAY_PUSH, &&op_CALL_ARRAY_SET, &&op_CALL_OBJECT_GET,
+        &&op_CALL_OBJECT_SET, &&op_CALL_STRING_LENGTH
     };
 #define BS_CASE(name) op_##name:
 #define BS_NEXT() \
@@ -1155,8 +1275,26 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             result = bsOperandTake(code, regs, slotCount, inst->a);
             goto done;
 
+#define BS_CALL_INTRIN(name, function) \
+        BS_CASE(name) \
+            if (!function(code, inst, regs, locals, options)) { \
+                goto call_general; \
+            } \
+            pc++; \
+            BS_NEXT();
+
+        BS_CALL_INTRIN(CALL_ARRAY_GET, bsIntrinArrayGet)
+        BS_CALL_INTRIN(CALL_ARRAY_LENGTH, bsIntrinArrayLength)
+        BS_CALL_INTRIN(CALL_ARRAY_PUSH, bsIntrinArrayPush)
+        BS_CALL_INTRIN(CALL_ARRAY_SET, bsIntrinArraySet)
+        BS_CALL_INTRIN(CALL_OBJECT_GET, bsIntrinObjectGet)
+        BS_CALL_INTRIN(CALL_OBJECT_SET, bsIntrinObjectSet)
+        BS_CALL_INTRIN(CALL_STRING_LENGTH, bsIntrinStringLength)
+#undef BS_CALL_INTRIN
+
         BS_CASE(CALL_NAME)
-        BS_CASE(CALL_SLOT) {
+        BS_CASE(CALL_SLOT)
+        call_general: {
             /* The arguments are operands, three per data word, read into a borrowed argument array */
             size_t argCount = inst->c;
             BSValue argsInline[16];

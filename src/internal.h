@@ -195,6 +195,18 @@ enum {
     BS_OP_INCLUDE,     /* run the b includes from include a */
     BS_OP_STMT,        /* statement a begins */
     BS_OP_LOAD_SLOT,   /* a = slot b, or the global of its name if the slot is unset */
+    /*
+     * A CALL_NAME whose name is a library intrinsic's and whose argument count is its happy path's:
+     * the interpreter runs the intrinsic in place once the site's global proves to be that library
+     * function, and takes the general call otherwise
+     */
+    BS_OP_CALL_ARRAY_GET,
+    BS_OP_CALL_ARRAY_LENGTH,
+    BS_OP_CALL_ARRAY_PUSH,
+    BS_OP_CALL_ARRAY_SET,
+    BS_OP_CALL_OBJECT_GET,
+    BS_OP_CALL_OBJECT_SET,
+    BS_OP_CALL_STRING_LENGTH,
     BS_OP_DATA = 0xFF  /* call operands, or a trap's line; never dispatched */
 };
 

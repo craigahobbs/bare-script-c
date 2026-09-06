@@ -1157,3 +1157,48 @@ TEST(runtime_function_error)
     bsFunctionError(NULL, "ignored");
     ASSERT_TRUE(true);
 }
+
+
+TEST(runtime_intrinsic_opcodes)
+{
+    /* A global call to one of the intrinsics by name, with its happy-path argument count, runs in
+       the interpreter; each shape that is not the happy path takes the general call */
+    ASSERT_VALUE(bsTestExecute(
+        "a = [1, 2]\no = {'k': 3}\n"
+        "arrayPush(a, 4)\narraySet(a, 0, 9)\nobjectSet(o, 'j', 5)\n"
+        "return [arrayGet(a, 2), arrayLength(a), arrayPush(a, 7), arraySet(a, 1, 8), objectGet(o, 'k'), "
+        "objectGet(o, 'z', 6), objectGet(o, 'z'), objectSet(o, 'k', 1), stringLength('abc'), o]"),
+        "[4,3,[9,8,4,7],8,3,6,null,1,3,{\"j\":5,\"k\":1}]");
+
+    /* Argument shapes the intrinsic does not take fall to the library function, which reports them */
+    ASSERT_VALUE(bsTestExecute("return [arrayGet([1], 1), arrayGet('x', 0), arrayLength(1), objectGet(1, 'k'), "
+                               "objectGet({}, 1), stringLength(1), arraySet([], 0, 1), objectSet(1, 'k', 1), arrayPush(1, 2)]"),
+                 "[null,null,0,null,null,0,null,null,null]");
+    ASSERT_VALUE(bsTestExecute("return arrayGet([1], 0.5)"), "null");
+
+    /* A script function of the same name shadows the intrinsic - the site's global is not the library's */
+    ASSERT_VALUE(bsTestExecute(
+        "function arrayGet(a, i):\n    return 'mine'\nendfunction\n"
+        "function arrayLength(a):\n    return -1\nendfunction\n"
+        "function arrayPush(a, v):\n    return -2\nendfunction\n"
+        "function arraySet(a, i, v):\n    return -3\nendfunction\n"
+        "function objectGet(o, k):\n    return -4\nendfunction\n"
+        "function objectSet(o, k, v):\n    return -5\nendfunction\n"
+        "function stringLength(s):\n    return -6\nendfunction\n"
+        "return [arrayGet([1], 0), arrayLength([]), arrayPush([], 1), arraySet([1], 0, 2), objectGet({}, 'k'), "
+        "objectSet({}, 'k', 1), stringLength('abc')]"), "[\"mine\",-1,-2,-3,-4,-5,-6]");
+
+    /* A locals object shadows too - an expression evaluated with locals takes the general call */
+    ASSERT_VALUE(bsTestExecute(
+        "function four(a):\n    return 4\nendfunction\n"
+        "return barescriptEvaluateExpression({'function': {'name': 'arrayLength', 'args': [{'variable': 'a'}]}}, "
+        "{'a': [1, 2, 3], 'arrayLength': four})"), "4");
+    ASSERT_VALUE(bsTestExecute(
+        "return barescriptEvaluateExpression({'function': {'name': 'arrayLength', 'args': [{'variable': 'a'}]}}, "
+        "{'a': [1, 2, 3]})"), "3");
+
+    /* Called through a local holding the function, the library function itself runs */
+    ASSERT_VALUE(bsTestExecute(
+        "function g():\n    f = arrayGet\n    h = objectGet\n    return [f([1, 2], 1), h({'k': 3}, 'k'), h({}, 'k', 4)]\n"
+        "endfunction\nreturn g()"), "[2,3,4]");
+}
