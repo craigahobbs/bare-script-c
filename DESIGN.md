@@ -400,10 +400,10 @@ only be inlined across the library at link time.
 
 Under PGO and LTO, `-O2` emits about 10% less text than `-O3` at the same speed. Also
 measured on the same suite, and not used: `-fno-stack-protector` (3% less text, 1.6% fewer instructions, no measurable time - not
-worth a mitigation), `-fomit-frame-pointer`, `-flto=thin`, `-mcpu=native`, and disabling the
-code generator's tail merging to keep every threaded-dispatch jump distinct (8% more text, no
-gain) all land within build-to-build noise, which is about 1% between two builds of the same
-configuration. Dead stripping has nothing left to strip after LTO with hidden visibility, and
+worth a mitigation), `-fomit-frame-pointer`, `-flto=thin`, and `-mcpu=native` all land within
+build-to-build noise, which is about 1% between two builds of the same configuration. Disabling
+the code generator's tail merging, so that every threaded-dispatch jump stays a distinct indirect
+branch, measured the same way once; the release build now does so - the Makefile says why. Dead stripping has nothing left to strip after LTO with hidden visibility, and
 context-sensitive PGO is not available: Apple's linker does not instrument under LTO.
 
 A second pass went through the rest of the compiler, linker, and profile knobs. Each variant was

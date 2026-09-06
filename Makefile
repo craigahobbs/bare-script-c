@@ -255,6 +255,22 @@ RELEASE_CLI := $(RELEASE_DIR)/$(CLI_NAME)
 # -flto=auto avoids the lto-wrapper "serial compilation" note on GCC while preserving full LTO.
 RELEASE_CFLAGS ?= -O2 -DNDEBUG -flto=auto
 
+# Keep every threaded-dispatch jump distinct. The code generator merges the identical tails of the
+# interpreters' handlers - the dispatch to the next instruction - into a few shared indirect
+# branches, which the branch-target predictor then cannot tell apart, and each handler reaches
+# its shared tail through a jump of its own. Distinct tails are worth 11% of mandelbrot's cycles
+# and 15% of nbody's, and an instruction per executed opcode, for 8% more text. Under LTO the
+# option has to reach the link-time code generator, so clang takes it on the link line and, for
+# the static library's ordinary objects, at compile time; GCC's is a compile option.
+ifneq '$(CC_IS_CLANG)' ''
+    RELEASE_LDFLAGS := -Wl,-mllvm,-enable-tail-merge=false
+    RELEASE_TAIL_CFLAGS := -mllvm -enable-tail-merge=false
+else
+    RELEASE_LDFLAGS :=
+    RELEASE_TAIL_CFLAGS := -fno-crossjumping
+    RELEASE_CFLAGS += $(RELEASE_TAIL_CFLAGS)
+endif
+
 # The shared library and the command-line interface link from link-time optimization objects. The
 # static library keeps the profile but drops link-time optimization, so it stays an archive of
 # ordinary object files that any linker consumes rather than one of compiler intermediate code.
@@ -262,7 +278,7 @@ RELEASE_LTO_DIR := $(RELEASE_DIR)/lto
 RELEASE_LTO_OBJS := $(patsubst $(SRC_DIR)/%.c,$(RELEASE_LTO_DIR)/%.o,$(LIB_SRCS))
 RELEASE_OBJ_DIR := $(RELEASE_DIR)/obj
 RELEASE_A_OBJS := $(patsubst $(SRC_DIR)/%.c,$(RELEASE_OBJ_DIR)/%.o,$(LIB_SRCS))
-RELEASE_A_CFLAGS := $(filter-out -flto -flto=%,$(RELEASE_CFLAGS))
+RELEASE_A_CFLAGS := $(filter-out -flto -flto=%,$(RELEASE_CFLAGS)) $(RELEASE_TAIL_CFLAGS)
 
 # The instrumented command-line interface and the profile it produces
 PGO_DIR := $(BUILD_DIR)/pgo
@@ -363,10 +379,10 @@ $(RELEASE_OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(PROFILE_DATA)
 	$(CC) $(BASE_CFLAGS) $(RELEASE_A_CFLAGS) $(PROFILE_USE) $(SO_CFLAGS) -c -o $@ $<
 
 $(RELEASE_LIB_SO): $(RELEASE_LTO_OBJS)
-	$(CC) $(RELEASE_CFLAGS) $(PROFILE_USE) $(SO_LDFLAGS) -o $@ $^ $(LIBS)
+	$(CC) $(RELEASE_CFLAGS) $(PROFILE_USE) $(RELEASE_LDFLAGS) $(SO_LDFLAGS) -o $@ $^ $(LIBS)
 
 $(RELEASE_CLI): $(RELEASE_LIB_SO)
-	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) -o $@ $(CLI_SRCS) \
+	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) $(PROFILE_USE) $(RELEASE_LDFLAGS) -o $@ $(CLI_SRCS) \
 	    -L$(RELEASE_DIR) -l$(LIB_NAME) $(RPATH_FLAGS) $(LIBS)
 
 $(RELEASE_LIB_A): $(RELEASE_A_OBJS)
