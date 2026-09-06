@@ -2438,11 +2438,11 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     state.repeats = scratch->repeats;
 
     /*
-     * Only the pattern's own groups need clearing, and only their matched flags - a span is read
-     * only once its flag is set - and only once: every capture write is on the trail, and a failed
-     * attempt unwinds all of them.
+     * Only the matched flags need clearing - a span is read only once its flag is set - and only
+     * once: every capture write is on the trail, and a failed attempt unwinds all of them. All of
+     * them are cleared, a fixed size the compiler stores in place rather than a call.
      */
-    memset(match->matched, 0, compiled->groupCount * sizeof(bool));
+    memset(match->matched, 0, sizeof(match->matched));
     match->begin = 0;
     match->end = 0;
     match->groupCount = compiled->groupCount;
