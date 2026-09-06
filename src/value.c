@@ -273,6 +273,7 @@ typedef struct {
     BSInternSlot *internSlots; /* NULL until the thread's first intern */
     size_t internMask;
     size_t internCount;
+    BSString *shortStrings[128 + 1]; /* the empty string, then each one-byte ASCII string, once created */
 } BSValueState;
 
 static _Thread_local BSValueState bsTS;
@@ -366,8 +367,33 @@ static void bsStringFree(BSString *string)
 }
 
 
+/*
+ * The empty string and the one-byte ASCII strings are shared: a slice, a match group, or a split
+ * piece of one character is the runtime's most frequent string, and each is created once per
+ * thread and retained thereafter. The thread's reference keeps their count above one, so the
+ * in-place append never sees one as unshared.
+ */
+static BSValue bsStringShort(const char *text, size_t size)
+{
+    BSString **slot = &bsTS.shortStrings[size == 0 ? 0 : 1 + (unsigned char) text[0]];
+    BSString *string = *slot;
+    if (string == NULL) {
+        string = bsStringAlloc(size);
+        memcpy(string->data, text, size);
+        string->length = (uint32_t) size;
+        string->refcount++;
+        *slot = string;
+    }
+    string->refcount++;
+    return bsStringTake(string);
+}
+
+
 BSValue bsStringNewAscii(const char *text, size_t size)
 {
+    if (size <= 1) {
+        return bsStringShort(text, size);
+    }
     BSString *string = bsStringAlloc(size);
     memcpy(string->data, text, size);
     string->length = (uint32_t) size;
@@ -390,6 +416,9 @@ static BSValue bsStringFinish(BSString *string, size_t size)
 
 BSValue bsStringNewSize(const char *text, size_t size)
 {
+    if (size == 0 || (size == 1 && ((unsigned char) text[0]) < 0x80)) {
+        return bsStringShort(text, size);
+    }
     BSString *string = bsStringAlloc(size);
     memcpy(string->data, text, size);
     return bsStringFinish(string, size);
@@ -1257,6 +1286,14 @@ void bsValueCleanup(void)
         bsTS.internSlots = NULL;
         bsTS.internMask = 0;
         bsTS.internCount = 0;
+    }
+
+    /* The shared short strings - one still held elsewhere lives on as an ordinary string */
+    for (size_t ix = 0; ix < sizeof(bsTS.shortStrings) / sizeof(bsTS.shortStrings[0]); ix++) {
+        if (bsTS.shortStrings[ix] != NULL) {
+            bsRelease(bsStringTake(bsTS.shortStrings[ix]));
+            bsTS.shortStrings[ix] = NULL;
+        }
     }
 
     /* The free lists */
