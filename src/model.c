@@ -885,7 +885,7 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
          * local allocates nothing, and dst is taken back before the right operand is compiled.
          */
         uint16_t base = e->tempTop;
-        bool dstTop = e->tempTop != 0 && dst + 1 == e->slotCount + e->tempTop;
+        bool dstTop = e->tempTop != 0 && (size_t) dst + 1 == e->slotCount + e->tempTop;
         if (dstTop) {
             e->tempTop--;
         }
