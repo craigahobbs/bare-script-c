@@ -1277,6 +1277,8 @@ BSValue bsStringInternExisting(const char *data, size_t size)
 
 void bsValueCleanup(void)
 {
+    bsRegexScratchFree();
+
     /* The intern table's references - a string still held elsewhere lives on as an ordinary string */
     if (bsTS.internSlots != NULL) {
         for (size_t ix = 0; ix <= bsTS.internMask; ix++) {

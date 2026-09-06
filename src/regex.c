@@ -1359,7 +1359,6 @@ typedef struct RxState {
     RxTrailEntry *trail;
     size_t trailCount;
     size_t trailCapacity;
-    RxTrailEntry trailInline[64];
     const RxInst *prog;
     const RxClass *classes;
     const RxAlt *alts;
@@ -1367,10 +1366,37 @@ typedef struct RxState {
     RxBacktrack *bt;
     size_t btCount;
     size_t btCapacity;
-    RxBacktrack btInline[128];
     RxRepeat *repeats;
-    RxRepeat repeatsInline[48];
 } RxState;
+
+
+/*
+ * The thread's match scratch - the trail, the backtrack stack, and the repeat counters - kept
+ * from one search to the next at the largest size a search has needed, so a search allocates
+ * nothing and carries no stack frame of its own. A search never re-enters the matcher.
+ */
+typedef struct RxScratch {
+    RxTrailEntry *trail;
+    size_t trailCapacity;
+    RxBacktrack *bt;
+    size_t btCapacity;
+    RxRepeat *repeats;
+    size_t repeatCapacity;
+} RxScratch;
+
+static _Thread_local RxScratch bsRxScratch;
+
+#define RX_TRAIL_INITIAL 64
+#define RX_BACKTRACK_INITIAL 128
+
+
+void bsRegexScratchFree(void)
+{
+    free(bsRxScratch.trail);
+    free(bsRxScratch.bt);
+    free(bsRxScratch.repeats);
+    memset(&bsRxScratch, 0, sizeof(bsRxScratch));
+}
 
 
 static inline uint32_t rxCode(const RxState *state, size_t pos)
@@ -1381,14 +1407,8 @@ static inline uint32_t rxCode(const RxState *state, size_t pos)
 
 static void rxTrailGrow(RxState *state)
 {
-    size_t capacity = state->trailCapacity * 2;
-    RxTrailEntry *trail = bsAlloc(capacity * sizeof(RxTrailEntry));
-    memcpy(trail, state->trail, state->trailCount * sizeof(RxTrailEntry));
-    if (state->trail != state->trailInline) {
-        free(state->trail);
-    }
-    state->trail = trail;
-    state->trailCapacity = capacity;
+    state->trailCapacity *= 2;
+    state->trail = bsRealloc(state->trail, state->trailCapacity * sizeof(RxTrailEntry));
 }
 
 
@@ -1769,14 +1789,8 @@ static void rxBtPush(RxState *state, uint32_t kind, uint32_t pc, size_t pos, uin
             return;
         }
         /* GCOV_EXCL_STOP */
-        size_t capacity = state->btCapacity * 2;
-        RxBacktrack *bt = bsAlloc(capacity * sizeof(RxBacktrack));
-        memcpy(bt, state->bt, state->btCount * sizeof(RxBacktrack));
-        if (state->bt != state->btInline) {
-            free(state->bt);
-        }
-        state->bt = bt;
-        state->btCapacity = capacity;
+        state->btCapacity *= 2;
+        state->bt = bsRealloc(state->bt, state->btCapacity * sizeof(RxBacktrack));
     }
     RxBacktrack *entry = &state->bt[state->btCount++];
     entry->kind = kind;
@@ -2397,21 +2411,31 @@ void bsRegexSubjectFree(BSRegexSubject *subject)
 bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, BSRegexMatch *match)
 {
     BSRegex *compiled = regex.u.regex;
+    RxScratch *scratch = &bsRxScratch;
+    if (scratch->trail == NULL) {
+        scratch->trailCapacity = RX_TRAIL_INITIAL;
+        scratch->trail = bsAlloc(scratch->trailCapacity * sizeof(RxTrailEntry));
+        scratch->btCapacity = RX_BACKTRACK_INITIAL;
+        scratch->bt = bsAlloc(scratch->btCapacity * sizeof(RxBacktrack));
+    }
+    if (compiled->repeatCount > scratch->repeatCapacity) {
+        scratch->repeatCapacity = compiled->repeatCount;
+        scratch->repeats = bsRealloc(scratch->repeats, scratch->repeatCapacity * sizeof(RxRepeat));
+    }
     RxState state;
     state.codes = subject->codes;
     state.bytes = subject->bytes;
     state.length = subject->length;
     state.match = match;
-    state.trail = state.trailInline;
-    state.trailCapacity = sizeof(state.trailInline) / sizeof(state.trailInline[0]);
+    state.trail = scratch->trail;
+    state.trailCapacity = scratch->trailCapacity;
     state.prog = compiled->prog;
     state.classes = compiled->classes;
     state.alts = compiled->alts;
     state.looks = compiled->looks;
-    state.bt = state.btInline;
-    state.btCapacity = sizeof(state.btInline) / sizeof(state.btInline[0]);
-    state.repeats = compiled->repeatCount <= sizeof(state.repeatsInline) / sizeof(state.repeatsInline[0]) ?
-        state.repeatsInline : bsAlloc(compiled->repeatCount * sizeof(RxRepeat));
+    state.bt = scratch->bt;
+    state.btCapacity = scratch->btCapacity;
+    state.repeats = scratch->repeats;
 
     /*
      * Only the pattern's own groups need clearing, and only their matched flags - a span is read
@@ -2446,15 +2470,11 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
             match->matched[0] = true;
         }
     }
-    if (state.trail != state.trailInline) {
-        free(state.trail);
-    }
-    if (state.bt != state.btInline) {
-        free(state.bt);
-    }
-    if (state.repeats != state.repeatsInline) {
-        free(state.repeats);
-    }
+    /* Keep what the search grew */
+    scratch->trail = state.trail;
+    scratch->trailCapacity = state.trailCapacity;
+    scratch->bt = state.bt;
+    scratch->btCapacity = state.btCapacity;
     return found;
 }
 

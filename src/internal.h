@@ -51,6 +51,9 @@ BSScript *bsIncludeScript(const char *name);
 /* Regex value reference counting - implemented by the regex engine */
 void bsRegexDestroy(BSValue value);
 
+/* Free the thread's regex match scratch buffers (regex.c) */
+void bsRegexScratchFree(void);
+
 /* Destroy a heap value whose refcount has reached zero */
 void bsReleaseDestroyed(BSValue value);
 
