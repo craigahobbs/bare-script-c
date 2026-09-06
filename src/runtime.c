@@ -529,6 +529,16 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
         *result = object;
         return true;
     }
+    case BS_INTRIN_STRING_CHAR_CODE_AT: {
+        /* An ASCII string's code point is its byte */
+        size_t index;
+        if (argCount == 2 && args[0].type == BS_STRING && args[0].u.string->length == args[0].u.string->size &&
+            bsIntrinsicIndex(args[1], &index) && index < args[0].u.string->size) {
+            *result = bsNumber((double) (unsigned char) args[0].u.string->data[index]);
+            return true;
+        }
+        return false;
+    }
     BS_INTRIN(STRING_ENDS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
               bsBoolean(bsStringEndsWith(args[0], args[1])))
     BS_INTRIN(STRING_STARTS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,

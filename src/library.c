@@ -2032,7 +2032,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
     {"regexReplace", bsFnRegexReplace, NULL, 0},
     {"regexSplit", bsFnRegexSplit, NULL, 0},
     {"stringCharAt", bsFnStringCharAt, NULL, 0},
-    {"stringCharCodeAt", bsFnStringCharCodeAt, "charCodeAt", 0},
+    {"stringCharCodeAt", bsFnStringCharCodeAt, "charCodeAt", BS_INTRIN_STRING_CHAR_CODE_AT},
     {"stringDecode", bsFnStringDecode, NULL, 0},
     {"stringEncode", bsFnStringEncode, NULL, 0},
     {"stringEndsWith", bsFnStringEndsWith, "endsWith", BS_INTRIN_STRING_ENDS_WITH},

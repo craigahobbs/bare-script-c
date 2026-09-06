@@ -1263,3 +1263,12 @@ TEST(runtime_compare_jumps)
     ASSERT_TRUE(bsObjectGet(bsObjectGet(covered, "2"), "count").u.number >= 3);
     bsOptionsFree(options);
 }
+
+
+TEST(runtime_intrinsic_string_char_code_at)
+{
+    /* An ASCII string's code point is read in place; a non-ASCII string or a bad index takes the library function */
+    ASSERT_VALUE(bsTestExecute("return [stringCharCodeAt('abc', 1), stringCharCodeAt('\xc3\xa9x', 1), "
+                               "stringCharCodeAt('\xc3\xa9x', 0), stringCharCodeAt('abc', 3), stringCharCodeAt('abc', 1.5)]"),
+                 "[98,120,233,null,null]");
+}
