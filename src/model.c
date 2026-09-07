@@ -412,9 +412,13 @@ static int bsSlotFind(const BSEmit *e, BSValue name)
 }
 
 
-static void bsSlotAdd(BSEmit *e, BSValue name)
+/*
+ * Add a slot for a name. An argument gets a slot of its own even when its name repeats, so a call
+ * fills argCount slots; the name is then the last argument's, as in the references.
+ */
+static void bsSlotAdd(BSEmit *e, BSValue name, bool argument)
 {
-    if (bsSlotFind(e, name) >= 0) {
+    if (!argument && bsSlotFind(e, name) >= 0) {
         return;
     }
     if (e->slotMap.type != BS_OBJECT) {
@@ -563,7 +567,7 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
     uint32_t *in = bsAlloc(blockCount * words * sizeof(uint32_t));
     memset(in, 0xff, blockCount * words * sizeof(uint32_t));
     memset(in, 0, words * sizeof(uint32_t));
-    for (size_t ix = 0; ix < argCount && ix < e->slotCount; ix++) {
+    for (size_t ix = 0; ix < argCount; ix++) {
         in[ix / 32] |= (uint32_t) 1 << (ix % 32);
     }
     for (size_t ix = 0; ix < count; ix++) {
@@ -1314,13 +1318,13 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
     BSEmit body;
     bsEmitInit(&body, e->script, e->functionCap);
     for (size_t ix = 0; ix < def->argCount; ix++) {
-        bsSlotAdd(&body, bsArrayGet(args, ix));
+        bsSlotAdd(&body, bsArrayGet(args, ix), true);
     }
     size_t stmtCount = bsArrayCount(statements);
     for (size_t ix = 0; ix < stmtCount; ix++) {
         BSValue assign = bsStatementAssignName(bsArrayGet(statements, ix));
         if (assign.type == BS_STRING) {
-            bsSlotAdd(&body, assign);
+            bsSlotAdd(&body, assign, false);
         }
     }
     bsAssignedAnalyze(&body, statements, def->argCount);

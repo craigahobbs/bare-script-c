@@ -990,6 +990,14 @@ TEST(runtime_call_non_function_debug)
 }
 
 
+TEST(runtime_duplicate_arguments)
+{
+    /* A repeated argument name is the last argument's, as in the references; each argument still fills a slot */
+    ASSERT_VALUE(bsTestExecute("function f(a, a):\n    return a\nendfunction\nreturn f(1, 2)"), "2");
+    ASSERT_VALUE(bsTestExecute("function f(a, b, a):\n    return [a, b]\nendfunction\nreturn f(1, 2, 3)"), "[3,2]");
+}
+
+
 TEST(runtime_many_arguments)
 {
     /* A function with more arguments than the inline argument buffer */
