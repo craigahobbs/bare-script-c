@@ -450,9 +450,10 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
  *
  * Returns true with "*result" set to the owned return value when the arguments are the happy-path
  * shape; false means the caller runs the full library function, which validates the arguments and
- * reports the error. The intrinsics with one argument shape - arrayGet, arrayLength, arraySet,
- * objectGet, objectSet, stringLength - have call opcodes of their own, which run them in place;
- * their ids only identify the library function to those opcodes' guard.
+ * reports the error. The seven intrinsics with one argument shape - arrayGet, arrayLength, arraySet,
+ * objectGet, objectSet, stringLength, stringSlice - have call opcodes of their own, which run them in
+ * place, as does arrayPush's two-argument shape; their ids only identify the library function to
+ * those opcodes' guard.
  */
 static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
 {
@@ -924,7 +925,7 @@ static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t sl
 /*
  * The intrinsic call opcodes' fast paths
  *
- * A CALL_NAME of one of the six single-shape intrinsics compiles to an opcode of its own, whose
+ * A CALL_NAME of one of the eight opcode intrinsics compiles to an opcode of its own, whose
  * handler runs one of these: the site's cached global must be the library function - the one
  * function value carrying that intrinsic id, so a script function of the same name is not it - a
  * locals object must not shadow the name, and the arguments must be the happy-path shape. Any
