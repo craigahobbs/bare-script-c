@@ -1218,20 +1218,15 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
         if (pc.type == BS_NUMBER) {
             inst->w = (uint32_t) pc.u.number;
         } else {
+            /*
+             * A jump to a missing label only errors if the jump is taken. The trap sits past the
+             * chunk's return, so it carries the jump statement's line in a data word.
+             */
             BSOperand name = bsEmitConst(e, e->patches[ix].label);
-            if (inst->op == BS_OP_JUMP) {
-                inst->op = BS_OP_JUMP_UNDEF;
-                inst->a = BS_OPERAND_INDEX(name);
-            } else {
-                /*
-                 * A jumpif to a missing label only errors if the jump is taken. The trap sits past
-                 * the chunk's return, so it carries the jump statement's line in a data word.
-                 */
-                int line = bsCoverLine(e->coverPcs, e->coverLines, e->coverCount, e->patches[ix].pc);
-                uint32_t trap = bsEmitInst(e, BS_OP_JUMP_UNDEF, BS_OPERAND_INDEX(name), 0, 0);
-                bsEmitJumpInst(e, BS_OP_DATA, 0, (uint32_t) line);
-                e->inst[e->patches[ix].pc].w = trap;
-            }
+            int line = bsCoverLine(e->coverPcs, e->coverLines, e->coverCount, e->patches[ix].pc);
+            uint32_t trap = bsEmitInst(e, BS_OP_JUMP_UNDEF, BS_OPERAND_INDEX(name), 0, 0);
+            bsEmitJumpInst(e, BS_OP_DATA, 0, (uint32_t) line);
+            e->inst[e->patches[ix].pc].w = trap;
         }
         bsRelease(e->patches[ix].label);
     }

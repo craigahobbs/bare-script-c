@@ -1343,10 +1343,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_JUMP_IF(JUMP_TRUE, bsValueBoolean(value));
 
         BS_CASE(JUMP_UNDEF) {
-            /* A trap past the chunk's return carries the jump statement's line in a data word */
-            int line = (pc < code->count && insts[pc].op == BS_OP_DATA) ? (int) insts[pc].w :
-                bsCodeLine(code, pc - 1);
-            bsErrorSetStatement(options, script, line, "Unknown jump label \"%s\"",
+            /* The trap past the chunk's return carries the jump statement's line in the data word that follows */
+            bsErrorSetStatement(options, script, (int) insts[pc].w, "Unknown jump label \"%s\"",
                                 bsStringData(code->constants[inst->a]));
             goto fail;
         }
