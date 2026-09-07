@@ -48,8 +48,6 @@ BSOptions *bsOptionsNew(void)
     BSOptions *options = bsAlloc(sizeof(BSOptions));
     memset(options, 0, sizeof(BSOptions));
     options->globals = bsObjectNew();
-    options->error = bsNull();
-    options->argsError = bsNull();
     options->maxStatements = BS_MAX_STATEMENTS_DEFAULT;
     options->depthMax = BS_DEPTH_MAX;
     options->cacheEpoch = ++bsCacheEpoch;
@@ -225,10 +223,8 @@ const char *bsSystemIncludeGet(const char *name)
 
 void bsSystemIncludeClear(void)
 {
-    bsRelease(bsSystemIncludes);
-    bsSystemIncludes = bsNull();
-    bsRelease(bsSystemIncludePaths);
-    bsSystemIncludePaths = bsNull();
+    bsAssign(&bsSystemIncludes, bsNull());
+    bsAssign(&bsSystemIncludePaths, bsNull());
 }
 
 
@@ -864,8 +860,7 @@ static bool bsExecuteIncludes(BSScript *script, const BSInclude *includes, size_
     free(requests);
     free(responses);
     if (outermost) {
-        bsRelease(bsIncludeTexts);
-        bsIncludeTexts = bsNull();
+        bsAssign(&bsIncludeTexts, bsNull());
     }
     return ok;
 }

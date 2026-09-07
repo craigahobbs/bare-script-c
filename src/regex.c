@@ -377,7 +377,7 @@ static RxNode *rxCharNode(RxCompiler *compiler, uint32_t ch)
  * On failure the escape is reported as far as it reads, which is what Python's "incomplete escape"
  * message shows.
  */
-static bool rxHex(RxCompiler *compiler, size_t count, char kind, size_t escapeOffset, uint32_t *result)
+static void rxHex(RxCompiler *compiler, size_t count, char kind, size_t escapeOffset, uint32_t *result)
 {
     uint32_t value = 0;
     size_t digits = 0;
@@ -392,11 +392,10 @@ static bool rxHex(RxCompiler *compiler, size_t count, char kind, size_t escapeOf
     if (digits != count) {
         rxError(compiler, escapeOffset, "incomplete escape \\%c%.*s", kind, (int) digits,
                 compiler->pattern + compiler->offset);
-        return false;
+        return;
     }
     compiler->offset += count;
     *result = value;
-    return true;
 }
 
 
@@ -472,10 +471,8 @@ static unsigned rxEscape(RxCompiler *compiler, uint32_t *literal)
         *literal = 0;
         return 0;
     case 'x':
-        rxHex(compiler, 2, 'x', escapeOffset, literal);
-        return 0;
     case 'u':
-        rxHex(compiler, 4, 'u', escapeOffset, literal);
+        rxHex(compiler, ch == 'x' ? 2 : 4, ch, escapeOffset, literal);
         return 0;
     default:
         *literal = (uint32_t) (unsigned char) ch;
@@ -1024,7 +1021,7 @@ static bool rxFirstSet(const RxNode *node, unsigned flags, RxFirstSet *set)
                     set->high = true;
                     high = 255;
                 }
-                for (uint32_t code = low; code <= high && code < 256; code++) {
+                for (uint32_t code = low; code <= high; code++) {
                     rxFirstAddCode(set, flags, code);
                 }
             }
@@ -2398,9 +2395,6 @@ void bsRegexSubjectInit(BSRegexSubject *subject, BSValue string)
 void bsRegexSubjectFree(BSRegexSubject *subject)
 {
     free(subject->owned);
-    subject->owned = NULL;
-    subject->codes = NULL;
-    subject->bytes = NULL;
 }
 
 
@@ -2439,8 +2433,6 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
      * them are cleared, a fixed size the compiler stores in place rather than a call.
      */
     memset(match->matched, 0, sizeof(match->matched));
-    match->begin = 0;
-    match->end = 0;
     match->groupCount = compiled->groupCount;
     size_t last = compiled->anchored ? start : subject->length;
     bool found = false;
