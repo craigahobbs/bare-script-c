@@ -494,6 +494,16 @@ static unsigned rxEscape(RxCompiler *compiler, uint32_t *literal)
     case 'u':
         rxHex(compiler, ch == 'x' ? 2 : 4, ch, escapeOffset, literal);
         return 0;
+    case 'c':
+        /* A control escape, "\cA"; before anything but a letter, the "\" is itself the literal */
+        if (compiler->offset < compiler->size &&
+            ((compiler->pattern[compiler->offset] | 0x20) >= 'a' && (compiler->pattern[compiler->offset] | 0x20) <= 'z')) {
+            *literal = (uint32_t) (compiler->pattern[compiler->offset++] & 0x1F);
+            return 0;
+        }
+        compiler->offset--;
+        *literal = '\\';
+        return 0;
     default:
         *literal = (uint32_t) (unsigned char) ch;
         return 0;
