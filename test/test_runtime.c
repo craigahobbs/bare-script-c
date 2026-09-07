@@ -791,6 +791,25 @@ TEST(runtime_coverage_forgotten_model)
 }
 
 
+TEST(runtime_coverage_forgotten_model_mismatch)
+{
+    /* A forgotten model whose script lines parse to different chunks stays without statement models */
+    BSValue coverage;
+    BSOptions *options = bsTestCoverageOptions(&coverage, true);
+    static const char *json = "{\"statements\":[{\"expr\":{\"name\":\"a\",\"expr\":{\"number\":1},\"lineNumber\":1}}],"
+        "\"scriptLines\":[\"a = 1\",\"b = 2\"]}";
+    BSValue model = bsJSONDecode(json, strlen(json), NULL);
+    BSScript *script = bsScriptFromModel(model, "mismatch.bare");
+    bsRelease(model);
+    ASSERT_NOT_NULL(script);
+    bsScriptForgetModel(script);
+    bsRelease(bsExecuteScript(script, options));
+    ASSERT_NULL(script->code.cover);
+    bsScriptRelease(script);
+    bsOptionsFree(options);
+}
+
+
 TEST(runtime_coverage)
 {
     BSValue coverage;

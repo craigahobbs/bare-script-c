@@ -81,11 +81,12 @@ void bsScriptForgetModel(BSScript *script)
 }
 
 
-/* Move a chunk's statement models from a freshly compiled twin of the same model */
+/* Move a chunk's statement models from a freshly compiled twin of the same model - unless the
+   script's lines no longer parse to it */
 static bool bsCodeTakeCover(BSCode *code, BSCode *twin)
 {
     if (twin->coverCount != code->coverCount) {
-        return false; /* GCOV_EXCL_LINE - the same model compiles to the same chunks */
+        return false;
     }
     code->cover = twin->cover;
     twin->cover = NULL;
