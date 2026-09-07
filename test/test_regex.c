@@ -353,6 +353,11 @@ TEST(regex_compile_errors)
     bsTestRegexError("[c-a]", "bad character range c-a at position 1");
     bsTestRegexError("[a-\\d]", "bad character range a-\\d at position 1");
     bsTestRegexError("[\\d-z]", "bad character range \\d-z at position 1");
+
+    /* Positions count code points, as Python's do */
+    bsTestRegexError("\xc3\xa9(?!", "missing ), unterminated subpattern at position 1");
+    bsTestRegexError("a\xc3\xa9[b-a]", "bad character range b-a at position 3");
+    bsTestRegexError("\xc3\xa9(?<n>a)\\k<m>", "unknown group name 'm' at position 13");
     bsTestRegexError("a{3,2}", "min repeat greater than max repeat at position 2");
     bsTestRegexError("\\", "bad escape (end of pattern) at position 0");
     bsTestRegexError("\\x4", "incomplete escape \\x4 at position 0");

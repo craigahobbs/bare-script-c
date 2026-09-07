@@ -269,7 +269,7 @@ static bool rxIsTranslated(const char *pattern, size_t size, size_t ix)
 
 
 /*
- * The position a compilation error reports
+ * The position a compilation error reports - in code points, as Python counts them
  *
  * The Python implementation compiles a translated pattern - "(?<name>" becomes "(?P<name>" and
  * "\k<name>" becomes "(?P=name)", each exactly one character longer - so the position it reports
@@ -277,7 +277,8 @@ static bool rxIsTranslated(const char *pattern, size_t size, size_t ix)
  */
 static size_t rxErrorPosition(const RxCompiler *compiler, size_t position)
 {
-    size_t translated = position;
+    size_t bytes = position < compiler->size ? position : compiler->size;
+    size_t translated = bsUTF8Length(compiler->pattern, bytes) + (position - bytes);
     for (size_t ix = 0; ix < position && ix < compiler->size; ix++) {
         if (rxIsTranslated(compiler->pattern, compiler->size, ix)) {
             translated++;
