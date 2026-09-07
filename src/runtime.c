@@ -468,6 +468,19 @@ static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
     return true;
 }
 
+/* numberParseInt of a string in the default radix */
+static BSValue bsIntrinsicParseInt(BSValue string)
+{
+    double number;
+    return bsIntegerParse(bsStringData(string), bsStringSize(string), 10, &number) ? bsNumber(number) : bsNull();
+}
+
+BSValue bsGlobalSetValue(BSOptions *options, BSValue name, BSValue value)
+{
+    bsObjectSetString(options->globals, name, bsRetain(value));
+    return bsRetain(value);
+}
+
 /* An intrinsic whose happy path is one condition and one expression; a miss falls to the function */
 #define BS_INTRIN(name, cond, expr) \
     case BS_INTRIN_##name: \
@@ -477,7 +490,8 @@ static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
         } \
         break;
 
-static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCount, BSValue *result)
+static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCount, BSOptions *options,
+                            BSValue *result)
 {
     switch (id) {
     BS_INTRIN(ARRAY_COPY, argCount == 1 && args[0].type == BS_ARRAY, bsArrayCopy(args[0]))
@@ -506,6 +520,7 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
               bsNumber(args[0].u.number < 0 ? -1 : (args[0].u.number == 0 ? 0 : 1)))
     BS_INTRIN(MATH_SQRT, argCount == 1 && args[0].type == BS_NUMBER && args[0].u.number >= 0,
               bsNumber(sqrt(args[0].u.number)))
+    BS_INTRIN(NUMBER_PARSE_INT, argCount == 1 && args[0].type == BS_STRING, bsIntrinsicParseInt(args[0]))
     BS_INTRIN(OBJECT_COPY, argCount == 1 && args[0].type == BS_OBJECT, bsObjectCopy(args[0]))
     case BS_INTRIN_OBJECT_DELETE:
         if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
@@ -545,6 +560,8 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
     BS_INTRIN(STRING_STARTS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
               bsBoolean(bsStringStartsWith(args[0], args[1])))
     BS_INTRIN(SYSTEM_BOOLEAN, argCount == 1, bsBoolean(bsValueBoolean(args[0])))
+    BS_INTRIN(SYSTEM_GLOBAL_SET, argCount == 2 && args[0].type == BS_STRING,
+              bsGlobalSetValue(options, args[0], args[1]))
     BS_INTRIN(SYSTEM_TYPE, argCount == 1, bsSystemTypeName(args[0]))
     BS_INTRIN(REGEX_MATCH, argCount == 2 && args[0].type == BS_REGEX && args[1].type == BS_STRING,
               bsRegexMatchImpl(args[0], args[1]))
@@ -615,7 +632,7 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
     if (function.type == BS_FUNCTION) {
         BSFunction *fn = function.u.function;
         BSValue result;
-        if (fn->intrinsic != 0 && bsIntrinsicCall(fn->intrinsic, args, argCount, &result)) {
+        if (fn->intrinsic != 0 && bsIntrinsicCall(fn->intrinsic, args, argCount, options, &result)) {
             return result;
         }
         if (options->depth >= options->depthMax) {

@@ -375,6 +375,7 @@ enum {
     BS_INTRIN_MATH_FLOOR,
     BS_INTRIN_MATH_SIGN,
     BS_INTRIN_MATH_SQRT,
+    BS_INTRIN_NUMBER_PARSE_INT,
     BS_INTRIN_OBJECT_COPY,
     BS_INTRIN_OBJECT_DELETE,
     BS_INTRIN_OBJECT_GET,
@@ -388,9 +389,13 @@ enum {
     BS_INTRIN_STRING_STARTS_WITH,
     BS_INTRIN_STRING_SLICE,
     BS_INTRIN_SYSTEM_BOOLEAN,
+    BS_INTRIN_SYSTEM_GLOBAL_SET,
     BS_INTRIN_SYSTEM_TYPE,
     BS_INTRIN_REGEX_MATCH
 };
+
+/* systemGlobalSet: store a value under a name in the globals and return it, owned */
+BSValue bsGlobalSetValue(BSOptions *options, BSValue name, BSValue value);
 
 /* Happy-path regexMatch; the argument types must already be regex and string */
 BSValue bsRegexMatchImpl(BSValue regex, BSValue string);

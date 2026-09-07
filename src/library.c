@@ -1801,12 +1801,7 @@ static const BSArgModel systemGlobalSetArgs[] = {
     {"value", BS_ARG_ANY, 0, 0, 0, 0, 0}
 };
 
-static BSValue bsFnSystemGlobalSet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    BS_ARGS(systemGlobalSetArgs, bsNull());
-    bsObjectSetString(options->globals, values[0], bsRetain(values[1]));
-    return bsRetain(values[1]);
-}
+BS_LIBRARY_FN(bsFnSystemGlobalSet, systemGlobalSetArgs, bsNull(), bsGlobalSetValue(options, values[0], values[1]))
 
 
 static const BSArgModel systemIsArgs[] = {
@@ -1976,7 +1971,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
     {"mathSqrt", bsFnMathSqrt, "sqrt", BS_INTRIN_MATH_SQRT},
     {"mathTan", bsFnMathTan, "tan", 0},
     {"numberParseFloat", bsFnNumberParseFloat, "parseFloat", 0},
-    {"numberParseInt", bsFnNumberParseInt, "parseInt", 0},
+    {"numberParseInt", bsFnNumberParseInt, "parseInt", BS_INTRIN_NUMBER_PARSE_INT},
     {"numberToFixed", bsFnNumberToFixed, "fixed", 0},
     {"numberToString", bsFnNumberToString, NULL, 0},
     {"objectAssign", bsFnObjectAssign, NULL, 0},
@@ -2016,7 +2011,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
     {"systemCompare", bsFnSystemCompare, NULL, 0},
     {"systemFetch", bsFnSystemFetch, NULL, 0},
     {"systemGlobalGet", bsFnSystemGlobalGet, NULL, 0},
-    {"systemGlobalSet", bsFnSystemGlobalSet, NULL, 0},
+    {"systemGlobalSet", bsFnSystemGlobalSet, NULL, BS_INTRIN_SYSTEM_GLOBAL_SET},
     {"systemIs", bsFnSystemIs, NULL, 0},
     {"systemLog", bsFnSystemLog, NULL, 0},
     {"systemLogDebug", bsFnSystemLogDebug, NULL, 0},
