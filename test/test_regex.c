@@ -130,6 +130,10 @@ TEST(regex_escapes)
     ASSERT_VALUE_STRING(bsTestMatch("a\\fb", "a\fb", 0), "a\fb");
     ASSERT_VALUE_STRING(bsTestMatch("a\\vb", "a\vb", 0), "a\vb");
     ASSERT_VALUE_STRING(bsTestMatch("a\\0", "ab", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("\\012", "a\nb", 0), "\n");
+    ASSERT_VALUE_STRING(bsTestMatch("\\0777", "x?7", 0), "?7");
+    ASSERT_VALUE_STRING(bsTestMatch("[\\1\\123]+", "x\x01S", 0), "\x01S");
+    ASSERT_VALUE_STRING(bsTestMatch("[\\477]", "x'", 0), "'");
     ASSERT_VALUE_STRING(bsTestMatch("\\x41", "xAy", 0), "A");
     ASSERT_VALUE_STRING(bsTestMatch("\\u0041", "xAy", 0), "A");
     ASSERT_VALUE_STRING(bsTestMatch("\\u00e9", "x\xc3\xa9y", 0), "\xc3\xa9");

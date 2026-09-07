@@ -377,6 +377,26 @@ static RxNode *rxCharNode(RxCompiler *compiler, uint32_t ch)
  * On failure the escape is reported as far as it reads, which is what Python's "incomplete escape"
  * message shows.
  */
+/*
+ * The rest of a legacy octal escape whose first digit is "first": up to two more octal digits, one
+ * when the first is 4 to 7, as both references read it.
+ */
+static uint32_t rxOctal(RxCompiler *compiler, char first)
+{
+    uint32_t value = (uint32_t) (first - '0');
+    size_t limit = first <= '3' ? 2 : 1;
+    for (size_t count = 0; count < limit && compiler->offset < compiler->size; count++) {
+        char digit = compiler->pattern[compiler->offset];
+        if (digit < '0' || digit > '7') {
+            break;
+        }
+        value = value * 8 + (uint32_t) (digit - '0');
+        compiler->offset++;
+    }
+    return value;
+}
+
+
 static void rxHex(RxCompiler *compiler, size_t count, char kind, size_t escapeOffset, uint32_t *result)
 {
     uint32_t value = 0;
@@ -468,7 +488,7 @@ static unsigned rxEscape(RxCompiler *compiler, uint32_t *literal)
         *literal = 0x0B;
         return 0;
     case '0':
-        *literal = 0;
+        *literal = rxOctal(compiler, ch);
         return 0;
     case 'x':
     case 'u':
@@ -496,9 +516,11 @@ static bool rxClassBound(RxCompiler *compiler, uint32_t *code, unsigned *classes
         if (!rxEscapeBegin(compiler)) {
             return false;
         }
-        if (compiler->pattern[compiler->offset] == 'b') {
+        /* A backspace, or an octal escape - a backreference has no meaning in a class */
+        char ch = compiler->pattern[compiler->offset];
+        if (ch == 'b' || (ch >= '1' && ch <= '7')) {
             compiler->offset++;
-            *code = '\b';
+            *code = ch == 'b' ? '\b' : rxOctal(compiler, ch);
             return true;
         }
         *classes = rxEscape(compiler, code);
