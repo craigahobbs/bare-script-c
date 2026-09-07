@@ -1133,33 +1133,28 @@ static void bsEntriesFree(BSObjectEntry *entries, size_t capacity)
 
 
 /*
- * The content hash of a string's bytes, and whether they are ASCII
+ * The content hash of a string's bytes
  *
  * FNV-1a a word at a time, then mixed: a multiply alone leaves the hash's low bits depending on
  * each word's low byte only, and the object index probes by the low bits, so keys that differ in
  * their other bytes - "/item/123", "10.0.0.7" - would share slots.
  */
-static BS_NOINLINE uint32_t bsHashBytes(const char *data, size_t size, bool *ascii)
+static BS_NOINLINE uint32_t bsHashBytes(const char *data, size_t size)
 {
     const unsigned char *bytes = (const unsigned char *) data;
     uint32_t hash = 2166136261u;
-    uint32_t high = 0;
     size_t ix = 0;
     while (ix + 4 <= size) {
         uint32_t word;
         memcpy(&word, bytes + ix, 4);
-        high |= word;
         hash ^= word;
         hash *= 16777619u;
         ix += 4;
     }
     while (ix < size) {
-        unsigned char byte = bytes[ix++];
-        high |= byte;
-        hash ^= byte;
+        hash ^= bytes[ix++];
         hash *= 16777619u;
     }
-    *ascii = (high & 0x80808080u) == 0;
     hash ^= hash >> 16;
     hash *= 0x85ebca6bu;
     hash ^= hash >> 13;
@@ -1173,8 +1168,7 @@ static BS_NOINLINE uint32_t bsHashBytes(const char *data, size_t size, bool *asc
 static uint32_t bsStringHash(BSString *string)
 {
     if ((string->flags & BS_STR_HASHED) == 0) {
-        bool ascii;
-        string->hash = bsHashBytes(string->data, string->size, &ascii);
+        string->hash = bsHashBytes(string->data, string->size);
         string->flags |= BS_STR_HASHED;
     }
     return string->hash;
@@ -1237,14 +1231,13 @@ BSValue bsStringIntern(const char *data, size_t size)
     if (size > BS_INTERN_MAX) {
         return bsStringNewSize(data, size);
     }
-    bool ascii = false;
-    uint32_t hash = bsHashBytes(data, size, &ascii);
+    uint32_t hash = bsHashBytes(data, size);
     BSString *found = bsInternLookupHash(data, size, hash);
     if (found != NULL) {
         found->refcount++;
         return bsStringTake(found);
     }
-    BSValue value = ascii ? bsStringNewAscii(data, size) : bsStringNewSize(data, size);
+    BSValue value = bsStringNewSize(data, size);
     value.u.string->hash = hash;
     value.u.string->flags |= BS_STR_HASHED;
     if (bsTS.internCount >= BS_INTERN_COUNT_MAX) {
@@ -1263,8 +1256,7 @@ BSValue bsStringIntern(const char *data, size_t size)
 BSValue bsStringInternExisting(const char *data, size_t size)
 {
     if (size <= BS_INTERN_MAX) {
-        bool ascii;
-        BSString *found = bsInternLookupHash(data, size, bsHashBytes(data, size, &ascii));
+        BSString *found = bsInternLookupHash(data, size, bsHashBytes(data, size));
         if (found != NULL) {
             found->refcount++;
             return bsStringTake(found);
@@ -1448,8 +1440,7 @@ static inline BSObjectEntry *bsObjectFind(const BSObject *object, BSString *key,
         }
         return NULL;
     }
-    bool ascii;
-    uint32_t hash = key != NULL ? bsStringHash(key) : bsHashBytes(data, size, &ascii);
+    uint32_t hash = key != NULL ? bsStringHash(key) : bsHashBytes(data, size);
     for (uint32_t probe = hash;; probe++) {
         const BSObjectSlot *slot = &index->slots[probe & index->mask];
         if (slot->entry == 0) {
