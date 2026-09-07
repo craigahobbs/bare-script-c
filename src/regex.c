@@ -581,9 +581,14 @@ static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
                 return NULL;
             }
             if (lowClasses != 0 || classes != 0 || hi < lo) {
-                rxError(compiler, lowOffset, "bad character range %.*s-%.*s",
-                        (int) (lowEnd - lowOffset), compiler->pattern + lowOffset,
-                        (int) (compiler->offset - highOffset), compiler->pattern + highOffset);
+                /* CPython shows each bound's first token - two characters of an escape - and counts
+                 * the position back from the range's end */
+                size_t lowSize = lowEnd - lowOffset;
+                size_t highSize = compiler->offset - highOffset;
+                lowSize = compiler->pattern[lowOffset] == '\\' && lowSize > 2 ? 2 : lowSize;
+                highSize = compiler->pattern[highOffset] == '\\' && highSize > 2 ? 2 : highSize;
+                rxError(compiler, compiler->offset - (lowSize + 1 + highSize), "bad character range %.*s-%.*s",
+                        (int) lowSize, compiler->pattern + lowOffset, (int) highSize, compiler->pattern + highOffset);
                 return NULL;
             }
         }
@@ -732,6 +737,19 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         if (escape == 'b' || escape == 'B') {
             compiler->offset++;
             return rxNodeNew(compiler, escape == 'b' ? RX_WORD_BOUNDARY : RX_NOT_WORD_BOUNDARY);
+        }
+
+        /* Three octal digits are an octal escape, as both references read them */
+        const char *digits = compiler->pattern + compiler->offset;
+        if (escape >= '1' && escape <= '7' && compiler->offset + 2 < compiler->size &&
+            digits[1] >= '0' && digits[1] <= '7' && digits[2] >= '0' && digits[2] <= '7') {
+            uint32_t value = (uint32_t) (escape - '0') * 64 + (uint32_t) (digits[1] - '0') * 8 + (uint32_t) (digits[2] - '0');
+            if (value > 0377) {
+                rxError(compiler, escapeOffset, "octal escape value \\%.3s outside of range 0-0o377", digits);
+                return NULL;
+            }
+            compiler->offset += 3;
+            return rxCharNode(compiler, value);
         }
 
         /* A numbered backreference */

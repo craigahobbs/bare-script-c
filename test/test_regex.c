@@ -134,6 +134,7 @@ TEST(regex_escapes)
     ASSERT_VALUE_STRING(bsTestMatch("\\0777", "x?7", 0), "?7");
     ASSERT_VALUE_STRING(bsTestMatch("[\\1\\123]+", "x\x01S", 0), "\x01S");
     ASSERT_VALUE_STRING(bsTestMatch("[\\477]", "x'", 0), "'");
+    ASSERT_VALUE_STRING(bsTestMatch("\\120\\1200", "xPP0", 0), "PP0");
     ASSERT_VALUE_STRING(bsTestMatch("\\cA\\cj", "x\x01\n", 0), "\x01\n");
     ASSERT_VALUE_STRING(bsTestMatch("[\\cA]", "x\x01", 0), "\x01");
     ASSERT_VALUE_STRING(bsTestMatch("\\c1", "a\\c1", 0), "\\c1");
@@ -353,6 +354,9 @@ TEST(regex_compile_errors)
     bsTestRegexError("[c-a]", "bad character range c-a at position 1");
     bsTestRegexError("[a-\\d]", "bad character range a-\\d at position 1");
     bsTestRegexError("[\\d-z]", "bad character range \\d-z at position 1");
+    bsTestRegexError("0[\\x41-0", "bad character range \\x-0 at position 4");
+    bsTestRegexError("[\\x41-\\x30]", "bad character range \\x-\\x at position 5");
+    bsTestRegexError("\\477", "octal escape value \\477 outside of range 0-0o377 at position 0");
 
     /* Positions count code points, as Python's do */
     bsTestRegexError("\xc3\xa9(?!", "missing ), unterminated subpattern at position 1");
