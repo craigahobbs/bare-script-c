@@ -1246,6 +1246,16 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         }
     }
 
+    /*
+     * Statements count against the limit only outside system includes, and coverage records every
+     * one: a single compare per STMT sends both an exceeded limit and a recording run to the slow
+     * path, and a run that counts nothing increments a dummy instead of branching.
+     */
+    int64_t uncounted = 0;
+    int64_t *statementCount = countStatements ? &options->statementCount : &uncounted;
+    int64_t statementLimit = !countStatements ? INT64_MAX : hasCoverage ? INT64_MIN :
+        options->maxStatements > 0 ? options->maxStatements : INT64_MAX;
+
     const BSInst *insts = code->inst;
     const BSInst *inst;
     size_t pc = 0;
@@ -1480,20 +1490,20 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             }
             BS_NEXT();
 
-        BS_CASE(STMT)
-            if (countStatements) {
-                options->statementCount++;
-                if (options->maxStatements > 0 && options->statementCount > options->maxStatements) {
+        BS_CASE(STMT) {
+            int64_t count = ++*statementCount;
+            if (count > statementLimit) {
+                /* The limit is exceeded, or coverage is recording and every statement comes here */
+                if (options->maxStatements > 0 && count > options->maxStatements) {
                     bsErrorSetStatement(options, script, code->coverLines[inst->a],
                                         "Exceeded maximum script statements (%lld)",
                                         (long long) options->maxStatements);
                     goto fail;
                 }
-                if (hasCoverage) {
-                    bsRecordCoverage(script, code, inst->a, coverage);
-                }
+                bsRecordCoverage(script, code, inst->a, coverage);
             }
-            BS_NEXT();
+        }
+        BS_NEXT();
 
 #ifndef BS_THREADED_DISPATCH
         default: /* GCOV_EXCL_LINE - emit never produces an unknown opcode */
