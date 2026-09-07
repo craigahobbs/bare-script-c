@@ -99,13 +99,9 @@ bool bsArgsValidate(const BSArgModel *argModel, size_t argModelCount, const BSVa
 
         /* A missing argument */
         if (ix >= argCount) {
-            if ((model->flags & BS_ARG_HAS_DEFAULT) != 0) {
+            if ((model->flags & BS_ARG_HAS_DEFAULT) != 0 || model->type == BS_ARG_BOOLEAN) {
                 values[ix] = model->type == BS_ARG_BOOLEAN ? bsBoolean(model->defaultValue != 0) :
                     bsNumber(model->defaultValue);
-                continue;
-            }
-            if (model->type == BS_ARG_BOOLEAN) {
-                values[ix] = bsBoolean(false);
                 continue;
             }
             if (model->type == BS_ARG_ANY || (model->flags & BS_ARG_NULLABLE) != 0) {
@@ -193,6 +189,15 @@ void bsArgsFree(const BSArgModel *argModel, size_t argModelCount, BSValue *value
     { \
         BS_ARGS(model, failValue); \
         return expression; \
+    }
+
+/* A library function whose implementation fills "out" or fails - the result, or null */
+#define BS_OUT_FN(fnName, model, outType, call, result) \
+    static BSValue fnName(const BSValue *args, size_t argCount, BSOptions *options, void *data) \
+    { \
+        BS_ARGS(model, bsNull()); \
+        outType out; \
+        return (call) ? (result) : bsNull(); \
     }
 
 /* A library function whose one expression takes the raw arguments - it validates them itself, or has none */
@@ -627,13 +632,8 @@ static BSValue bsFnDatetimeISOFormat(const BSValue *args, size_t argCount, BSOpt
 }
 
 
-static BSValue bsFnDatetimeISOParse(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    BS_ARGS(stringArgs, bsNull());
-    int64_t milliseconds;
-    return bsDatetimeParse(bsStringData(values[0]), bsStringSize(values[0]), &milliseconds) ?
-        bsDatetime(milliseconds) : bsNull();
-}
+BS_OUT_FN(bsFnDatetimeISOParse, stringArgs, int64_t,
+          bsDatetimeParse(bsStringData(values[0]), bsStringSize(values[0]), &out), bsDatetime(out))
 
 
 static const BSArgModel datetimeNewArgs[] = {
@@ -646,14 +646,10 @@ static const BSArgModel datetimeNewArgs[] = {
     {"millisecond", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT, 0, 0, 0, 0}
 };
 
-static BSValue bsFnDatetimeNew(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    BS_ARGS(datetimeNewArgs, bsNull());
-    int64_t milliseconds;
-    return bsDatetimeFromParts(values[0].u.number, values[1].u.number, values[2].u.number, values[3].u.number,
-                               values[4].u.number, values[5].u.number, values[6].u.number, &milliseconds) ?
-        bsDatetime(milliseconds) : bsNull();
-}
+BS_OUT_FN(bsFnDatetimeNew, datetimeNewArgs, int64_t,
+          bsDatetimeFromParts(values[0].u.number, values[1].u.number, values[2].u.number, values[3].u.number,
+                              values[4].u.number, values[5].u.number, values[6].u.number, &out),
+          bsDatetime(out))
 
 
 BS_RAW_FN(bsFnDatetimeNow, bsDatetime(bsDatetimeNow()))
@@ -802,12 +798,8 @@ static const BSArgModel mathRoundArgs[] = {
     {"digits", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 0, 0, 0, 0}
 };
 
-static BSValue bsFnMathRound(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    BS_ARGS(mathRoundArgs, bsNull());
-    double rounded;
-    return bsNumberRound(values[0].u.number, values[1].u.number, &rounded) ? bsNumber(rounded) : bsNull();
-}
+BS_OUT_FN(bsFnMathRound, mathRoundArgs, double, bsNumberRound(values[0].u.number, values[1].u.number, &out),
+          bsNumber(out))
 
 
 static const BSArgModel mathSqrtArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GTE, 0, 0, 0, 0}};
@@ -820,12 +812,8 @@ BS_LIBRARY_FN(bsFnMathSqrt, mathSqrtArgs, bsNull(), bsNumber(sqrt(values[0].u.nu
  */
 
 
-static BSValue bsFnNumberParseFloat(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    BS_ARGS(stringArgs, bsNull());
-    double number;
-    return bsNumberParse(bsStringData(values[0]), bsStringSize(values[0]), &number) ? bsNumber(number) : bsNull();
-}
+BS_OUT_FN(bsFnNumberParseFloat, stringArgs, double,
+          bsNumberParse(bsStringData(values[0]), bsStringSize(values[0]), &out), bsNumber(out))
 
 
 static const BSArgModel numberParseIntArgs[] = {
@@ -833,13 +821,9 @@ static const BSArgModel numberParseIntArgs[] = {
     {"radix", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 10, 2, 36, BS_ARG_LTE}
 };
 
-static BSValue bsFnNumberParseInt(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    BS_ARGS(numberParseIntArgs, bsNull());
-    double number;
-    return bsIntegerParse(bsStringData(values[0]), bsStringSize(values[0]), (int) values[1].u.number, &number) ?
-        bsNumber(number) : bsNull();
-}
+BS_OUT_FN(bsFnNumberParseInt, numberParseIntArgs, double,
+          bsIntegerParse(bsStringData(values[0]), bsStringSize(values[0]), (int) values[1].u.number, &out),
+          bsNumber(out))
 
 
 static const BSArgModel numberToFixedArgs[] = {
