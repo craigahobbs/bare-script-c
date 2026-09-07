@@ -187,7 +187,7 @@ subset BareScript exposes - see DESIGN.md's **Regular Expressions** table.
 | `src/internal.h`          | declarations shared across implementation files               |
 | `test/`                   | C unit tests; `test/include/` is the BareScript language suite |
 | `lib/include/`            | **vendored** reference include library and its test suite     |
-| `bin/`                    | BareScript build tools (include source generator, perf report) |
+| `bin/`                    | BareScript build tools (include source generator, perf report), the regex fuzz check |
 | `perf/`                   | the benchmark and a native C baseline                         |
 | `perfx/`                  | the cross-language application suite: runner, ports, report   |
 

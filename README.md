@@ -542,6 +542,8 @@ One capability of the reference implementations is out of scope here:
   checks - which need to know which functions are async - are skipped, as they are in Python.
 - **Unicode case mapping.** `stringUpper` and `stringLower` map ASCII letters only; both references
   use Unicode's.
+- **A match's group key order.** A match model's `groups` object keys each named group right after
+  its number; both references list every number first, then the names. Only `objectKeys` can tell.
 
 An input nested more deeply than the evaluator's expression depth limit is reported as a parse
 error rather than crashing; the JavaScript implementation overflows its own stack on the same
@@ -561,6 +563,7 @@ JavaScript regular expressions and `re` is not one:
 | Pattern         | JavaScript and this implementation | Python `re`                     |
 | --------------- | ---------------------------------- | ------------------------------- |
 | `(?i)`, `(?#c)` | `unknown extension`                | inline flags and comments       |
+| `(?<n>a)`, `(?P<n>a)` | a named group, `unknown extension ?P` | `unknown extension ?<n`, a named group |
 | `(?>a)`, `(?(1)a)` | `unknown extension`             | atomic groups and conditionals  |
 | `a*+`           | `multiple repeat`                  | a possessive quantifier         |
 | `x{,5}`         | the literal text                   | the quantifier `{0,5}`          |
@@ -575,13 +578,15 @@ JavaScript, matching the control character U+0002; this implementation reports `
 reference`. (A reference to a group defined later in the pattern is still a forward reference, as the
 table says.) A character class range with a class escape as either bound - `[\d-z]` - is a literal
 `-` in JavaScript and `bad character range` here; a named backreference to a name the pattern never
-defines - `\k<n>` - is the literal text in JavaScript and `unknown group name` here. This
-implementation also limits a pattern to 127 capture groups, reporting `sorry, but this version only
-supports 127 groups`; both references allow more.
+defines - `\k<n>` - is the literal text in JavaScript and `unknown group name` here; a three-digit
+octal escape past `\377` - `\477`, which JavaScript reads as `\47` then `7` - is `octal escape value
+\477 outside of range` here. This implementation also limits a pattern to 127 capture groups,
+reporting `sorry, but this version only supports 127 groups`; both references allow more.
 
-Where a pattern is invalid in both, the message and position match: 3918 of 4000 fuzzed patterns
-agree with CPython character for character, and every one of the remaining 82 is a case from the
-table above.
+Where a pattern is invalid in both, the message and position match. `bin/regexFuzz.py` compiles
+random patterns with both engines: 3789 of 4000 agree with CPython character for character, and
+every disagreement is a case from the table above or a pattern that is invalid in both for two
+reasons, where each engine reports the one it meets first.
 
 
 ## Design
