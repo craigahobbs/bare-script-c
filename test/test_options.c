@@ -68,6 +68,12 @@ TEST(options_url_file_relative)
     ASSERT_VALUE_STRING(bsTestUrl(NULL, "other.bare"), "other.bare");
     ASSERT_VALUE_STRING(bsTestUrl("dir/script.bare", "a/../../b"), "b");
     ASSERT_VALUE_STRING(bsTestUrl("dir/script.bare", "../a/../../b"), "../b");
+    ASSERT_VALUE_STRING(bsTestUrl("dir/script.bare", "sub/.."), "dir");
+    ASSERT_VALUE_STRING(bsTestUrl("script.bare", "../a/../.."), "../..");
+    ASSERT_VALUE_STRING(bsTestUrl("script.bare", "../a/../../b"), "../../b");
+    ASSERT_VALUE_STRING(bsTestUrl("script.bare", "../../b"), "../../b");
+    ASSERT_VALUE_STRING(bsTestUrl("/a/script.bare", "../../b"), "/b");
+    ASSERT_VALUE_STRING(bsTestUrl("/script.bare", ".."), "/");
 }
 
 

@@ -46,15 +46,11 @@ static char *bsPathNormalize(const char *path)
 {
     size_t size = strlen(path);
     char *result = bsAlloc(size + 2);
-    size_t resultSize = 0;
-    bool absolute = (size != 0 && path[0] == '/');
-    if (absolute) {
-        result[resultSize++] = '/';
+    size_t root = (size != 0 && path[0] == '/') ? 1 : 0; /* an absolute path keeps its leading separator */
+    size_t resultSize = root;
+    if (root != 0) {
+        result[0] = '/';
     }
-
-    /* The segment stack holds each kept segment's start offset in the result */
-    size_t *segments = bsAlloc((size + 1) * sizeof(size_t));
-    size_t segmentCount = 0;
 
     size_t ix = 0;
     while (ix < size) {
@@ -70,27 +66,26 @@ static char *bsPathNormalize(const char *path)
             continue;
         }
         if (segmentSize == 2 && path[begin] == '.' && path[begin + 1] == '.') {
-            /* Pop the previous segment, unless it is itself ".." or the path escapes its root */
-            if (segmentCount != 0) {
-                size_t previous = segments[segmentCount - 1];
-                bool isParent = resultSize - previous == 2 && memcmp(result + previous, "..", 2) == 0;
-                if (!isParent) {
-                    segmentCount--;
-                    resultSize = previous;
+            /* Pop the previous segment and its separator, unless it is itself ".." or the path escapes its root */
+            size_t previous = resultSize;
+            while (previous > root && result[previous - 1] != '/') {
+                previous--;
+            }
+            if (previous == resultSize) {
+                if (root != 0) {
                     continue;
                 }
-            } else if (absolute) {
+            } else if (resultSize - previous != 2 || memcmp(result + previous, "..", 2) != 0) {
+                resultSize = previous > root ? previous - 1 : previous;
                 continue;
             }
         }
-        if (resultSize != 0 && result[resultSize - 1] != '/') {
+        if (resultSize > root) {
             result[resultSize++] = '/';
         }
-        segments[segmentCount++] = resultSize;
         memcpy(result + resultSize, path + begin, segmentSize);
         resultSize += segmentSize;
     }
-    free(segments);
 
     if (resultSize == 0) {
         result[resultSize++] = '.';
