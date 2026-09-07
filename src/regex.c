@@ -1228,8 +1228,8 @@ BSValue bsRegexGroupNameValue(BSValue regex, size_t group)
  * and repeat-counter write is on the trail, which a backtrack unwinds to the entry's mark.
  */
 typedef enum {
-    RXI_CHAR,          /* a: the code point */
-    RXI_CHAR_FOLD,     /* a: the folded code point */
+    RXI_CHAR,          /* operand: the code point; the first five opcodes are also the encoded atom kinds */
+    RXI_CHAR_FOLD,     /* operand: the folded code point */
     RXI_ANY,
     RXI_ANY_ALL,
     RXI_CLASS,         /* operand: the class */
@@ -1264,12 +1264,7 @@ struct RxInst {
     uint32_t operand; /* a class, alternation, or lookbehind index; an atom's code point */
 };
 
-/* An encoded single-code-point atom, in an instruction's aux (the kind) and operand */
-#define RX_ATOM_CHAR      0
-#define RX_ATOM_CHAR_FOLD 1
-#define RX_ATOM_ANY       2
-#define RX_ATOM_ANY_ALL   3
-#define RX_ATOM_CLASS     4
+/* An encoded single-code-point atom, in an instruction's aux (the kind - the opcode that matches it once) and operand */
 #define RX_ATOM_KIND      0x07
 #define RX_ATOM_FLAG      0x08 /* a simple repeat's greed; a lookaround atom's negation */
 #define RX_LOOK_BEHIND    0x10
@@ -1553,13 +1548,13 @@ static uint32_t rxEmitAtom(RxEmit *e, RxNode *atom, unsigned *kind)
 {
     switch (atom->kind) {
     case RX_CHAR:
-        *kind = (e->flags & BS_REGEX_IGNORECASE) != 0 ? RX_ATOM_CHAR_FOLD : RX_ATOM_CHAR;
+        *kind = (e->flags & BS_REGEX_IGNORECASE) != 0 ? RXI_CHAR_FOLD : RXI_CHAR;
         return atom->u.ch;
     case RX_ANY:
-        *kind = (e->flags & BS_REGEX_DOTALL) != 0 ? RX_ATOM_ANY_ALL : RX_ATOM_ANY;
+        *kind = (e->flags & BS_REGEX_DOTALL) != 0 ? RXI_ANY_ALL : RXI_ANY;
         return 0;
     default:
-        *kind = RX_ATOM_CLASS;
+        *kind = RXI_CLASS;
         return rxEmitClass(e, atom);
     }
 }
@@ -1615,16 +1610,13 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
     for (; node != NULL; node = node->next) {
         switch (node->kind) {
         case RX_CHAR:
-            rxEmit(e, (e->flags & BS_REGEX_IGNORECASE) != 0 ? RXI_CHAR_FOLD : RXI_CHAR, node->u.ch, 0, 0, 0, 0);
-            break;
-
         case RX_ANY:
-            rxEmitOp(e, (e->flags & BS_REGEX_DOTALL) != 0 ? RXI_ANY_ALL : RXI_ANY);
+        case RX_CLASS: {
+            unsigned kind;
+            uint32_t operand = rxEmitAtom(e, node, &kind);
+            rxEmit(e, (uint8_t) kind, 0, 0, operand, 0, 0);
             break;
-
-        case RX_CLASS:
-            rxEmit(e, RXI_CLASS, 0, 0, rxEmitClass(e, node), 0, 0);
-            break;
+        }
 
         case RX_ALT: {
             size_t count = node->u.alt.count;
@@ -1833,13 +1825,13 @@ static inline bool rxAtomAt(const RxState *state, unsigned kind, uint32_t operan
     }
     uint32_t ch = rxCode(state, pos);
     switch (kind) {
-    case RX_ATOM_CHAR:
+    case RXI_CHAR:
         return ch == operand;
-    case RX_ATOM_CHAR_FOLD:
+    case RXI_CHAR_FOLD:
         return rxFold(ch) == operand;
-    case RX_ATOM_ANY:
+    case RXI_ANY:
         return ch != '\n' && ch != '\r' && ch != 0x2028 && ch != 0x2029;
-    case RX_ATOM_ANY_ALL:
+    case RXI_ANY_ALL:
         return true;
     default:
         return rxClassMatch(&state->classes[operand], ch);
@@ -1890,7 +1882,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
 #endif
 
         RX_CASE(CHAR)
-            if (pos >= length || rxCode(state, pos) != inst->a) {
+            if (pos >= length || rxCode(state, pos) != inst->operand) {
                 goto backtrack;
             }
             pos++;
@@ -1898,7 +1890,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             RX_NEXT();
 
         RX_CASE(CHAR_FOLD)
-            if (pos >= length || rxFold(rxCode(state, pos)) != inst->a) {
+            if (pos >= length || rxFold(rxCode(state, pos)) != inst->operand) {
                 goto backtrack;
             }
             pos++;
@@ -2140,22 +2132,22 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             if (state->codes == NULL) {
                 const unsigned char *bytes = state->bytes;
                 switch (kind) {
-                case RX_ATOM_CHAR:
+                case RXI_CHAR:
                     while (end < limit && bytes[end] == operand) {
                         end++;
                     }
                     break;
-                case RX_ATOM_CHAR_FOLD:
+                case RXI_CHAR_FOLD:
                     while (end < limit && rxFold(bytes[end]) == operand) {
                         end++;
                     }
                     break;
-                case RX_ATOM_ANY:
+                case RXI_ANY:
                     while (end < limit && bytes[end] != '\n' && bytes[end] != '\r') {
                         end++;
                     }
                     break;
-                case RX_ATOM_ANY_ALL:
+                case RXI_ANY_ALL:
                     end = limit;
                     break;
                 default: {
@@ -2177,7 +2169,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             size_t stop = pos + min;
 
             /* Give back one at a time. When a literal must follow, only positions holding it can go on. */
-            if (prog[next].op == RXI_CHAR && !rxGiveBackTo(state, prog[next].a, stop, &end)) {
+            if (prog[next].op == RXI_CHAR && !rxGiveBackTo(state, prog[next].operand, stop, &end)) {
                 goto backtrack;
             }
             if (end > stop) {
@@ -2316,7 +2308,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 /* The entry is only kept while there is more to give back, so end is past stop */
                 size_t end = bt->pos - 1;
                 size_t stop = bt->aux;
-                if (prog[bt->pc].op == RXI_CHAR && !rxGiveBackTo(state, prog[bt->pc].a, stop, &end)) {
+                if (prog[bt->pc].op == RXI_CHAR && !rxGiveBackTo(state, prog[bt->pc].operand, stop, &end)) {
                     state->btCount--;
                     continue;
                 }
