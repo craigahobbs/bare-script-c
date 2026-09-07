@@ -1658,19 +1658,36 @@ BS_LIBRARY_FN(bsFnStringStartsWith, stringSearchArgs, bsNull(),
               bsBoolean(bsStringStartsWith(values[0], values[1])))
 
 
+/* Whitespace as both references trim it: ASCII's, and the Unicode spaces the two agree on */
+static bool bsIsTrimSpace(uint32_t code)
+{
+    return code == ' ' || (code >= 0x09 && code <= 0x0D) || code == 0xA0 || code == 0x1680 ||
+        (code >= 0x2000 && code <= 0x200A) || code == 0x2028 || code == 0x2029 || code == 0x202F ||
+        code == 0x205F || code == 0x3000;
+}
+
 static BSValue bsFnStringTrim(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringArgs, bsNull());
     const char *text = bsStringData(values[0]);
+    size_t size = bsStringSize(values[0]);
     size_t begin = 0;
-    size_t end = bsStringSize(values[0]);
-    while (begin < end && isspace((unsigned char) text[begin])) {
-        begin++;
+    size_t end = size;
+    size_t codeSize;
+    while (begin < end && bsIsTrimSpace(bsUTF8Decode(text, end, begin, &codeSize))) {
+        begin += codeSize;
     }
-    while (end > begin && isspace((unsigned char) text[end - 1])) {
-        end--;
+    while (end > begin) {
+        size_t lead = end - 1;
+        while (lead > begin && ((unsigned char) text[lead] & 0xC0) == 0x80) {
+            lead--;
+        }
+        if (!bsIsTrimSpace(bsUTF8Decode(text, end, lead, &codeSize))) {
+            break;
+        }
+        end = lead;
     }
-    if (begin == 0 && end == bsStringSize(values[0])) {
+    if (begin == 0 && end == size) {
         return bsRetain(values[0]);
     }
     return bsStringNewSize(text + begin, end - begin);

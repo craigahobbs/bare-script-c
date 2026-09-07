@@ -528,6 +528,7 @@ each other, it follows the one shown in bold.
 | `stringFromCharCode` past 0xFFFF       | the low 16 bits   | the code point  | **the code point**  |
 | `regexEscape`                          | the metacharacters | also `-`, `#`, `&`, `~`, and whitespace | **the metacharacters** |
 | A relative path normalizing to nothing, `a/..` | the empty string | `.`      | **`.`**             |
+| `stringTrim` past the Unicode spaces both trim | also U+FEFF   | also U+001C-U+001F and U+0085 | **the shared spaces only** |
 
 `objectKeys` returns keys in insertion order, matching both references for ordinary keys.
 JavaScript additionally hoists integer-like keys to the front in ascending numeric order; this
@@ -539,8 +540,8 @@ One capability of the reference implementations is out of scope here:
   synchronously; the `async` keyword parses and is recorded in the model, but imposes no
   restriction. Scripts written for the JavaScript runtime run unchanged, and the linter's async
   checks - which need to know which functions are async - are skipped, as they are in Python.
-- **Unicode case mapping and whitespace.** `stringUpper` and `stringLower` map ASCII letters
-  only, and `stringTrim` trims ASCII whitespace only; both references use Unicode's.
+- **Unicode case mapping.** `stringUpper` and `stringLower` map ASCII letters only; both references
+  use Unicode's.
 
 An input nested more deeply than the evaluator's expression depth limit is reported as a parse
 error rather than crashing; the JavaScript implementation overflows its own stack on the same

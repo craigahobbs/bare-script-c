@@ -217,6 +217,9 @@ TEST(library_string)
     bsTestExpr("stringLower(1)", "null");
     bsTestExpr("stringUpper(1)", "null");
     bsTestExpr("stringTrim('  abc  ')", "\"abc\"");
+    bsTestExpr("stringTrim(stringFromCharCode(160, 0x3000) + ' x ' + stringFromCharCode(0x2003, 10))", "\"x\"");
+    bsTestExpr("stringTrim(stringFromCharCode(0xFEFF) + 'x' + stringFromCharCode(0x85))",
+               "\"\xef\xbb\xbfx\xc2\x85\"");
     bsTestExpr("stringTrim('   ')", "\"\"");
     bsTestExpr("stringTrim(1)", "null");
     bsTestExpr("stringRepeat('ab', 3)", "\"ababab\"");
