@@ -52,7 +52,7 @@ TEST(options_url_file_relative)
 
     /* Relative to a URL */
     ASSERT_VALUE_STRING(bsTestUrl("http://example.com/a/b.bare", "c.bare"), "http://example.com/a/c.bare");
-    ASSERT_VALUE_STRING(bsTestUrl("http:noslash", "c.bare"), "http:noslashc.bare");
+    ASSERT_VALUE_STRING(bsTestUrl("http:noslash", "c.bare"), "c.bare");
 
     /* Relative to a file system path */
     ASSERT_VALUE_STRING(bsTestUrl("dir/script.bare", "other.bare"), "dir/other.bare");

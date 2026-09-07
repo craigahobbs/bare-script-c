@@ -105,14 +105,13 @@ char *bsUrlFileRelative(const char *url, void *data)
     }
 
     /* Replace the file's last path segment. A URL result stands; a file system path is normalized. */
-    bool fileIsURL = bsUrlIsURL(file);
     const char *lastSlash = strrchr(file, '/');
-    size_t prefixSize = lastSlash != NULL ? (size_t) (lastSlash - file) + 1 : (fileIsURL ? strlen(file) : 0);
+    size_t prefixSize = lastSlash != NULL ? (size_t) (lastSlash - file) + 1 : 0;
     size_t urlSize = strlen(url);
     char *joined = bsAlloc(prefixSize + urlSize + 1);
     memcpy(joined, file, prefixSize);
     memcpy(joined + prefixSize, url, urlSize + 1);
-    if (fileIsURL) {
+    if (lastSlash != NULL && bsUrlIsURL(file)) {
         return joined;
     }
     char *result = bsPathNormalize(joined);
