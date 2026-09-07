@@ -284,9 +284,7 @@ int bsMain(int argc, char **argv)
                 }
 
                 char *scriptPath = sources[ix].isFile ? bsCliStrdup(sources[ix].value) : NULL;
-                if (options->urlDataFree != NULL) {
-                    options->urlDataFree(options->urlData);
-                }
+                free(options->urlData);
                 options->urlFn = scriptPath != NULL ? bsUrlFileRelative : NULL;
                 options->urlData = scriptPath;
                 options->urlDataFree = scriptPath != NULL ? free : NULL;

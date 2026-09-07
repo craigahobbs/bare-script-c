@@ -11,7 +11,6 @@
  * runtime's compiled representation by model.c.
  */
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "barescript/json.h"
@@ -31,11 +30,10 @@
 typedef struct BSBootstrap {
     const char *includeName;
     BSOptions *options;
-    BSScript *script;
 } BSBootstrap;
 
-static _Thread_local BSBootstrap bsParserBootstrap = {"barescriptParser.bare", NULL, NULL};
-static _Thread_local BSBootstrap bsLintBootstrap = {"barescriptLint.bare", NULL, NULL};
+static _Thread_local BSBootstrap bsParserBootstrap = {"barescriptParser.bare", NULL};
+static _Thread_local BSBootstrap bsLintBootstrap = {"barescriptLint.bare", NULL};
 
 
 /* Load a bundled include library script and execute it, returning its globals */
@@ -56,9 +54,9 @@ static BSValue bsBootstrapGlobals(BSBootstrap *bootstrap)
 
     BSOptions *options = bsOptionsNew();
     bsRelease(bsExecuteScript(script, options));
+    bsScriptRelease(script);
 
     bootstrap->options = options;
-    bootstrap->script = script;
     return options->globals;
 }
 
@@ -68,9 +66,7 @@ void bsParserCleanup(void)
     BSBootstrap *bootstraps[2] = {&bsParserBootstrap, &bsLintBootstrap};
     for (size_t ix = 0; ix < 2; ix++) {
         bsOptionsFree(bootstraps[ix]->options);
-        bsScriptRelease(bootstraps[ix]->script);
         bootstraps[ix]->options = NULL;
-        bootstraps[ix]->script = NULL;
     }
 }
 
@@ -216,10 +212,7 @@ BSScript *bsParseScriptString(BSValue text, int startLineNumber, const char *scr
 
 BSValue bsScriptReparse(const BSScript *script)
 {
-    BSValue args[3];
-    args[0] = script->scriptLines;
-    args[1] = bsNumber(script->startLineNumber);
-    args[2] = script->scriptName;
+    BSValue args[3] = {script->scriptLines, bsNumber(script->startLineNumber), script->scriptName};
     BSValue result = bsParserCall(&bsParserBootstrap, "barescriptParseScriptEx", args, 3, NULL, NULL);
     return bsParserUnwrap(result, NULL);
 }
@@ -250,9 +243,7 @@ BSExpr *bsParseExpression(const char *text, size_t size, int lineNumber, const c
 
 BSValue bsLintScript(const BSScript *script, BSValue globals)
 {
-    BSValue args[2];
-    args[0] = bsScriptToModel(script);
-    args[1] = globals;
+    BSValue args[2] = {bsScriptToModel(script), globals};
     BSValue warnings = bsParserCall(&bsLintBootstrap, "barescriptLintScript", args, 2, NULL, NULL);
     bsRelease(args[0]);
     /* GCOV_EXCL_START - the bundled linter always returns its warnings array */
