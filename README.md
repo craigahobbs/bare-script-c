@@ -418,13 +418,13 @@ three, with the fastest per application in bold:
 
 | Language                |       nbody | loganalyze |    jsonetl |   pathfind | salesreport | vs best |
 | ----------------------- | ----------: | ---------: | ---------: | ---------: | ----------: | ------: |
-| JavaScript (V8 JIT)     | **17.0 ms** |     492 ms | **108 ms** | **130 ms** |  **140 ms** |   1.00x |
-| BareScript              |      608 ms | **480 ms** |     126 ms |     668 ms |      283 ms |   3.35x |
-| JavaScript (V8 jitless) |      783 ms |     940 ms |     167 ms |     735 ms |      336 ms |   4.50x |
-| Python                  |      890 ms |     998 ms |     296 ms |     764 ms |      405 ms |   5.48x |
-| Lua                     |      602 ms |     955 ms |     1.24 s |     461 ms |      616 ms |   6.58x |
-| Ruby                    |      1.11 s |     1.02 s |     495 ms |     1.05 s |      1.01 s |   8.15x |
-| Perl                    |      2.03 s |     1.15 s |     4.45 s |     2.79 s |      983 ms |  17.68x |
+| JavaScript (V8 JIT)     | **17.2 ms** |     503 ms | **109 ms** | **129 ms** |  **141 ms** |   1.00x |
+| BareScript              |      623 ms | **478 ms** |     124 ms |     657 ms |      283 ms |   3.31x |
+| JavaScript (V8 jitless) |      805 ms |     991 ms |     171 ms |     733 ms |      339 ms |   4.56x |
+| Python                  |      922 ms |     1.01 s |     299 ms |     767 ms |      408 ms |   5.50x |
+| Lua                     |      590 ms |     993 ms |     1.29 s |     463 ms |      625 ms |   6.62x |
+| Ruby                    |      1.16 s |     1.07 s |     506 ms |     1.07 s |      1.03 s |   8.33x |
+| Perl                    |      2.18 s |     1.17 s |     4.46 s |     2.80 s |      992 ms |  17.91x |
 
 Only V8's JIT is faster overall, and BareScript beats it on the regex test. It leads every
 interpreter on the regex and JSON tests, matches Lua on n-body, and trails Lua 1.4x on pathfinding,
@@ -434,10 +434,10 @@ where every element access is a library call. (Lua's JSON is a pure-Lua codec; P
 | Language                |    Wall | Peak RSS |
 | ----------------------- | ------: | -------: |
 | Lua                     |  2.6 ms |   1.7 MB |
-| BareScript              |  3.3 ms |   3.0 MB |
-| Perl                    |  4.5 ms |   4.3 MB |
-| Python                  | 16.3 ms |  14.6 MB |
-| JavaScript (V8 JIT)     | 26.5 ms |  38.3 MB |
+| BareScript              |  3.2 ms |   3.1 MB |
+| Perl                    |  4.6 ms |   4.2 MB |
+| Python                  | 16.6 ms |  14.6 MB |
+| JavaScript (V8 JIT)     | 28.2 ms |  38.3 MB |
 | Ruby                    | 44.4 ms |  27.7 MB |
 
 ### Include Library Benchmarks
@@ -460,15 +460,15 @@ score covers all nine, each test's scale estimated from every implementation tha
 | Language         | mandelbrot |  mdElements |    mdParse | schValidate |  urlEncode | testSuite | vs best |
 | ---------------- | ---------: | ----------: | ---------: | ----------: | ---------: | --------: | ------: |
 | JavaScript (V8)  | **1.54 s** | **33.5 ms** | **634 ms** | **56.1 ms** | **2.3 ms** |           |   1.00x |
-| BareScript (C)   |     14.0 s |      198 ms |     712 ms |      160 ms |     4.5 ms | **190 s** |   2.54x |
+| BareScript (C)   |     15.0 s |      206 ms |     732 ms |      164 ms |     4.5 ms | **200 s** |   2.65x |
 | Python (CPython) |     46.1 s |             |            |      204 ms |    10.5 ms |           |   4.12x |
-| BareScript (JS)  |      266 s |      677 ms |     2.24 s |      1.76 s |    43.5 ms |   1,830 s |  20.50x |
-| BareScript (PyC) |      109 s |      626 ms |     7.27 s |      1.06 s |    51.5 ms |   7,500 s |  21.56x |
-| BareScript (Py)  |    3,505 s |      5.27 s |     21.4 s |      14.1 s |     371 ms |  10,200 s | 187.18x |
+| BareScript (JS)  |      266 s |      677 ms |     2.24 s |      1.76 s |    43.5 ms |   1,830 s |  20.47x |
+| BareScript (PyC) |      109 s |      626 ms |     7.27 s |      1.06 s |    51.5 ms |   7,500 s |  21.53x |
+| BareScript (Py)  |    3,505 s |      5.27 s |     21.4 s |      14.1 s |     371 ms |  10,200 s | 186.91x |
 
 The closest race is `markdownParse`, regular expressions against V8's JIT-compiled regex engine;
 the widest is `mandelbrot`, arithmetic against the JIT, then `markdownElements`, V8's inline caches
-allocating nested objects 5.9x faster. Native C runs `mandelbrot` in 0.79 ms, 18x ahead.
+allocating nested objects 6.1x faster. Native C runs `mandelbrot` in 0.79 ms, 19x ahead.
 
 ### Memory and Size
 
@@ -477,13 +477,13 @@ per column in bold:
 
 | Language                |      empty |      nbody |   loganalyze |      jsonetl |    pathfind | salesreport | vs best |
 | ----------------------- | ---------: | ---------: | -----------: | -----------: | ----------: | ----------: | ------: |
-| Lua                     | **1.7 MB** | **1.8 MB** |     140.1 MB |     201.5 MB |     39.4 MB | **36.0 MB** |   1.00x |
-| BareScript              |     3.0 MB |     3.3 MB |  **99.2 MB** | **121.2 MB** | **32.7 MB** |     69.8 MB |   1.15x |
-| Perl                    |     4.3 MB |     6.6 MB |     136.9 MB |     219.9 MB |    113.4 MB |     86.8 MB |   2.04x |
-| Python                  |    14.6 MB |    15.2 MB |     107.0 MB |     161.7 MB |     56.4 MB |     74.4 MB |   2.26x |
-| Ruby                    |    27.7 MB |    27.7 MB |     190.6 MB |     205.9 MB |     42.5 MB |    104.8 MB |   3.22x |
-| JavaScript (V8 JIT)     |    38.3 MB |    44.6 MB |     363.1 MB |     159.5 MB |     69.7 MB |    198.6 MB |   4.75x |
-| JavaScript (V8 jitless) |    37.5 MB |    40.6 MB |     357.1 MB |     181.1 MB |     86.0 MB |    196.1 MB |   4.91x |
+| Lua                     | **1.7 MB** | **1.8 MB** |     140.1 MB |     201.5 MB |     39.4 MB | **37.3 MB** |   1.00x |
+| BareScript              |     3.1 MB |     3.3 MB |  **98.0 MB** | **120.6 MB** | **32.8 MB** |     69.9 MB |   1.15x |
+| Perl                    |     4.2 MB |     6.8 MB |     134.9 MB |     219.2 MB |    113.1 MB |     86.5 MB |   2.02x |
+| Python                  |    14.6 MB |    15.3 MB |     106.9 MB |     161.8 MB |     56.4 MB |     73.5 MB |   2.25x |
+| Ruby                    |    27.7 MB |    27.7 MB |     190.9 MB |     205.9 MB |     42.5 MB |    104.8 MB |   3.21x |
+| JavaScript (V8 JIT)     |    38.3 MB |    44.7 MB |     363.4 MB |     159.5 MB |     69.8 MB |    198.6 MB |   4.72x |
+| JavaScript (V8 jitless) |    37.6 MB |    40.7 MB |     356.9 MB |     181.4 MB |     86.0 MB |    196.0 MB |   4.88x |
 
 BareScript is single-threaded, so its CPU time equals its wall time; V8 spends up to a third more
 CPU than wall on background threads. Lua interns every short string, which halves its sales
@@ -494,8 +494,8 @@ report footprint, where the CSV fields repeat.
 | Shared library                          | 486 KB |
 | ... of which compressed include library | 205 KB |
 | ... of which code                       | 208 KB |
-| Empty script, resident set              | 3.1 MB |
-| Empty script, peak footprint            | 2.4 MB |
+| Empty script, resident set              | 3.2 MB |
+| Empty script, peak footprint            | 2.5 MB |
 | `make perf` test, peak                  |   7 MB |
 | Include library test suite, peak        |  39 MB |
 
