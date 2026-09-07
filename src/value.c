@@ -2016,7 +2016,7 @@ size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
 }
 
 
-double bsNumberRound(double number, int digits)
+double bsNumberRound(double number, double digits)
 {
     double multiplier = pow(10, digits);
     double scaled = number * multiplier;

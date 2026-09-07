@@ -321,7 +321,7 @@ bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data);
  */
 
 /* Round a number to "digits" decimal digits */
-double bsNumberRound(double value, int digits);
+double bsNumberRound(double value, double digits);
 
 /* Parse a number string; returns false if parsing fails */
 bool bsNumberParse(const char *text, size_t size, double *result);

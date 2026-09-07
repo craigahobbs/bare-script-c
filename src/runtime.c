@@ -457,7 +457,7 @@ static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
         return false;
     }
     double number = value.u.number;
-    if (!isfinite(number) || trunc(number) != number || number < 0) {
+    if (!(number >= 0 && number < 0x1p53) || trunc(number) != number) {
         return false;
     }
     *index = (size_t) number;

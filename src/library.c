@@ -234,11 +234,11 @@ static BSValue bsArgFail(BSOptions *options, const char *argName, BSValue argVal
 /* A non-negative integer index that must be in [0, count). Sets the argument error on failure. */
 static bool bsArgIndex(BSValue indexValue, size_t count, size_t *index, BSOptions *options)
 {
-    *index = (size_t) indexValue.u.number;
-    if (*index >= count) {
+    if (indexValue.u.number >= (double) count) {
         bsArgsError(options, "index", indexValue);
         return false;
     }
+    *index = (size_t) indexValue.u.number;
     return true;
 }
 
@@ -247,19 +247,18 @@ static bool bsArgIndex(BSValue indexValue, size_t count, size_t *index, BSOption
 static bool bsArgSlice(BSValue startValue, BSValue endValue, size_t count, size_t *start, size_t *end,
                        BSOptions *options)
 {
-    *start = (size_t) startValue.u.number;
-    *end = endValue.type == BS_NUMBER ? (size_t) endValue.u.number : count;
-    if (*start > count) {
+    double startNumber = startValue.u.number;
+    double endNumber = endValue.type == BS_NUMBER ? endValue.u.number : (double) count;
+    if (startNumber > (double) count) {
         bsArgsError(options, "start", startValue);
         return false;
     }
-    if (*end > count) {
+    if (endNumber > (double) count) {
         bsArgsError(options, "end", endValue);
         return false;
     }
-    if (*end < *start) {
-        *end = *start;
-    }
+    *start = (size_t) startNumber;
+    *end = endNumber < startNumber ? *start : (size_t) endNumber;
     return true;
 }
 
@@ -394,7 +393,8 @@ static const BSArgModel arrayIndexOfArgs[] = {
 };
 
 BS_LIBRARY_FN(bsFnArrayIndexOf, arrayIndexOfArgs, bsNumber(-1),
-              bsArrayFind(values[0], values[1], (size_t) values[2].u.number, false, options))
+              bsArrayFind(values[0], values[1], (size_t) fmin(values[2].u.number, (double) bsArrayCount(values[0])),
+                          false, options))
 
 
 static const BSArgModel arrayJoinArgs[] = {
@@ -431,7 +431,7 @@ static BSValue bsFnArrayLastIndexOf(const BSValue *args, size_t argCount, BSOpti
     if (count == 0) {
         return bsNumber(-1);
     }
-    size_t index = (values[2].type == BS_NUMBER && (size_t) values[2].u.number < count) ?
+    size_t index = (values[2].type == BS_NUMBER && values[2].u.number < (double) count) ?
         (size_t) values[2].u.number : count - 1;
     return bsArrayFind(values[0], values[1], index, true, options);
 }
@@ -444,7 +444,7 @@ BS_RAW_FN(bsFnArrayNew, bsArrayFromArgs(args, argCount))
 
 
 static const BSArgModel arrayNewSizeArgs[] = {
-    {"size", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 0, 0, 0, 0},
+    {"size", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 0, 0, 4294967295, BS_ARG_LTE},
     {"value", BS_ARG_ANY, BS_ARG_HAS_DEFAULT, 0, 0, 0, 0}
 };
 
@@ -691,7 +691,7 @@ static BSValue bsFnJSONParse(const BSValue *args, size_t argCount, BSOptions *op
 
 static const BSArgModel jsonStringifyArgs[] = {
     {"value", BS_ARG_ANY, 0, 0, 0, 0, 0},
-    {"indent", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_NULLABLE | BS_ARG_GTE, 0, 1, 0, 0}
+    {"indent", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_NULLABLE | BS_ARG_GTE, 0, 1, 2147483647, BS_ARG_LTE}
 };
 
 BS_LIBRARY_FN(bsFnJSONStringify, jsonStringifyArgs, bsNull(),
@@ -794,7 +794,7 @@ static const BSArgModel mathRoundArgs[] = {
 };
 
 BS_LIBRARY_FN(bsFnMathRound, mathRoundArgs, bsNull(),
-              bsNumber(bsNumberRound(values[0].u.number, (int) values[1].u.number)))
+              bsNumber(bsNumberRound(values[0].u.number, values[1].u.number)))
 
 
 static const BSArgModel mathSqrtArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GTE, 0, 0, 0, 0}};
@@ -1420,10 +1420,10 @@ static const BSArgModel stringIndexOfArgs[] = {
 static BSValue bsFnStringIndexOf(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringIndexOfArgs, bsNumber(-1));
-    size_t index = (size_t) values[2].u.number;
-    if (index > bsStringLength(values[0])) {
+    if (values[2].u.number > (double) bsStringLength(values[0])) {
         return bsArgFail(options, "index", values[2], bsNumber(-1));
     }
+    size_t index = (size_t) values[2].u.number;
     size_t offset = bsMemFind(bsStringData(values[0]), bsStringSize(values[0]), bsStringData(values[1]),
                               bsStringSize(values[1]), bsStringOffset(values[0], index));
     if (offset == SIZE_MAX) {
@@ -1445,10 +1445,10 @@ static BSValue bsFnStringLastIndexOf(const BSValue *args, size_t argCount, BSOpt
     size_t length = bsStringLength(values[0]);
     size_t index;
     if (values[2].type == BS_NUMBER) {
-        index = (size_t) values[2].u.number;
-        if (index > length) {
+        if (values[2].u.number > (double) length) {
             return bsArgFail(options, "index", values[2], bsNumber(-1));
         }
+        index = (size_t) values[2].u.number;
     } else {
         index = length != 0 ? length - 1 : 0;
     }
@@ -1499,7 +1499,7 @@ BS_LIBRARY_FN(bsFnStringNewFn, valueArgs, bsNull(), bsValueString(values[0]))
 
 static const BSArgModel stringRepeatArgs[] = {
     {"string", BS_ARG_STRING, 0, 0, 0, 0, 0},
-    {"count", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_GTE, 0, 0, 0, 0}
+    {"count", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_GTE, 0, 0, 4294967295, BS_ARG_LTE}
 };
 
 static BSValue bsFnStringRepeat(const BSValue *args, size_t argCount, BSOptions *options, void *data)

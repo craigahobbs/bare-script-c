@@ -857,6 +857,27 @@ TEST(library_direct_call)
 }
 
 
+TEST(library_huge_integers)
+{
+    /* An integer past a container's size is out of range on every platform, never a wrapped cast */
+    bsTestExpr("arrayGet([1], 1e300)", "null");
+    bsTestExpr("arraySet([1], 1e300, 2)", "null");
+    bsTestExpr("arrayDelete([1], 1e300)", "null");
+    bsTestExpr("arraySlice([1, 2], 1e300)", "null");
+    bsTestExpr("arraySlice([1, 2], 0, 1e300)", "null");
+    bsTestExpr("arraySlice([1, 2], 1, 0)", "[]");
+    bsTestExpr("arrayIndexOf([1], 1, 1e300)", "-1");
+    bsTestExpr("arrayLastIndexOf([1], 1, 1e300)", "0");
+    bsTestExpr("arrayNewSize(1e300)", "null");
+    bsTestExpr("stringRepeat('x', 1e300)", "null");
+    bsTestExpr("stringIndexOf('abc', 'c', 1e300)", "-1");
+    bsTestExpr("stringLastIndexOf('abc', 'c', 1e300)", "-1");
+    bsTestExpr("stringSlice('abc', 1e300)", "null");
+    bsTestExpr("jsonStringify({'a': 1}, 1e300)", "null");
+    bsTestExpr("mathRound(1, 1e300)", "null");
+}
+
+
 TEST(library_regex_duplicate_names)
 {
     /* A name reused across alternatives keys the alternative that matched */
