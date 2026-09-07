@@ -352,6 +352,7 @@ TEST(regex_compile_errors)
     bsTestRegexError("[a-\\", "bad escape (end of pattern) at position 3");
     bsTestRegexError("[c-a]", "bad character range c-a at position 1");
     bsTestRegexError("[a-\\d]", "bad character range a-\\d at position 1");
+    bsTestRegexError("[\\d-z]", "bad character range \\d-z at position 1");
     bsTestRegexError("a{3,2}", "min repeat greater than max repeat at position 2");
     bsTestRegexError("\\", "bad escape (end of pattern) at position 0");
     bsTestRegexError("\\x4", "incomplete escape \\x4 at position 0");

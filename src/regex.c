@@ -562,19 +562,16 @@ static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
 
         /* The range's low bound */
         size_t lowOffset = compiler->offset;
-        uint32_t lo;
-        unsigned classes;
-        if (!rxClassBound(compiler, &lo, &classes)) {
+        uint32_t lo = 0;
+        unsigned lowClasses;
+        if (!rxClassBound(compiler, &lo, &lowClasses)) {
             return NULL;
         }
-        if (classes != 0) {
-            node->u.cls.classes |= classes;
-            continue;
-        }
 
-        /* The optional range's high bound */
+        /* The optional range's high bound - a class escape is neither bound of a range */
         size_t lowEnd = compiler->offset;
         uint32_t hi = lo;
+        unsigned classes = 0;
         if (compiler->offset + 1 < compiler->size && compiler->pattern[compiler->offset] == '-' &&
             compiler->pattern[compiler->offset + 1] != ']') {
             compiler->offset++;
@@ -582,14 +579,18 @@ static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
             if (!rxClassBound(compiler, &hi, &classes)) {
                 return NULL;
             }
-            if (classes != 0 || hi < lo) {
+            if (lowClasses != 0 || classes != 0 || hi < lo) {
                 rxError(compiler, lowOffset, "bad character range %.*s-%.*s",
                         (int) (lowEnd - lowOffset), compiler->pattern + lowOffset,
                         (int) (compiler->offset - highOffset), compiler->pattern + highOffset);
                 return NULL;
             }
         }
-        rxClassRange(node, lo, hi);
+        if (lowClasses != 0) {
+            node->u.cls.classes |= lowClasses;
+        } else {
+            rxClassRange(node, lo, hi);
+        }
     }
 
     rxError(compiler, classOffset, "unterminated character set");
