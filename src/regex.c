@@ -373,12 +373,6 @@ static RxNode *rxCharNode(RxCompiler *compiler, uint32_t ch)
 
 
 /*
- * Parse a fixed-length hexadecimal escape
- *
- * On failure the escape is reported as far as it reads, which is what Python's "incomplete escape"
- * message shows.
- */
-/*
  * The rest of a legacy octal escape whose first digit is "first": up to two more octal digits, one
  * when the first is 4 to 7, as both references read it.
  */
@@ -398,6 +392,12 @@ static uint32_t rxOctal(RxCompiler *compiler, char first)
 }
 
 
+/*
+ * Parse a fixed-length hexadecimal escape
+ *
+ * On failure the escape is reported as far as it reads, which is what Python's "incomplete escape"
+ * message shows.
+ */
 static void rxHex(RxCompiler *compiler, size_t count, char kind, size_t escapeOffset, uint32_t *result)
 {
     uint32_t value = 0;
@@ -627,15 +627,13 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
 {
     char ch = compiler->pattern[compiler->offset];
 
-    /* Group, non-capturing group, named group, or lookahead */
+    /* Group, non-capturing group, named group, or lookaround */
     if (ch == '(') {
         size_t groupOffset = compiler->offset;
         compiler->offset++;
-        bool capture = true;
+        RxKind kind = RX_GROUP; /* RX_ALT for a non-capturing group, which is its alternation node */
+        bool negate = false;
         BSValue name = bsNull();
-        bool lookahead = false;
-        bool lookbehind = false;
-        bool lookaheadNegate = false;
         if (compiler->offset < compiler->size && compiler->pattern[compiler->offset] == '?') {
             size_t extensionOffset = compiler->offset;
             compiler->offset++;
@@ -643,22 +641,20 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
                 rxError(compiler, compiler->offset, "unexpected end of pattern");
                 return NULL;
             }
-            size_t kindOffset = compiler->offset;
-            char kind = compiler->pattern[compiler->offset++];
-            if (kind == ':') {
-                capture = false;
-            } else if (kind == '=' || kind == '!') {
-                capture = false;
-                lookahead = true;
-                lookaheadNegate = (kind == '!');
-            } else if (kind == '<' && compiler->offset < compiler->size &&
+            size_t extensionKindOffset = compiler->offset;
+            char extension = compiler->pattern[compiler->offset++];
+            if (extension == ':') {
+                kind = RX_ALT;
+            } else if (extension == '=' || extension == '!') {
+                kind = RX_LOOKAHEAD;
+                negate = (extension == '!');
+            } else if (extension == '<' && compiler->offset < compiler->size &&
                        (compiler->pattern[compiler->offset] == '=' ||
                         compiler->pattern[compiler->offset] == '!')) {
-                capture = false;
-                lookbehind = true;
-                lookaheadNegate = (compiler->pattern[compiler->offset] == '!');
+                kind = RX_LOOKBEHIND;
+                negate = (compiler->pattern[compiler->offset] == '!');
                 compiler->offset++;
-            } else if (kind == '<') {
+            } else if (extension == '<') {
                 if (compiler->offset >= compiler->size) {
                     rxError(compiler, compiler->offset, "unexpected end of pattern");
                     return NULL;
@@ -672,13 +668,13 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
                 }
             } else {
                 rxError(compiler, extensionOffset, "unknown extension ?%.*s",
-                        (int) rxTokenSize(compiler, kindOffset), compiler->pattern + kindOffset);
+                        (int) rxTokenSize(compiler, extensionKindOffset), compiler->pattern + extensionKindOffset);
                 return NULL;
             }
         }
 
         size_t group = 0;
-        if (capture) {
+        if (kind == RX_GROUP) {
             if (compiler->regex->groupCount >= BS_REGEX_GROUPS_MAX) {
                 bsRelease(name);
                 rxError(compiler, groupOffset, "sorry, but this version only supports %d groups",
@@ -699,19 +695,18 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         }
         compiler->offset++;
 
-        if (lookahead || lookbehind) {
-            RxNode *node = rxNodeNew(compiler, lookbehind ? RX_LOOKBEHIND : RX_LOOKAHEAD);
-            node->u.look.sub = sub;
-            node->u.look.negate = lookaheadNegate;
-            return node;
-        }
-        if (!capture) {
+        if (kind == RX_ALT) {
             /* A non-capturing group is its alternation node - which always has a free "next" */
             return sub;
         }
-        RxNode *node = rxNodeNew(compiler, RX_GROUP);
-        node->u.group.sub = sub;
-        node->u.group.group = group;
+        RxNode *node = rxNodeNew(compiler, kind);
+        if (kind == RX_GROUP) {
+            node->u.group.sub = sub;
+            node->u.group.group = group;
+        } else {
+            node->u.look.sub = sub;
+            node->u.look.negate = negate;
+        }
         return node;
     }
 
@@ -2534,7 +2529,7 @@ BSValue bsRegexEscape(BSValue string)
     bsSBInit(&sb);
     for (size_t ix = 0; ix < size; ix++) {
         char ch = data[ix];
-        if (ch != '\0' && (unsigned char) ch < 0x80 && strchr(special, ch) != NULL) {
+        if (ch != '\0' && strchr(special, ch) != NULL) {
             bsSBAppendChar(&sb, '\\');
         }
         bsSBAppendChar(&sb, ch);
