@@ -276,6 +276,9 @@ BSValue bsStringInternExisting(const char *data, size_t size);
  */
 BSString *bsStringAppendValue(BSString *string, BSValue value);
 
+/* strtod over an unterminated span (value.c) */
+double bsStrtod(const char *text, size_t size);
+
 /* Allocate a string whose bytes are already known to be ASCII (length == size). */
 BSValue bsStringNewAscii(const char *text, size_t size);
 

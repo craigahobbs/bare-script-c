@@ -524,24 +524,8 @@ static bool bsJSONDecodeNumber(BSJSONParser *parser, BSValue *result)
         }
     }
 
-    /*
-     * strtod needs a terminated string and the decoder's text is not terminated, so copy the
-     * number out. Almost every number fits the stack buffer; a longer one - a very long run of
-     * digits - takes a heap copy.
-     */
-    char buffer[64];
-    size_t numberSize = ix - begin;
-    char *number = buffer;
-    if (numberSize >= sizeof(buffer)) {
-        number = bsAlloc(numberSize + 1);
-    }
-    memcpy(number, text + begin, numberSize);
-    number[numberSize] = '\0';
-    double value = strtod(number, NULL);
-    if (number != buffer) {
-        free(number);
-    }
     /* A number past the double range is null, the value the encoder writes for a non-finite number */
+    double value = bsStrtod(text + begin, ix - begin);
     *result = isfinite(value) ? bsNumber(value) : bsNull();
     parser->offset = ix;
     return true;

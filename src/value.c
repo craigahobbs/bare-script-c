@@ -2028,6 +2028,24 @@ bool bsNumberRound(double number, double digits, double *result)
 }
 
 
+
+/*
+ * strtod over an unterminated span, copied out since strtod needs a terminator. Almost every
+ * number fits the stack buffer; a longer one - a very long run of digits - takes a heap copy.
+ */
+double bsStrtod(const char *text, size_t size)
+{
+    char buffer[64];
+    char *number = size < sizeof(buffer) ? buffer : bsAlloc(size + 1);
+    memcpy(number, text, size);
+    number[size] = '\0';
+    double value = strtod(number, NULL);
+    if (number != buffer) {
+        free(number);
+    }
+    return value;
+}
+
 bool bsNumberParse(const char *text, size_t size, double *result)
 {
     /* ^\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*$ */
@@ -2077,15 +2095,7 @@ bool bsNumberParse(const char *text, size_t size, double *result)
         return false;
     }
 
-    char buffer[64];
-    size_t numberSize = end - begin;
-    char *number = numberSize < sizeof(buffer) ? buffer : bsAlloc(numberSize + 1);
-    memcpy(number, text + begin, numberSize);
-    number[numberSize] = '\0';
-    double value = strtod(number, NULL);
-    if (number != buffer) {
-        free(number);
-    }
+    double value = bsStrtod(text + begin, end - begin);
     if (!isfinite(value)) {
         return false;
     }
