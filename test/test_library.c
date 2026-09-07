@@ -327,6 +327,8 @@ TEST(library_number)
     bsTestExpr("numberToFixed(3, 0)", "\"3\"");
     bsTestExpr("numberToFixed(3, -1)", "null");
     bsTestExpr("numberToFixed(3, 200)", "null");
+    bsTestExpr("numberToFixed(1e308, 1)", "\"Infinity\"");
+    bsTestExpr("numberToFixed(-1e308, 1, true)", "\"-Infinity\"");
     bsTestExpr("numberToFixed('x')", "null");
     bsTestExpr("numberToString(255, 16)", "\"ff\"");
     bsTestExpr("numberToString(0)", "\"0\"");

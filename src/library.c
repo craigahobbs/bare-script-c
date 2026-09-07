@@ -839,7 +839,13 @@ static BSValue bsFnNumberToFixed(const BSValue *args, size_t argCount, BSOptions
 {
     BS_ARGS(numberToFixedArgs, bsNull());
     int digits = (int) values[1].u.number;
-    BSValue result = bsStringNewFormat("%.*f", digits, bsNumberRound(values[0].u.number, digits));
+    double rounded = bsNumberRound(values[0].u.number, digits);
+    if (!isfinite(rounded)) {
+        /* Past the double range, the number's own text - "Infinity", as JavaScript's toFixed gives */
+        char buffer[32];
+        return bsStringNewSize(buffer, bsNumberFormat(rounded, buffer, sizeof(buffer)));
+    }
+    BSValue result = bsStringNewFormat("%.*f", digits, rounded);
     if (!values[2].u.boolean) {
         return result;
     }

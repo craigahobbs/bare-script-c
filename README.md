@@ -523,7 +523,7 @@ each other, it follows the one shown in bold.
 | `numberToString` past 2^53             | shortest round trip, exponential past 1e21 | the value's exact digits | **the value's exact digits** |
 | A `systemFetch` array                  | fetched concurrently | fetched in order | **URLs concurrently, then files in order** |
 | `mathRound` scaled past the double range | `Infinity` or `NaN` | `null`, an error | **`Infinity` or `NaN`** |
-| `numberToFixed` from 1e21              | exponential, `1e+21` | the value's digits; `null` past the double range | **the value's digits; `inf` past the double range** |
+| `numberToFixed` from 1e21              | exponential, `1e+21` | the value's digits; `null` past the double range | **the value's digits; `Infinity` past the double range** |
 | `numberToFixed` past 100 digits        | `null`, a `RangeError` | the digits    | **`null`**          |
 | `stringFromCharCode` past 0xFFFF       | the low 16 bits   | the code point  | **the code point**  |
 | `regexEscape`                          | the metacharacters | also `-`, `#`, `&`, `~`, and whitespace | **the metacharacters** |
