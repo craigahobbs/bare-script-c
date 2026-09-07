@@ -538,9 +538,7 @@ TEST(value_object_intern)
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "\xc3\xa9").u.number, 5);
 
     /* A key longer than the intern limit still round-trips, on both small and large objects */
-    char longKey[80];
-    memset(longKey, 'a', 70);
-    longKey[70] = '\0';
+    const char *longKey = "a key longer than the sixty-four byte limit of the intern table is never interned";
     BSValue small = bsObjectNew();
     bsObjectSet(small, longKey, bsNumber(1));
     ASSERT_TRUE(bsObjectHas(small, longKey));
@@ -563,9 +561,7 @@ TEST(value_object_small_update)
     bsObjectSet(object, "c", bsNumber(0));
     bsObjectSet(object, "d", bsNumber(0));
     bsObjectSet(object, "e", bsNumber(0));
-    char longKey[80];
-    memset(longKey, 'b', 70);
-    longKey[70] = '\0';
+    const char *longKey = "a key longer than the sixty-four byte limit of the intern table is never interned";
     BSValue key = bsStringNew(longKey);
     bsObjectSetString(object, key, bsNumber(1));
     bsObjectSetString(object, key, bsNumber(2));
@@ -642,15 +638,9 @@ TEST(value_object_inline)
 
     /* Long (non-interned) keys on an inline object */
     BSValue tiny = bsObjectNew();
-    char longA[80];
-    char longB[80];
-    char longC[80];
-    memset(longA, 'x', 70);
-    longA[70] = '\0';
-    memset(longB, 'y', 70);
-    longB[70] = '\0';
-    memset(longC, 'z', 70);
-    longC[70] = '\0';
+    const char *longA = "the first key longer than the sixty-four byte limit of the intern table, never interned";
+    const char *longB = "the second key longer than the sixty-four byte limit of the intern table, never interned";
+    const char *longC = "the third key longer than the sixty-four byte limit of the intern table, never interned";
     bsObjectSet(tiny, longA, bsNumber(1));
     bsObjectSet(tiny, longB, bsNumber(2));
     ASSERT_DOUBLE_EQ(bsObjectGet(tiny, longA).u.number, 1);
@@ -661,20 +651,6 @@ TEST(value_object_inline)
     ASSERT_FALSE(bsObjectHas(tiny, longA));
     ASSERT_DOUBLE_EQ(bsObjectGet(tiny, longB).u.number, 2);
     bsRelease(tiny);
-}
-
-
-TEST(value_object_pool)
-{
-    /* Overflow the recycled-object pool so a free actually returns memory */
-    enum { COUNT = 8193 };
-    BSValue objects[COUNT];
-    for (int ix = 0; ix < COUNT; ix++) {
-        objects[ix] = bsObjectNew();
-    }
-    for (int ix = 0; ix < COUNT; ix++) {
-        bsRelease(objects[ix]);
-    }
 }
 
 

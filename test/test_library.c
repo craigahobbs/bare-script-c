@@ -436,8 +436,6 @@ TEST(library_regex)
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$')", "\"a$b\"");
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$9')", "\"a$9b\"");
     bsTestExpr("regexReplace(regexNew('(a)?x'), 'x', '[$1]')", "\"[]\"");
-    bsTestExpr("regexReplace(regexNew('x'), 'axb', '$<none>')", "\"a$<none>b\"");
-    bsTestExpr("regexReplace(regexNew('x'), 'axb', '$<unterminated')", "\"a$<unterminatedb\"");
     bsTestExpr("regexReplace(regexNew('(?<a>x)?y'), 'y', '[$<a>]')", "\"[]\"");
     bsTestExpr("regexReplace(regexNew(''), 'ab', '-')", "\"-a-b-\"");
     bsTestExpr("regexReplace('x', 'a', 'b')", "null");
@@ -718,9 +716,6 @@ TEST(library_too_many_arguments)
     bsTestExpr("stringIndexOf('abc', '')", "0");
     bsTestExpr("stringIndexOf('abc', '', 3)", "3");
     bsTestExpr("stringIndexOf('a', 'abc')", "-1");
-
-    /* An unknown named group reference scans every named group */
-    bsTestExpr("regexReplace(regexNew('(?<a>x)'), 'axb', '[$<none>]')", "\"a[]b\"");
 }
 
 

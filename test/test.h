@@ -80,7 +80,7 @@ void bsTestPass(void);
     do { \
         double bsActual_ = (double) (actual); \
         double bsExpected_ = (double) (expected); \
-        if (!bsTestDoubleEqual(bsActual_, bsExpected_)) { \
+        if (bsActual_ != bsExpected_) { \
             bsTestFail(__FILE__, __LINE__, "%s == %s - actual %.17g, expected %.17g", \
                        #actual, #expected, bsActual_, bsExpected_); \
         } else { bsTestPass(); } \
@@ -138,7 +138,6 @@ void bsTestPass(void);
     bsTestAssertValueString(__FILE__, __LINE__, #value, (value), (expectedString))
 
 
-bool bsTestDoubleEqual(double actual, double expected);
 bool bsTestStringEqual(const char *actual, const char *expected);
 void bsTestAssertValue(const char *file, int line, const char *expr, BSValue value, const char *expectedJSON);
 void bsTestAssertValueString(const char *file, int line, const char *expr, BSValue value, const char *expected);

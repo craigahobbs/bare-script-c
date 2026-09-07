@@ -5,7 +5,6 @@
  * The unit test framework
  */
 
-#include <math.h>
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -78,15 +77,6 @@ void bsTestFail(const char *file, int line, const char *format, ...)
     if (bsTestRunning) {
         longjmp(bsTestJump, 1);
     }
-}
-
-
-bool bsTestDoubleEqual(double actual, double expected)
-{
-    if (isnan(actual) && isnan(expected)) {
-        return true;
-    }
-    return actual == expected;
 }
 
 
