@@ -72,6 +72,10 @@ TEST(value_number_round)
     ASSERT_DOUBLE_EQ(bsNumberRound(-1.5, 0), -2);
     ASSERT_DOUBLE_EQ(bsNumberRound(2.345, 2), 2.35);
     ASSERT_DOUBLE_EQ(bsNumberRound(1.0, 0), 1);
+
+    /* A scaled value past the double range rounds as JavaScript's Math.round does */
+    ASSERT_TRUE(isinf(bsNumberRound(1e308, 1)));
+    ASSERT_TRUE(isnan(bsNumberRound(1, 400)));
 }
 
 

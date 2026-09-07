@@ -2020,9 +2020,6 @@ double bsNumberRound(double number, int digits)
 {
     double multiplier = pow(10, digits);
     double scaled = number * multiplier;
-    if (!isfinite(scaled)) {
-        return number; /* GCOV_EXCL_LINE */
-    }
     double rounded = trunc(scaled + (number >= 0 ? 0.5 : -0.5));
     return rounded / multiplier;
 }
