@@ -8,13 +8,10 @@
  * gzip-compressed (see bin/includeSource.bare). A model is decoded on first use and cached.
  */
 
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "barescript/includeSource.h"
-#include "barescript/json.h"
 #include "barescript/parser.h"
 #include "barescript/runtime.h"
 

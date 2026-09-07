@@ -57,7 +57,7 @@ hash, for object lookups, and records the allocation's capacity: the `+` operato
 place when its left operand is a function local holding the string's only reference - so
 `s = s + piece` in a loop is linear rather than quadratic - growing the allocation geometrically
 (a global loads into a temporary first, and never qualifies). Strings are the runtime's most
-frequent allocation and most are short, so an allocation that fits one of four size classes is
+frequent allocation and most are short, so an allocation that fits one of five size classes is
 rounded up and recycled through that class's free list.
 
 **Arrays** are vectors of values with amortized growth.

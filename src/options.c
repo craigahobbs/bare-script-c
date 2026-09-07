@@ -320,7 +320,6 @@ void bsFetchHTTP(const BSFetchRequest *requests, BSValue *responses, size_t coun
         }
         BSCurlTransfer *transfer = &transfers[transferCount++];
         *transfer = (BSCurlTransfer) {.easy = lib->easyInit(), .response = &responses[ix]};
-        bsSBInit(&transfer->buffer);
         bsObjectIter(request->headers, bsCurlHeaderIter, &transfer->headers);
 
         CURL *easy = transfer->easy;

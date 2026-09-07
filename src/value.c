@@ -283,7 +283,7 @@ static _Thread_local BSValueState bsTS;
  * Small string recycling
  *
  * Strings are the runtime's most frequent allocation - a match group, a slice, a computed key -
- * and most are short. An allocation that fits one of four size classes is rounded up to it and
+ * and most are short. An allocation that fits one of five size classes is rounded up to it and
  * recycled through that class's free list; the class is kept in the string's flags so release
  * knows where the block goes. The free-list link reuses the index pointer.
  */
@@ -1364,7 +1364,6 @@ static inline bool bsKeyEqual(const BSString *stored, const BSString *key, const
 }
 
 
-
 /*
  * The hash index
  */
@@ -1930,7 +1929,6 @@ size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
      * shortest precision is found by binary search rather than by trying each in turn.
      */
     char digits[40];
-    int exponent = 0;
     int low = 1;
     int high = 17;
     while (low < high) {
@@ -1958,7 +1956,7 @@ size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
             mantissa[digitCount++] = *cursor;
         }
     }
-    exponent = (int) strtol(cursor + 1, NULL, 10);
+    int exponent = (int) strtol(cursor + 1, NULL, 10);
 
     /*
      * Strip trailing zeroes from the mantissa
