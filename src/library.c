@@ -631,10 +631,8 @@ static BSValue bsFnDatetimeISOParse(const BSValue *args, size_t argCount, BSOpti
 {
     BS_ARGS(stringArgs, bsNull());
     int64_t milliseconds;
-    if (!bsDatetimeParse(bsStringData(values[0]), bsStringSize(values[0]), &milliseconds)) {
-        return bsNull();
-    }
-    return bsDatetime(milliseconds);
+    return bsDatetimeParse(bsStringData(values[0]), bsStringSize(values[0]), &milliseconds) ?
+        bsDatetime(milliseconds) : bsNull();
 }
 
 
@@ -813,10 +811,7 @@ static BSValue bsFnNumberParseFloat(const BSValue *args, size_t argCount, BSOpti
 {
     BS_ARGS(stringArgs, bsNull());
     double number;
-    if (!bsNumberParse(bsStringData(values[0]), bsStringSize(values[0]), &number)) {
-        return bsNull();
-    }
-    return bsNumber(number);
+    return bsNumberParse(bsStringData(values[0]), bsStringSize(values[0]), &number) ? bsNumber(number) : bsNull();
 }
 
 
@@ -829,10 +824,8 @@ static BSValue bsFnNumberParseInt(const BSValue *args, size_t argCount, BSOption
 {
     BS_ARGS(numberParseIntArgs, bsNull());
     double number;
-    if (!bsIntegerParse(bsStringData(values[0]), bsStringSize(values[0]), (int) values[1].u.number, &number)) {
-        return bsNull();
-    }
-    return bsNumber(number);
+    return bsIntegerParse(bsStringData(values[0]), bsStringSize(values[0]), (int) values[1].u.number, &number) ?
+        bsNumber(number) : bsNull();
 }
 
 
@@ -1066,7 +1059,6 @@ static void bsMatchKeyGroupGrow(size_t count)
     }
     bsMatchKeys.groupCount = count;
 }
-
 
 
 /* Create a match model object - the "index", "input", and "groups" members */
@@ -1874,8 +1866,7 @@ static BSValue bsFnSystemPartial(const BSValue *args, size_t argCount, BSOptions
 {
     BS_ARGS(systemPartialArgs, bsNull());
     if (bsArrayCount(values[1]) < 1) {
-        bsArgsError(options, "args", values[1]);
-        bsArgsFree(systemPartialArgs, 2, values);
+        bsArgsInvalid(systemPartialArgs, 2, values, options, "args", values[1]);
         return bsNull();
     }
     BSPartial *partial = bsAlloc(sizeof(BSPartial));
@@ -2042,11 +2033,10 @@ static void bsLibraryInit(void)
         const BSLibraryEntry *entry = &bsScriptFunctionTable[ix];
         BSValue function = bsFunctionNew(entry->name, entry->fn, NULL, NULL);
         function.u.function->intrinsic = entry->intrinsic;
-        bsObjectSet(bsScriptFunctionValues, entry->name, bsRetain(function));
         if (entry->alias != NULL) {
             bsObjectSet(bsExpressionFunctionValues, entry->alias, bsRetain(function));
         }
-        bsRelease(function);
+        bsObjectSet(bsScriptFunctionValues, entry->name, function);
     }
 
     /* The strings the regex match model and systemType intern once */
