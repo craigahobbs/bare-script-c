@@ -2079,12 +2079,13 @@ bool bsNumberParse(const char *text, size_t size, double *result)
 
     char buffer[64];
     size_t numberSize = end - begin;
-    if (numberSize >= sizeof(buffer)) {
-        return false;
+    char *number = numberSize < sizeof(buffer) ? buffer : bsAlloc(numberSize + 1);
+    memcpy(number, text + begin, numberSize);
+    number[numberSize] = '\0';
+    double value = strtod(number, NULL);
+    if (number != buffer) {
+        free(number);
     }
-    memcpy(buffer, text + begin, numberSize);
-    buffer[numberSize] = '\0';
-    double value = strtod(buffer, NULL);
     if (!isfinite(value)) {
         return false;
     }

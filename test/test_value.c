@@ -95,7 +95,8 @@ TEST(value_number_parse)
     ASSERT_FALSE(bsNumberParse(".", 1, &number));
     char big[80];
     memset(big, '1', sizeof(big));
-    ASSERT_FALSE(bsNumberParse(big, sizeof(big), &number));
+    ASSERT_TRUE(bsNumberParse(big, sizeof(big), &number));
+    ASSERT_TRUE(number > 1.111e79 && number < 1.112e79);
 }
 
 
