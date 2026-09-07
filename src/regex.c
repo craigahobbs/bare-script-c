@@ -1399,18 +1399,12 @@ static inline uint32_t rxCode(const RxState *state, size_t pos)
 }
 
 
-static void rxTrailGrow(RxState *state)
-{
-    state->trailCapacity *= 2;
-    state->trail = bsRealloc(state->trail, state->trailCapacity * sizeof(RxTrailEntry));
-}
-
-
 /* The next trail entry, to be filled in */
 static inline RxTrailEntry *rxTrailNext(RxState *state)
 {
     if (state->trailCount == state->trailCapacity) {
-        rxTrailGrow(state);
+        state->trailCapacity *= 2;
+        state->trail = bsRealloc(state->trail, state->trailCapacity * sizeof(RxTrailEntry));
     }
     return &state->trail[state->trailCount++];
 }
