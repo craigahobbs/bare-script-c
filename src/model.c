@@ -489,15 +489,13 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst);
  */
 static inline bool bsAssignedTest(const BSEmit *e, int slot)
 {
-    return e->assignedWords != 0 && (e->assigned[slot / 32] >> (slot % 32)) & 1u;
+    return (e->assigned[slot / 32] >> (slot % 32)) & 1u;
 }
 
 
 static inline void bsAssignedSet(BSEmit *e, int slot)
 {
-    if (e->assignedWords != 0) {
-        e->assigned[slot / 32] |= (uint32_t) 1 << (slot % 32);
-    }
+    e->assigned[slot / 32] |= (uint32_t) 1 << (slot % 32);
 }
 
 
@@ -621,18 +619,6 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
     e->blockIn = in;
     free(gen);
     bsRelease(labelBlocks);
-}
-
-
-static void bsAssignedFree(BSEmit *e)
-{
-    free(e->assigned);
-    free(e->blockOf);
-    free(e->blockIn);
-    e->assigned = NULL;
-    e->blockOf = NULL;
-    e->blockIn = NULL;
-    e->assignedWords = 0;
 }
 
 
@@ -1249,6 +1235,9 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
         bsRelease(e->patches[ix].label);
     }
     free(e->patches);
+    free(e->assigned);
+    free(e->blockOf);
+    free(e->blockIn);
     bsRelease(e->labels);
     bsRelease(e->slotMap);
     bsRelease(e->constMap);
@@ -1329,7 +1318,6 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
     }
     bsAssignedAnalyze(&body, statements, def->argCount);
     bool emitted = bsEmitEnd(&body, bsEmitStatements(&body, statements), &def->code);
-    bsAssignedFree(&body);
     if (!emitted) {
         return false;
     }
