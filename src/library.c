@@ -831,7 +831,7 @@ static BSValue bsFnNumberParseInt(const BSValue *args, size_t argCount, BSOption
 
 static const BSArgModel numberToFixedArgs[] = {
     {"x", BS_ARG_NUMBER, 0, 0, 0, 0, 0},
-    {"digits", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 2, 0, 0, 0},
+    {"digits", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 2, 0, 100, BS_ARG_LTE},
     {"trim", BS_ARG_BOOLEAN, 0, 0, 0, 0, 0}
 };
 
@@ -839,9 +839,6 @@ static BSValue bsFnNumberToFixed(const BSValue *args, size_t argCount, BSOptions
 {
     BS_ARGS(numberToFixedArgs, bsNull());
     int digits = (int) values[1].u.number;
-    if (digits > 100) {
-        return bsArgFail(options, "digits", values[1], bsNull());
-    }
     BSValue result = bsStringNewFormat("%.*f", digits, bsNumberRound(values[0].u.number, digits));
     if (!values[2].u.boolean) {
         return result;
