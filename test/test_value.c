@@ -68,14 +68,20 @@ TEST(value_number_format_special)
 
 TEST(value_number_round)
 {
-    ASSERT_DOUBLE_EQ(bsNumberRound(1.5, 0), 2);
-    ASSERT_DOUBLE_EQ(bsNumberRound(-1.5, 0), -2);
-    ASSERT_DOUBLE_EQ(bsNumberRound(2.345, 2), 2.35);
-    ASSERT_DOUBLE_EQ(bsNumberRound(1.0, 0), 1);
+    double rounded;
+    ASSERT_TRUE(bsNumberRound(1.5, 0, &rounded));
+    ASSERT_DOUBLE_EQ(rounded, 2);
+    ASSERT_TRUE(bsNumberRound(-1.5, 0, &rounded));
+    ASSERT_DOUBLE_EQ(rounded, -2);
+    ASSERT_TRUE(bsNumberRound(2.345, 2, &rounded));
+    ASSERT_DOUBLE_EQ(rounded, 2.35);
+    ASSERT_TRUE(bsNumberRound(1.0, 0, &rounded));
+    ASSERT_DOUBLE_EQ(rounded, 1);
 
-    /* A scaled value past the double range rounds as JavaScript's Math.round does */
-    ASSERT_TRUE(isinf(bsNumberRound(1e308, 1)));
-    ASSERT_TRUE(isnan(bsNumberRound(1, 400)));
+    /* A scaled value past the double range does not round */
+    ASSERT_FALSE(bsNumberRound(1e308, 1, &rounded));
+    ASSERT_FALSE(bsNumberRound(1, 400, &rounded));
+    ASSERT_FALSE(bsNumberRound(0, 400, &rounded));
 }
 
 
@@ -705,9 +711,19 @@ TEST(value_object_large)
 }
 
 
+/* A datetime from local-time components that are in range */
+static int64_t bsTestDatetime(double year, double month, double day, double hour, double minute, double second,
+                              double millisecond)
+{
+    int64_t milliseconds = 0;
+    ASSERT_TRUE(bsDatetimeFromParts(year, month, day, hour, minute, second, millisecond, &milliseconds));
+    return milliseconds;
+}
+
+
 TEST(value_datetime)
 {
-    int64_t milliseconds = bsDatetimeFromParts(2026, 8, 6, 7, 30, 15, 250);
+    int64_t milliseconds = bsTestDatetime(2026, 8, 6, 7, 30, 15, 250);
     BSValue value = bsDatetime(milliseconds);
     ASSERT_STR_EQ(bsValueTypeString(value), "datetime");
     ASSERT_TRUE(bsValueBoolean(value));
@@ -723,33 +739,45 @@ TEST(value_datetime)
     ASSERT_INT_EQ(parts.millisecond, 250);
 
     /* Component normalization */
-    bsDatetimeParts(bsDatetimeFromParts(2026, 13, 1, 0, 0, 0, 0), &parts);
+    bsDatetimeParts(bsTestDatetime(2026, 13, 1, 0, 0, 0, 0), &parts);
     ASSERT_INT_EQ(parts.year, 2027);
     ASSERT_INT_EQ(parts.month, 1);
-    bsDatetimeParts(bsDatetimeFromParts(2026, 0, 1, 0, 0, 0, 0), &parts);
+    bsDatetimeParts(bsTestDatetime(2026, 0, 1, 0, 0, 0, 0), &parts);
     ASSERT_INT_EQ(parts.year, 2025);
     ASSERT_INT_EQ(parts.month, 12);
-    bsDatetimeParts(bsDatetimeFromParts(2026, 1, 32, 0, 0, 0, 0), &parts);
+    bsDatetimeParts(bsTestDatetime(2026, 1, 32, 0, 0, 0, 0), &parts);
     ASSERT_INT_EQ(parts.month, 2);
     ASSERT_INT_EQ(parts.day, 1);
-    bsDatetimeParts(bsDatetimeFromParts(2026, 1, 1, 25, 61, 61, 1001), &parts);
+    bsDatetimeParts(bsTestDatetime(2026, 1, 1, 25, 61, 61, 1001), &parts);
     ASSERT_INT_EQ(parts.day, 2);
     ASSERT_INT_EQ(parts.hour, 2);
     ASSERT_INT_EQ(parts.minute, 2);
     ASSERT_INT_EQ(parts.second, 2);
     ASSERT_INT_EQ(parts.millisecond, 1);
-    bsDatetimeParts(bsDatetimeFromParts(2026, 1, 1, -1, -1, -1, -1), &parts);
+    bsDatetimeParts(bsTestDatetime(2026, 1, 1, -1, -1, -1, -1), &parts);
     ASSERT_INT_EQ(parts.year, 2025);
     ASSERT_INT_EQ(parts.month, 12);
     ASSERT_INT_EQ(parts.day, 31);
 
     /* Negative milliseconds - before the epoch */
-    bsDatetimeParts(bsDatetimeFromParts(1969, 12, 31, 23, 59, 59, 500), &parts);
+    bsDatetimeParts(bsTestDatetime(1969, 12, 31, 23, 59, 59, 500), &parts);
     ASSERT_INT_EQ(parts.year, 1969);
     ASSERT_INT_EQ(parts.millisecond, 500);
 
     ASSERT_TRUE(bsDatetimeNow() > 0);
     ASSERT_TRUE(bsDatetimeToday() > 0);
+
+    /* The limits of JavaScript's Date - the year and month index, and the milliseconds */
+    ASSERT_TRUE(bsDatetimeFromParts(1000000, 1, 1, -8760000000, 0, 0, 0, &milliseconds));
+    ASSERT_FALSE(bsDatetimeFromParts(1000001, 1, 1, -8760000000, 0, 0, 0, &milliseconds));
+    ASSERT_FALSE(bsDatetimeFromParts(2000, 10000002, 1, -8760000000, 0, 0, 0, &milliseconds));
+    ASSERT_FALSE(bsDatetimeFromParts(1e300, 1, 1, 0, 0, 0, 0, &milliseconds));
+    ASSERT_FALSE(bsDatetimeFromParts(2000, 1, 1, 1e12, 0, 0, 0, &milliseconds));
+    ASSERT_FALSE(bsDatetimeFromParts(2000, 1, 1, 0, 0, 0, NAN, &milliseconds));
+    ASSERT_TRUE(bsDatetimeFromParts(275760, 9, 12, 0, 0, 0, 0, &milliseconds));
+    ASSERT_FALSE(bsDatetimeFromParts(275760, 9, 14, 0, 0, 0, 0, &milliseconds));
+    ASSERT_TRUE(bsDatetimeFromParts(-271821, 4, 21, 0, 0, 0, 0, &milliseconds));
+    ASSERT_FALSE(bsDatetimeFromParts(-271821, 4, 19, 0, 0, 0, 0, &milliseconds));
 }
 
 
@@ -798,7 +826,7 @@ TEST(value_datetime_parse)
 TEST(value_datetime_string)
 {
     /* The formatted datetime round-trips through the ISO parser */
-    int64_t milliseconds = bsDatetimeFromParts(2026, 8, 6, 7, 30, 15, 0);
+    int64_t milliseconds = bsTestDatetime(2026, 8, 6, 7, 30, 15, 0);
     BSValue text = bsValueString(bsDatetime(milliseconds));
     int64_t parsed = 0;
     ASSERT_TRUE(bsDatetimeParse(bsStringData(text), bsStringSize(text), &parsed));
@@ -806,7 +834,7 @@ TEST(value_datetime_string)
     ASSERT_INT_EQ(bsStringSize(text), 25);
     bsRelease(text);
 
-    milliseconds = bsDatetimeFromParts(2026, 8, 6, 7, 30, 15, 250);
+    milliseconds = bsTestDatetime(2026, 8, 6, 7, 30, 15, 250);
     text = bsValueString(bsDatetime(milliseconds));
     ASSERT_TRUE(bsDatetimeParse(bsStringData(text), bsStringSize(text), &parsed));
     ASSERT_TRUE(parsed == milliseconds);

@@ -537,10 +537,12 @@ static bool bsJSONDecodeNumber(BSJSONParser *parser, BSValue *result)
     }
     memcpy(number, text + begin, numberSize);
     number[numberSize] = '\0';
-    *result = bsNumber(strtod(number, NULL));
+    double value = strtod(number, NULL);
     if (number != buffer) {
         free(number);
     }
+    /* A number past the double range is null, the value the encoder writes for a non-finite number */
+    *result = isfinite(value) ? bsNumber(value) : bsNull();
     parser->offset = ix;
     return true;
 }

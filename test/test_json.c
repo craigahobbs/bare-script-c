@@ -107,7 +107,9 @@ TEST(json_encode_containers)
 TEST(json_encode_other_types)
 {
     /* A datetime encodes as its string representation */
-    BSValue datetime = bsDatetime(bsDatetimeFromParts(2026, 8, 6, 0, 0, 0, 0));
+    int64_t milliseconds = 0;
+    ASSERT_TRUE(bsDatetimeFromParts(2026, 8, 6, 0, 0, 0, 0, &milliseconds));
+    BSValue datetime = bsDatetime(milliseconds);
     BSValue text = bsValueString(datetime);
     BSValue expected = bsStringNewFormat("\"%s\"", bsStringData(text));
     ASSERT_VALUE_STRING(bsJSONEncode(datetime, 0), bsStringData(expected));
@@ -148,6 +150,8 @@ TEST(json_decode_scalars)
     ASSERT_VALUE(bsTestJSON("1e3"), "1000");
     ASSERT_VALUE(bsTestJSON("1E+3"), "1000");
     ASSERT_VALUE(bsTestJSON("1e-3"), "0.001");
+    ASSERT_VALUE(bsTestJSON("1e999"), "null");
+    ASSERT_VALUE(bsTestJSON("[-1e999, {\"a\": 1e999}]"), "[null,{\"a\":null}]");
     ASSERT_VALUE(bsTestJSON("  1  "), "1");
     ASSERT_VALUE(bsTestJSON("\t\r\n1"), "1");
     ASSERT_VALUE(bsTestJSON("\"abc\""), "\"abc\"");

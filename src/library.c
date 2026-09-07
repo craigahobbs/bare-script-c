@@ -646,10 +646,14 @@ static const BSArgModel datetimeNewArgs[] = {
     {"millisecond", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT, 0, 0, 0, 0}
 };
 
-BS_LIBRARY_FN(bsFnDatetimeNew, datetimeNewArgs, bsNull(),
-              bsDatetime(bsDatetimeFromParts(values[0].u.number, values[1].u.number, values[2].u.number,
-                                             values[3].u.number, values[4].u.number, values[5].u.number,
-                                             values[6].u.number)))
+static BSValue bsFnDatetimeNew(const BSValue *args, size_t argCount, BSOptions *options, void *data)
+{
+    BS_ARGS(datetimeNewArgs, bsNull());
+    int64_t milliseconds;
+    return bsDatetimeFromParts(values[0].u.number, values[1].u.number, values[2].u.number, values[3].u.number,
+                               values[4].u.number, values[5].u.number, values[6].u.number, &milliseconds) ?
+        bsDatetime(milliseconds) : bsNull();
+}
 
 
 BS_RAW_FN(bsFnDatetimeNow, bsDatetime(bsDatetimeNow()))
@@ -710,8 +714,6 @@ static const BSArgModel mathXArgs[] = {{"x", BS_ARG_NUMBER, 0, 0, 0, 0, 0}};
 #define BS_MATH_X values[0].u.number
 
 BS_MATH_FN(bsFnMathAbs, fabs(BS_MATH_X))
-BS_MATH_FN(bsFnMathAcos, acos(BS_MATH_X))
-BS_MATH_FN(bsFnMathAsin, asin(BS_MATH_X))
 BS_MATH_FN(bsFnMathAtan, atan(BS_MATH_X))
 BS_MATH_FN(bsFnMathCeil, ceil(BS_MATH_X))
 BS_MATH_FN(bsFnMathCos, cos(BS_MATH_X))
@@ -719,6 +721,13 @@ BS_MATH_FN(bsFnMathFloor, floor(BS_MATH_X))
 BS_MATH_FN(bsFnMathSign, BS_MATH_X < 0 ? -1 : (BS_MATH_X == 0 ? 0 : 1))
 BS_MATH_FN(bsFnMathSin, sin(BS_MATH_X))
 BS_MATH_FN(bsFnMathTan, tan(BS_MATH_X))
+
+
+/* The inverse sine and cosine are defined on -1 to 1 */
+static const BSArgModel mathUnitArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GTE, 0, -1, 1, BS_ARG_LTE}};
+
+BS_LIBRARY_FN(bsFnMathAcos, mathUnitArgs, bsNull(), bsNumber(acos(values[0].u.number)))
+BS_LIBRARY_FN(bsFnMathAsin, mathUnitArgs, bsNull(), bsNumber(asin(values[0].u.number)))
 
 
 static const BSArgModel mathAtan2Args[] = {
@@ -793,8 +802,12 @@ static const BSArgModel mathRoundArgs[] = {
     {"digits", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 0, 0, 0, 0}
 };
 
-BS_LIBRARY_FN(bsFnMathRound, mathRoundArgs, bsNull(),
-              bsNumber(bsNumberRound(values[0].u.number, values[1].u.number)))
+static BSValue bsFnMathRound(const BSValue *args, size_t argCount, BSOptions *options, void *data)
+{
+    BS_ARGS(mathRoundArgs, bsNull());
+    double rounded;
+    return bsNumberRound(values[0].u.number, values[1].u.number, &rounded) ? bsNumber(rounded) : bsNull();
+}
 
 
 static const BSArgModel mathSqrtArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GTE, 0, 0, 0, 0}};
@@ -839,11 +852,9 @@ static BSValue bsFnNumberToFixed(const BSValue *args, size_t argCount, BSOptions
 {
     BS_ARGS(numberToFixedArgs, bsNull());
     int digits = (int) values[1].u.number;
-    double rounded = bsNumberRound(values[0].u.number, digits);
-    if (!isfinite(rounded)) {
-        /* Past the double range, the number's own text - "Infinity", as JavaScript's toFixed gives */
-        char buffer[32];
-        return bsStringNewSize(buffer, bsNumberFormat(rounded, buffer, sizeof(buffer)));
+    double rounded;
+    if (!bsNumberRound(values[0].u.number, digits, &rounded)) {
+        return bsNull();
     }
     BSValue result = bsStringNewFormat("%.*f", digits, rounded);
     if (!values[2].u.boolean) {

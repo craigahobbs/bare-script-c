@@ -320,8 +320,8 @@ bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data);
  * Number values
  */
 
-/* Round a number to "digits" decimal digits */
-double bsNumberRound(double value, double digits);
+/* Round a number to "digits" decimal digits; returns false if the scaled number is past the double range */
+bool bsNumberRound(double value, double digits, double *result);
 
 /* Parse a number string; returns false if parsing fails */
 bool bsNumberParse(const char *text, size_t size, double *result);
@@ -352,9 +352,12 @@ typedef struct BSDatetimeParts {
 /* Convert a datetime to its local-time parts */
 void bsDatetimeParts(int64_t milliseconds, BSDatetimeParts *parts);
 
-/* Create a datetime from local-time components, normalizing out-of-range values */
-int64_t bsDatetimeFromParts(double year, double month, double day, double hour, double minute,
-                            double second, double millisecond);
+/*
+ * Create a datetime from local-time components, normalizing out-of-range values; returns false if
+ * the datetime is outside JavaScript's Date range, plus or minus 8.64e15 milliseconds
+ */
+bool bsDatetimeFromParts(double year, double month, double day, double hour, double minute,
+                         double second, double millisecond, int64_t *result);
 
 /* Parse an ISO date/time string; returns false if parsing fails */
 bool bsDatetimeParse(const char *text, size_t size, int64_t *result);

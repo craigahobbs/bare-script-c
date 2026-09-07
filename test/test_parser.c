@@ -103,6 +103,7 @@ TEST(parser_expression_literals)
     ASSERT_VALUE_STRING(bsTestParseExpr("0xFF", false), "{\"number\":255}");
     ASSERT_VALUE_STRING(bsTestParseExpr("0x", false), "Syntax error\n0x\n ^\n");
     ASSERT_VALUE_STRING(bsTestParseExpr("1e", false), "Syntax error\n1e\n ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("1 + 1e999", false), "Number out of range\n1 + 1e999\n    ^\n");
     ASSERT_VALUE_STRING(bsTestParseExpr("'abc'", false), "{\"string\":\"abc\"}");
     ASSERT_VALUE_STRING(bsTestParseExpr("\"abc\"", false), "{\"string\":\"abc\"}");
     ASSERT_VALUE_STRING(bsTestParseExpr("'a\\'b'", false), "{\"string\":\"a'b\"}");

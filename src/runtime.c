@@ -34,10 +34,6 @@ static _Thread_local struct {
     BSValue coverage, enabled;
 } bsCoverageKeys;
 
-/* The largest datetime JavaScript's Date represents, in milliseconds */
-#define BS_DATETIME_MAX 8640000000000000.0
-
-
 /*
  * The script execution options
  */

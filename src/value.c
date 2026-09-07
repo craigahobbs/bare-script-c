@@ -2016,12 +2016,15 @@ size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
 }
 
 
-double bsNumberRound(double number, double digits)
+bool bsNumberRound(double number, double digits, double *result)
 {
     double multiplier = pow(10, digits);
-    double scaled = number * multiplier;
-    double rounded = trunc(scaled + (number >= 0 ? 0.5 : -0.5));
-    return rounded / multiplier;
+    double rounded = trunc(number * multiplier + (number >= 0 ? 0.5 : -0.5)) / multiplier;
+    if (!isfinite(rounded)) {
+        return false;
+    }
+    *result = rounded;
+    return true;
 }
 
 
@@ -2145,17 +2148,6 @@ static int64_t bsFloorDiv(int64_t value, int64_t divisor)
 }
 
 
-/* Move out-of-range units into the next larger field */
-static void bsCarry(int64_t *value, int64_t *next, int64_t unit)
-{
-    if (*value < 0 || *value >= unit) {
-        int64_t extra = bsFloorDiv(*value, unit);
-        *value -= extra * unit;
-        *next += extra;
-    }
-}
-
-
 /* Days since the Unix epoch for a civil date - Howard Hinnant's days_from_civil */
 static int64_t bsDaysFromCivil(int64_t year, int64_t month, int64_t day)
 {
@@ -2208,33 +2200,35 @@ void bsDatetimeParts(int64_t milliseconds, BSDatetimeParts *parts)
 }
 
 
-int64_t bsDatetimeFromParts(double year, double month, double day, double hour, double minute,
-                            double second, double millisecond)
+bool bsDatetimeFromParts(double year, double month, double day, double hour, double minute,
+                         double second, double millisecond, int64_t *result)
 {
-    int64_t yearInt = (int64_t) year;
-    int64_t monthInt = (int64_t) month;
-    int64_t dayInt = (int64_t) day;
-    int64_t hourInt = (int64_t) hour;
-    int64_t minuteInt = (int64_t) minute;
-    int64_t secondInt = (int64_t) second;
-    int64_t millisecondInt = (int64_t) millisecond;
-
-    /* Cascade out-of-range time components, matching the reference implementation */
-    bsCarry(&millisecondInt, &secondInt, 1000);
-    bsCarry(&secondInt, &minuteInt, 60);
-    bsCarry(&minuteInt, &hourInt, 60);
-    bsCarry(&hourInt, &dayInt, 24);
-    if (monthInt < 1 || monthInt > 12) {
-        int64_t extra = bsFloorDiv(monthInt - 1, 12);
-        monthInt -= extra * 12;
-        yearInt += extra;
+    /* The year and month-index limits are V8's - past them a huge component could cancel another */
+    double monthIndex = month - 1;
+    if (!(fabs(year) <= 1000000 && fabs(monthIndex) <= 10000000)) {
+        return false;
     }
 
-    int64_t civil = bsDaysFromCivil(yearInt, monthInt, dayInt) * 86400 +
-        hourInt * 3600 + minuteInt * 60 + secondInt;
+    /* Roll the month into the year, then sum the components as doubles, which a huge one cannot overflow */
+    double extraYears = floor(monthIndex / 12);
+    int64_t monthDays = bsDaysFromCivil((int64_t) (year + extraYears), (int64_t) (monthIndex - extraYears * 12) + 1, 1);
+    double time = hour * 3600000 + minute * 60000 + second * 1000 + millisecond;
+    double local = ((double) monthDays + day - 1) * 86400000 + time;
+    if (!(fabs(local) <= BS_DATETIME_MAX + 86400000)) {
+        return false;
+    }
+
+    /* Local time to UTC, resolving the offset at the UTC instant, then JavaScript's TimeClip */
+    int64_t localMs = (int64_t) local;
+    int64_t civil = bsFloorDiv(localMs, 1000);
     int64_t utc = civil - bsLocalOffset(civil);
     utc = civil - bsLocalOffset(utc);
-    return utc * 1000 + millisecondInt;
+    int64_t utcMs = utc * 1000 + (localMs - civil * 1000);
+    if (utcMs < -(int64_t) BS_DATETIME_MAX || utcMs > (int64_t) BS_DATETIME_MAX) {
+        return false;
+    }
+    *result = utcMs;
+    return true;
 }
 
 
@@ -2254,7 +2248,9 @@ int64_t bsDatetimeToday(void)
 {
     BSDatetimeParts parts;
     bsDatetimeParts(bsDatetimeNow(), &parts);
-    return bsDatetimeFromParts(parts.year, parts.month, parts.day, 0, 0, 0, 0);
+    int64_t midnight = 0;
+    bsDatetimeFromParts(parts.year, parts.month, parts.day, 0, 0, 0, 0, &midnight); /* today is in range */
+    return midnight;
 }
 
 
@@ -2284,8 +2280,7 @@ bool bsDatetimeParse(const char *text, size_t size, int64_t *result)
         return false;
     }
     if (size == 10) {
-        *result = bsDatetimeFromParts(year, month, day, 0, 0, 0, 0);
-        return true;
+        return bsDatetimeFromParts(year, month, day, 0, 0, 0, 0, result);
     }
     int hour, minute, second;
     if (text[10] != 'T' || text[13] != ':' || text[16] != ':' ||

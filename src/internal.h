@@ -20,6 +20,9 @@
 void bsFetchCleanup(void);
 
 
+/* The largest datetime JavaScript's Date represents, in milliseconds */
+#define BS_DATETIME_MAX 8640000000000000.0
+
 /* Keep a function out of line - a slow path whose inlining would bloat every hot call site */
 #if defined(__GNUC__) || defined(__clang__)
 #define BS_NOINLINE __attribute__((noinline))

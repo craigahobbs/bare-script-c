@@ -278,6 +278,8 @@ TEST(library_math)
     bsTestExpr("mathRound(1.5)", "2");
     bsTestExpr("mathRound(2.345, 2)", "2.35");
     bsTestExpr("mathRound(1, -1)", "null");
+    bsTestExpr("mathRound(1e308, 1)", "null");
+    bsTestExpr("mathRound(0, 400)", "null");
     bsTestExpr("mathSign(-3)", "-1");
     bsTestExpr("mathSign(0)", "0");
     bsTestExpr("mathSign(3)", "1");
@@ -298,7 +300,11 @@ TEST(library_math)
     bsTestExpr("mathSin(0)", "0");
     bsTestExpr("mathTan(0)", "0");
     bsTestExpr("mathAcos(1)", "0");
+    bsTestExpr("mathAcos(-1) == mathPi()", "true");
+    bsTestExpr("mathAcos(2)", "null");
     bsTestExpr("mathAsin(0)", "0");
+    bsTestExpr("mathAsin(-1) == -mathPi() / 2", "true");
+    bsTestExpr("mathAsin(-2)", "null");
     bsTestExpr("mathAtan(0)", "0");
     bsTestExpr("mathAtan2(0, 1)", "0");
     bsTestExpr("mathAtan2('x', 1)", "null");
@@ -330,8 +336,8 @@ TEST(library_number)
     bsTestExpr("numberToFixed(3, 0)", "\"3\"");
     bsTestExpr("numberToFixed(3, -1)", "null");
     bsTestExpr("numberToFixed(3, 200)", "null");
-    bsTestExpr("numberToFixed(1e308, 1)", "\"Infinity\"");
-    bsTestExpr("numberToFixed(-1e308, 1, true)", "\"-Infinity\"");
+    bsTestExpr("numberToFixed(1e308, 1)", "null");
+    bsTestExpr("numberToFixed(1e300, 100)", "null");
     bsTestExpr("numberToFixed('x')", "null");
     bsTestExpr("numberToString(255, 16)", "\"ff\"");
     bsTestExpr("numberToString(0)", "\"0\"");
@@ -360,6 +366,8 @@ TEST(library_json)
     bsTestExpr("jsonStringify(1, 0)", "null");
     bsTestExpr("jsonParse('{\"a\": 1}')", "{\"a\":1}");
     bsTestExpr("jsonParse('bad')", "null");
+    bsTestExpr("jsonParse('1e999')", "null");
+    bsTestExpr("jsonParse('[-1e999]')", "[null]");
     bsTestExpr("jsonParse(1)", "null");
 }
 
@@ -376,6 +384,10 @@ TEST(library_datetime)
     bsTestExpr("datetimeYear('x')", "null");
     bsTestExpr("datetimeNew(99, 1, 1)", "null");
     bsTestExpr("datetimeNew(2026, 1, 20000)", "null");
+    bsTestExpr("datetimeYear(datetimeNew(275760, 9, 12))", "275760");
+    bsTestExpr("datetimeNew(275760, 9, 14)", "null");
+    bsTestExpr("datetimeNew(1e300, 1, 1)", "null");
+    bsTestExpr("datetimeNew(2026, 1, 1, 1e12)", "null");
     bsTestExpr("datetimeISOFormat(datetimeNew(2026, 8, 6), true)", "\"2026-08-06\"");
     bsTestExpr("datetimeISOFormat('x')", "null");
     bsTestExpr("datetimeISOParse('bad')", "null");
