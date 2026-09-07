@@ -522,6 +522,12 @@ each other, it follows the one shown in bold.
 | A `regexNew` repeat count past 2^32    | accepted          | uncaught error  | **accepted**, saturating at 2^31 - 1 |
 | `numberToString` past 2^53             | shortest round trip, exponential past 1e21 | the value's exact digits | **the value's exact digits** |
 | A `systemFetch` array                  | fetched concurrently | fetched in order | **URLs concurrently, then files in order** |
+| `mathRound` scaled past the double range | `Infinity` or `NaN` | `null`, an error | **`Infinity` or `NaN`** |
+| `numberToFixed` from 1e21              | exponential, `1e+21` | the value's digits; `null` past the double range | **the value's digits; `inf` past the double range** |
+| `numberToFixed` past 100 digits        | `null`, a `RangeError` | the digits    | **`null`**          |
+| `stringFromCharCode` past 0xFFFF       | the low 16 bits   | the code point  | **the code point**  |
+| `regexEscape`                          | the metacharacters | also `-`, `#`, `&`, `~`, and whitespace | **the metacharacters** |
+| A relative path normalizing to nothing, `a/..` | the empty string | `.`      | **`.`**             |
 
 `objectKeys` returns keys in insertion order, matching both references for ordinary keys.
 JavaScript additionally hoists integer-like keys to the front in ascending numeric order; this
@@ -533,6 +539,8 @@ One capability of the reference implementations is out of scope here:
   synchronously; the `async` keyword parses and is recorded in the model, but imposes no
   restriction. Scripts written for the JavaScript runtime run unchanged, and the linter's async
   checks - which need to know which functions are async - are skipped, as they are in Python.
+- **Unicode case mapping and whitespace.** `stringUpper` and `stringLower` map ASCII letters
+  only, and `stringTrim` trims ASCII whitespace only; both references use Unicode's.
 
 An input nested more deeply than the evaluator's expression depth limit is reported as a parse
 error rather than crashing; the JavaScript implementation overflows its own stack on the same
@@ -554,15 +562,21 @@ JavaScript regular expressions and `re` is not one:
 | `(?i)`, `(?#c)` | `unknown extension`                | inline flags and comments       |
 | `(?>a)`, `(?(1)a)` | `unknown extension`             | atomic groups and conditionals  |
 | `a*+`           | `multiple repeat`                  | a possessive quantifier         |
+| `x{,5}`         | the literal text                   | the quantifier `{0,5}`          |
 | `[]`            | a set that never matches           | `unterminated character set`    |
 | `[\k]`, `\cA`     | identity and control escapes       | `bad escape`                    |
 | `\1(a)`         | a forward reference, matches empty | `invalid group reference`       |
 | `(?<=a*)b`      | a variable-width lookbehind        | `look-behind requires fixed-width pattern` |
 
-One case goes the other way. A numbered backreference to a group the pattern never defines - `(a)\2` -
-is a legacy octal escape in JavaScript, matching the control character U+0002; this implementation
-reports `re`'s `invalid group reference`, since the reference can only be a mistake. A reference to a
-group defined later in the pattern is still a forward reference, as the table says.
+Three cases go the other way, each a pattern JavaScript accepts that can only be a mistake. A
+numbered backreference to a group the pattern never defines - `(a)\2` - is a legacy octal escape in
+JavaScript, matching the control character U+0002; this implementation reports `re`'s `invalid group
+reference`. (A reference to a group defined later in the pattern is still a forward reference, as the
+table says.) A character class range with a class escape as either bound - `[\d-z]` - is a literal
+`-` in JavaScript and `bad character range` here; a named backreference to a name the pattern never
+defines - `\k<n>` - is the literal text in JavaScript and `unknown group name` here. This
+implementation also limits a pattern to 127 capture groups, reporting `sorry, but this version only
+supports 127 groups`; both references allow more.
 
 Where a pattern is invalid in both, the message and position match: 3918 of 4000 fuzzed patterns
 agree with CPython character for character, and every one of the remaining 82 is a case from the
