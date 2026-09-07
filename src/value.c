@@ -810,18 +810,7 @@ BSValue bsSBToValue(BSStringBuilder *sb)
 /* The pool class of a buffer capacity, or -1 for a capacity the pool does not hold */
 static int bsArrayBufClassIndex(size_t capacity)
 {
-    switch (capacity) {
-    case 8:
-        return 0;
-    case 16:
-        return 1;
-    case 32:
-        return 2;
-    case 64:
-        return 3;
-    default:
-        return -1;
-    }
+    return capacity == 8 ? 0 : capacity == 16 ? 1 : capacity == 32 ? 2 : capacity == 64 ? 3 : -1;
 }
 
 static BSValue *bsArrayBufAlloc(size_t capacity)
