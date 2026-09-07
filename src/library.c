@@ -195,6 +195,13 @@ void bsArgsFree(const BSArgModel *argModel, size_t argModelCount, BSValue *value
         return expression; \
     }
 
+/* A library function whose one expression takes the raw arguments - it validates them itself, or has none */
+#define BS_RAW_FN(fnName, expression) \
+    static BSValue fnName(const BSValue *args, size_t argCount, BSOptions *options, void *data) \
+    { \
+        return expression; \
+    }
+
 
 /* The argument models the one-argument functions share */
 static const BSArgModel arrayArgs[] = {{"array", BS_ARG_ARRAY, 0, 0, 0, 0, 0}};
@@ -433,10 +440,7 @@ static BSValue bsFnArrayLastIndexOf(const BSValue *args, size_t argCount, BSOpti
 BS_LIBRARY_FN(bsFnArrayLength, arrayArgs, bsNumber(0), bsNumber((double) bsArrayCount(values[0])))
 
 
-static BSValue bsFnArrayNew(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsArrayFromArgs(args, argCount);
-}
+BS_RAW_FN(bsFnArrayNew, bsArrayFromArgs(args, argCount))
 
 
 static const BSArgModel arrayNewSizeArgs[] = {
@@ -577,12 +581,8 @@ static const BSArgModel barescriptEvaluateExpressionArgs[] = {
     {"builtins", BS_ARG_BOOLEAN, BS_ARG_HAS_DEFAULT, 1, 0, 0, 0}
 };
 
-static BSValue bsFnBarescriptEvaluateExpression(const BSValue *args, size_t argCount, BSOptions *options,
-                                                void *data)
-{
-    BS_ARGS(barescriptEvaluateExpressionArgs, bsNull());
-    return bsEvaluateExpressionModel(values[0], options, values[1], values[2].u.boolean);
-}
+BS_LIBRARY_FN(bsFnBarescriptEvaluateExpression, barescriptEvaluateExpressionArgs, bsNull(),
+              bsEvaluateExpressionModel(values[0], options, values[1], values[2].u.boolean))
 
 
 /*
@@ -654,15 +654,8 @@ BS_LIBRARY_FN(bsFnDatetimeNew, datetimeNewArgs, bsNull(),
                                              values[6].u.number)))
 
 
-/* A library function of no arguments */
-#define BS_CONSTANT_FN(fnName, expression) \
-    static BSValue fnName(const BSValue *args, size_t argCount, BSOptions *options, void *data) \
-    { \
-        return expression; \
-    }
-
-BS_CONSTANT_FN(bsFnDatetimeNow, bsDatetime(bsDatetimeNow()))
-BS_CONSTANT_FN(bsFnDatetimeToday, bsDatetime(bsDatetimeToday()))
+BS_RAW_FN(bsFnDatetimeNow, bsDatetime(bsDatetimeNow()))
+BS_RAW_FN(bsFnDatetimeToday, bsDatetime(bsDatetimeToday()))
 
 
 /*
@@ -714,24 +707,20 @@ BS_LIBRARY_FN(bsFnJSONStringify, jsonStringifyArgs, bsNull(),
 
 static const BSArgModel mathXArgs[] = {{"x", BS_ARG_NUMBER, 0, 0, 0, 0, 0}};
 
-#define BS_MATH_FN(fnName, expression) \
-    static BSValue fnName(const BSValue *args, size_t argCount, BSOptions *options, void *data) \
-    { \
-        BS_ARGS(mathXArgs, bsNull()); \
-        double x = values[0].u.number; \
-        return bsNumber(expression); \
-    }
+/* A function of the number x */
+#define BS_MATH_FN(fnName, expression) BS_LIBRARY_FN(fnName, mathXArgs, bsNull(), bsNumber(expression))
+#define BS_MATH_X values[0].u.number
 
-BS_MATH_FN(bsFnMathAbs, fabs(x))
-BS_MATH_FN(bsFnMathAcos, acos(x))
-BS_MATH_FN(bsFnMathAsin, asin(x))
-BS_MATH_FN(bsFnMathAtan, atan(x))
-BS_MATH_FN(bsFnMathCeil, ceil(x))
-BS_MATH_FN(bsFnMathCos, cos(x))
-BS_MATH_FN(bsFnMathFloor, floor(x))
-BS_MATH_FN(bsFnMathSign, x < 0 ? -1 : (x == 0 ? 0 : 1))
-BS_MATH_FN(bsFnMathSin, sin(x))
-BS_MATH_FN(bsFnMathTan, tan(x))
+BS_MATH_FN(bsFnMathAbs, fabs(BS_MATH_X))
+BS_MATH_FN(bsFnMathAcos, acos(BS_MATH_X))
+BS_MATH_FN(bsFnMathAsin, asin(BS_MATH_X))
+BS_MATH_FN(bsFnMathAtan, atan(BS_MATH_X))
+BS_MATH_FN(bsFnMathCeil, ceil(BS_MATH_X))
+BS_MATH_FN(bsFnMathCos, cos(BS_MATH_X))
+BS_MATH_FN(bsFnMathFloor, floor(BS_MATH_X))
+BS_MATH_FN(bsFnMathSign, BS_MATH_X < 0 ? -1 : (BS_MATH_X == 0 ? 0 : 1))
+BS_MATH_FN(bsFnMathSin, sin(BS_MATH_X))
+BS_MATH_FN(bsFnMathTan, tan(BS_MATH_X))
 
 
 static const BSArgModel mathAtan2Args[] = {
@@ -742,8 +731,8 @@ static const BSArgModel mathAtan2Args[] = {
 BS_LIBRARY_FN(bsFnMathAtan2, mathAtan2Args, bsNull(), bsNumber(atan2(values[0].u.number, values[1].u.number)))
 
 
-BS_CONSTANT_FN(bsFnMathE, bsNumber(2.718281828459045))
-BS_CONSTANT_FN(bsFnMathPi, bsNumber(3.141592653589793))
+BS_RAW_FN(bsFnMathE, bsNumber(2.718281828459045))
+BS_RAW_FN(bsFnMathPi, bsNumber(3.141592653589793))
 
 
 static const BSArgModel mathLnArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GT, 0, 0, 0, 0}};
@@ -779,16 +768,8 @@ static BSValue bsMathExtreme(const BSValue *args, size_t argCount, int direction
 }
 
 
-static BSValue bsFnMathMax(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsMathExtreme(args, argCount, 1);
-}
-
-
-static BSValue bsFnMathMin(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsMathExtreme(args, argCount, -1);
-}
+BS_RAW_FN(bsFnMathMax, bsMathExtreme(args, argCount, 1))
+BS_RAW_FN(bsFnMathMin, bsMathExtreme(args, argCount, -1))
 
 
 /* The random number generator - a deterministic xorshift, seeded from the clock and the thread at first use */
@@ -1014,10 +995,7 @@ static BSValue bsFnObjectGet(const BSValue *args, size_t argCount, BSOptions *op
 {
     BS_ARGS(objectGetArgs, bsRetain(argCount >= 3 ? args[2] : bsNull()));
     BSValue found;
-    if (!bsObjectLookupString(values[0], values[1], &found)) {
-        return bsRetain(values[2]);
-    }
-    return bsRetain(found);
+    return bsRetain(bsObjectLookupString(values[0], values[1], &found) ? found : values[2]);
 }
 
 
@@ -1525,16 +1503,8 @@ static BSValue bsStringCase(const BSValue *args, size_t argCount, BSOptions *opt
 }
 
 
-static BSValue bsFnStringLower(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsStringCase(args, argCount, options, false);
-}
-
-
-static BSValue bsFnStringUpper(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsStringCase(args, argCount, options, true);
-}
+BS_RAW_FN(bsFnStringLower, bsStringCase(args, argCount, options, false))
+BS_RAW_FN(bsFnStringUpper, bsStringCase(args, argCount, options, true))
 
 
 BS_LIBRARY_FN(bsFnStringNewFn, valueArgs, bsNull(), bsValueString(values[0]))
@@ -1861,16 +1831,8 @@ static BSValue bsSystemLog(const BSValue *args, size_t argCount, BSOptions *opti
 }
 
 
-static BSValue bsFnSystemLog(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsSystemLog(args, argCount, options, false);
-}
-
-
-static BSValue bsFnSystemLogDebug(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    return bsSystemLog(args, argCount, options, true);
-}
+BS_RAW_FN(bsFnSystemLog, bsSystemLog(args, argCount, options, false))
+BS_RAW_FN(bsFnSystemLogDebug, bsSystemLog(args, argCount, options, true))
 
 
 /* The systemPartial closure data */
