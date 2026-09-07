@@ -1250,6 +1250,12 @@ bool bsRegexGroupNamesUnique(BSValue regex)
 }
 
 
+bool bsRegexGroupsNamed(BSValue regex)
+{
+    return regex.u.regex->groupNames != NULL;
+}
+
+
 BSValue bsRegexGroupNameValue(BSValue regex, size_t group)
 {
     BSValue *names = regex.u.regex->groupNames;

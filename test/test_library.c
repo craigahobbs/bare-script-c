@@ -417,9 +417,9 @@ TEST(library_regex)
     bsTestExpr("regexReplace(regexNew('(?<a>x)'), 'axb', '[$<a>]')", "\"a[x]b\"");
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$$')", "\"a$b\"");
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$')", "\"a$b\"");
-    bsTestExpr("regexReplace(regexNew('x'), 'axb', '$9')", "\"ab\"");
+    bsTestExpr("regexReplace(regexNew('x'), 'axb', '$9')", "\"a$9b\"");
     bsTestExpr("regexReplace(regexNew('(a)?x'), 'x', '[$1]')", "\"[]\"");
-    bsTestExpr("regexReplace(regexNew('x'), 'axb', '$<none>')", "\"ab\"");
+    bsTestExpr("regexReplace(regexNew('x'), 'axb', '$<none>')", "\"a$<none>b\"");
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$<unterminated')", "\"a$<unterminatedb\"");
     bsTestExpr("regexReplace(regexNew('(?<a>x)?y'), 'y', '[$<a>]')", "\"[]\"");
     bsTestExpr("regexReplace(regexNew(''), 'ab', '-')", "\"-a-b-\"");
@@ -886,6 +886,19 @@ TEST(library_regex_duplicate_names)
     bsTestExpr("objectGet(regexMatch(regexNew('(?<a>x)|(?<a>y)'), 'x'), 'groups')",
                "{\"0\":\"x\",\"1\":\"x\",\"2\":null,\"a\":\"x\"}");
     bsTestExpr("regexReplace(regexNew('(?<a>x)|(?<a>y)'), 'xy', '[$<a>]')", "\"[x][y]\"");
+}
+
+
+TEST(library_regex_replace_references)
+{
+    /* Two digits reference a group only when one has that number; a reference to no group is literal */
+    bsTestExpr("regexReplace(regexNew('(a)(b)'), 'ab', '[$0][$1][$2][$3][$10][$01][$00][$21][$2x]')",
+               "\"[$0][a][b][$3][a0][a][$00][b1][bx]\"");
+    bsTestExpr("regexReplace(regexNew('(a)|(b)'), 'ab', '[$1][$2]')", "\"[a][][][b]\"");
+
+    /* A named reference is literal in a pattern with no named groups, and empty for an unknown name */
+    bsTestExpr("regexReplace(regexNew('(a)(b)'), 'ab', '[$<a>][$<]')", "\"[$<a>][$<]\"");
+    bsTestExpr("regexReplace(regexNew('(?<x>a)(b)'), 'ab', '[$<x>][$<y>][$<][$<x]')", "\"[a][][$<][$<x]\"");
 }
 
 

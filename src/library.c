@@ -1192,23 +1192,27 @@ static void bsRegexExpand(BSStringBuilder *sb, BSValue regex, BSValue string, co
             continue;
         }
 
-        /* A numbered group reference */
+        /* A numbered group reference - two digits when they name a group, else one; a reference to
+         * no group is literal text, as JavaScript's replace reads it */
         if (next >= '0' && next <= '9') {
-            size_t end = ix + 1;
-            size_t group = 0;
-            while (end < substrSize && substr[end] >= '0' && substr[end] <= '9') {
+            size_t group = (size_t) (next - '0');
+            size_t end = ix + 2;
+            if (end < substrSize && substr[end] >= '0' && substr[end] <= '9' &&
+                group * 10 + (size_t) (substr[end] - '0') < match->groupCount) {
                 group = group * 10 + (size_t) (substr[end] - '0');
                 end++;
             }
-            if (group < match->groupCount && match->matched[group]) {
+            if (group == 0 || group >= match->groupCount) {
+                bsSBAppend(sb, substr + ix, end - ix);
+            } else if (match->matched[group]) {
                 bsSBAppendSlice(sb, string, match->groups[group].begin, match->groups[group].end);
             }
             ix = end - 1;
             continue;
         }
 
-        /* A named group reference */
-        if (next == '<') {
+        /* A named group reference - literal text in a pattern with no named groups */
+        if (next == '<' && bsRegexGroupsNamed(regex)) {
             size_t end = ix + 2;
             while (end < substrSize && substr[end] != '>') {
                 end++;

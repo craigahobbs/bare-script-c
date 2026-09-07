@@ -418,6 +418,7 @@ extern const char *const bsTypeNames[BS_REGEX + 1];
 
 /* True if no two of a regex's capture groups share a name */
 bool bsRegexGroupNamesUnique(BSValue regex);
+bool bsRegexGroupsNamed(BSValue regex);
 
 /* A capture group's interned name string value (borrowed), or a null value if the group is unnamed */
 BSValue bsRegexGroupNameValue(BSValue regex, size_t group);
