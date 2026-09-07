@@ -859,9 +859,12 @@ TEST(library_direct_call)
 
 TEST(library_regex_duplicate_names)
 {
-    /* A name reused across alternatives keys its last definition */
+    /* A name reused across alternatives keys the alternative that matched */
     bsTestExpr("objectGet(regexMatch(regexNew('(?<a>x)|(?<a>y)'), 'y'), 'groups')",
                "{\"0\":\"y\",\"1\":null,\"2\":\"y\",\"a\":\"y\"}");
+    bsTestExpr("objectGet(regexMatch(regexNew('(?<a>x)|(?<a>y)'), 'x'), 'groups')",
+               "{\"0\":\"x\",\"1\":\"x\",\"2\":null,\"a\":\"x\"}");
+    bsTestExpr("regexReplace(regexNew('(?<a>x)|(?<a>y)'), 'xy', '[$<a>]')", "\"[x][y]\"");
 }
 
 

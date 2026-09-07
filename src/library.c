@@ -1087,12 +1087,12 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexMat
         bsObjectAppend(groups, bsMatchKeys.group[ix], text);
 
         /* A named group is keyed by both its number and its name - an interned string already. A
-         * pattern that reuses a name across alternatives keys the last definition. */
+         * pattern that reuses a name across alternatives keys the alternative that matched. */
         BSValue name = bsRegexGroupNameValue(regex, ix);
         if (name.type == BS_STRING) {
             if (uniqueNames) {
                 bsObjectAppend(groups, name, bsRetain(text));
-            } else {
+            } else if (text.type != BS_NULL || !bsObjectHasString(groups, name)) {
                 bsObjectSetString(groups, name, bsRetain(text));
             }
         }
@@ -1227,11 +1227,9 @@ static void bsRegexExpand(BSStringBuilder *sb, BSValue regex, BSValue string, co
             if (end < substrSize) {
                 for (size_t group = 1; group < match->groupCount; group++) {
                     BSValue name = bsRegexGroupNameValue(regex, group);
-                    if (name.type == BS_STRING && bsStringSize(name) == end - ix - 2 &&
+                    if (match->matched[group] && name.type == BS_STRING && bsStringSize(name) == end - ix - 2 &&
                         memcmp(bsStringData(name), substr + ix + 2, end - ix - 2) == 0) {
-                        if (match->matched[group]) {
-                            bsSBAppendSlice(sb, string, match->groups[group].begin, match->groups[group].end);
-                        }
+                        bsSBAppendSlice(sb, string, match->groups[group].begin, match->groups[group].end);
                         break;
                     }
                 }
