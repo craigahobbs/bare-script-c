@@ -713,15 +713,11 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
 
         /* A named backreference */
         if (escape == 'k') {
-            if (compiler->offset + 1 >= compiler->size ||
-                compiler->pattern[compiler->offset + 1] != '<') {
-                rxError(compiler, escapeOffset, "bad escape \\k");
-                return NULL;
-            }
+            bool bracket = compiler->offset + 1 < compiler->size && compiler->pattern[compiler->offset + 1] == '<';
             compiler->offset += 2;
             size_t nameOffset = compiler->offset;
             BSValue name;
-            if (!rxParseName(compiler, &name)) {
+            if (!bracket || !rxParseName(compiler, &name)) {
                 rxError(compiler, escapeOffset, "bad escape \\k");
                 return NULL;
             }
@@ -940,7 +936,6 @@ static void rxNodeLength(const RxNode *node, size_t *minLength, size_t *maxLengt
 
         case RX_ALT: {
             nodeMin = RX_LENGTH_MAX;
-            nodeMax = 0;
             for (size_t ix = 0; ix < node->u.alt.count; ix++) {
                 size_t branchMin;
                 size_t branchMax;
@@ -966,7 +961,6 @@ static void rxNodeLength(const RxNode *node, size_t *minLength, size_t *maxLengt
         }
 
         case RX_BACKREF:
-            nodeMin = 0;
             nodeMax = RX_LENGTH_MAX;
             break;
 
