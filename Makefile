@@ -119,8 +119,7 @@ LIB_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(LIB_SRCS))
 CLI_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(CLI_SRCS))
 TEST_OBJS := $(patsubst $(TEST_DIR)/%.c,$(OBJ_DIR)/test-%.o,$(TEST_SRCS))
 COVER_SRCS := $(LIB_SRCS) $(SRC_DIR)/bare.c
-COVER_OBJS := $(patsubst $(SRC_DIR)/%.c,$(COVER_DIR)/%.o,$(COVER_SRCS)) \
-    $(patsubst $(TEST_DIR)/%.c,$(COVER_DIR)/test-%.o,$(TEST_SRCS))
+COVER_OBJS := $(patsubst $(SRC_DIR)/%.c,$(COVER_DIR)/%.o,$(COVER_SRCS)) $(TEST_OBJS)
 
 
 # Build outputs
@@ -415,10 +414,6 @@ $(COVER_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(BASE_CFLAGS) $(COVER_CFLAGS) -MMD -MP -c -o $@ $<
 
-$(COVER_DIR)/test-%.o: $(TEST_DIR)/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(BASE_CFLAGS) $(COVER_CFLAGS) -I$(TEST_DIR) -MMD -MP -c -o $@ $<
-
 $(COVER_BIN): $(COVER_OBJS)
 	$(CC) --coverage -o $@ $^ $(LIBS) $(TEST_LIBS)
 
@@ -447,20 +442,8 @@ cover: $(COVER_BIN)
 
 .PHONY: test-include test-include-lint test-include-markdownup test-include-run test-language
 test-include: test-include-lint test-include-markdownup test-include-run
-
-test-include-lint: $(CLI_BIN)
-	$(CLI_BIN) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
-	$(CLI_BIN) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
-
-test-include-markdownup: $(CLI_BIN)
-	$(CLI_BIN) -d -v vUnittestReport true \
-	    $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
-
-test-include-run: $(CLI_BIN)
-	$(CLI_BIN) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
-
-test-language: $(CLI_BIN)
-	$(CLI_BIN) -d -m $(TEST_DIR)/include/runTests.bare
+test-include-lint test-include-markdownup test-include-run test-language: BARE := $(CLI_BIN)
+test-include-lint test-include-markdownup test-include-run test-language: $(CLI_BIN)
 
 # The release build under the same suites. The shipped binary is built by a different pipeline -
 # profile-guided, link-time optimized - than the one every other target tests; running the suites
@@ -469,20 +452,22 @@ test-language: $(CLI_BIN)
 # against the release binary - "make test-release-run" is the suite's timed report.
 .PHONY: test-release test-release-lint test-release-markdownup test-release-run test-release-language
 test-release: test-release-lint test-release-markdownup test-release-run test-release-language
+test-release-lint test-release-markdownup test-release-run test-release-language: BARE := $(RELEASE_CLI)
+test-release-lint test-release-markdownup test-release-run test-release-language: $(RELEASE_CLI)
 
-test-release-lint: $(RELEASE_CLI)
-	$(RELEASE_CLI) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
-	$(RELEASE_CLI) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
+test-include-lint test-release-lint:
+	$(BARE) -x -m $(INCLUDE_LIB_SRCS) $(sort $(wildcard $(INCLUDE_TEST_DIR)/test*.bare))
+	$(BARE) -s -m $(INCLUDE_TEST_DIR)/runTests.bare $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare
 
-test-release-markdownup: $(RELEASE_CLI)
-	$(RELEASE_CLI) -d -v vUnittestReport true \
+test-include-markdownup test-release-markdownup:
+	$(BARE) -d -v vUnittestReport true \
 	    $(INCLUDE_TEST_DIR)/runTestsMarkdownUp.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
 
-test-release-run: $(RELEASE_CLI)
-	$(RELEASE_CLI) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
+test-include-run test-release-run:
+	$(BARE) -d -m $(INCLUDE_TEST_DIR)/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
 
-test-release-language: $(RELEASE_CLI)
-	$(RELEASE_CLI) -d -m $(TEST_DIR)/include/runTests.bare
+test-language test-release-language:
+	$(BARE) -d -m $(TEST_DIR)/include/runTests.bare
 
 
 #
