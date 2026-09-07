@@ -220,7 +220,6 @@ TEST(parser_expression_errors)
 TEST(parser_expression_error_line_trim)
 {
     /* A long error line is trimmed around the error column */
-    BSStringBuilder sb;
     BSValue text = bsTestRepeat(NULL, "1 + ", 100, "+");
     bsTestParseExprContains(bsStringData(text), "... ");
     bsRelease(text);
@@ -231,15 +230,9 @@ TEST(parser_expression_error_line_trim)
     bsRelease(text);
 
     /* An error in the middle trims both ends */
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 50; ix++) {
-        bsSBAppendString(&sb, "abcd");
-    }
-    bsSBAppendString(&sb, " + + ");
-    for (int ix = 0; ix < 50; ix++) {
-        bsSBAppendString(&sb, "abcd");
-    }
-    text = bsSBToValue(&sb);
+    BSValue left = bsTestRepeat(NULL, "abcd", 50, " + + ");
+    text = bsTestRepeat(bsStringData(left), "abcd", 50, NULL);
+    bsRelease(left);
     bsTestParseExprContains(bsStringData(text), "... ");
     bsRelease(text);
 }
@@ -603,16 +596,9 @@ TEST(parser_final_coverage)
 TEST(parser_bootstrap_errors)
 {
     /* A deeply nested expression exceeds the parser's own expression depth */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (int ix = 0; ix < 600; ix++) {
-        bsSBAppendChar(&sb, '(');
-    }
-    bsSBAppendChar(&sb, '1');
-    for (int ix = 0; ix < 600; ix++) {
-        bsSBAppendChar(&sb, ')');
-    }
-    BSValue text = bsSBToValue(&sb);
+    BSValue open = bsTestRepeat(NULL, "(", 600, "1");
+    BSValue text = bsTestRepeat(bsStringData(open), ")", 600, NULL);
+    bsRelease(open);
 
     /* Reported against the script being parsed, not against the parser */
     BSParserError error = {0};

@@ -34,15 +34,6 @@ static void bsTestInvalidModel(const char *json)
 }
 
 
-/* Assert a model built in a string builder is rejected; the builder is consumed */
-static void bsTestInvalidModelSB(BSStringBuilder *sb)
-{
-    BSValue json = bsSBToValue(sb);
-    bsTestInvalidModel(bsStringData(json));
-    bsRelease(json);
-}
-
-
 TEST(model_script_round_trip)
 {
     /* A parsed script converts to a model and back to an equivalent script */
@@ -142,41 +133,26 @@ TEST(model_operand_limits)
         bsSBAppendString(&sb, statement);
     }
     bsSBAppendString(&sb, "]}");
-    bsTestInvalidModelSB(&sb);
+    BSValue json = bsSBToValue(&sb);
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
 
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[");
-    for (int ix = 0; ix < 32768; ix++) {
-        bsSBAppendString(&sb, ix == 0 ? "{\"variable\":\"x\"}" : ",{\"variable\":\"x\"}");
-    }
-    bsSBAppendString(&sb, "]}}}}]}");
-    bsTestInvalidModelSB(&sb);
+    json = bsTestRepeat("{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[{\"variable\":\"x\"}",
+                        ",{\"variable\":\"x\"}", 32767, "]}}}}]}");
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
 
     /* 32768 live temporaries - a call's arguments hold theirs until the call, and a nested call adds more */
-    static const char *binary = "{\"binary\":{\"op\":\"+\",\"left\":{\"string\":\"a\"},\"right\":{\"string\":\"a\"}}}";
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[");
-    for (int ix = 0; ix < 32766; ix++) {
-        bsSBAppendString(&sb, binary);
-        bsSBAppendChar(&sb, ',');
-    }
-    bsSBAppendString(&sb, "{\"function\":{\"name\":\"g\",\"args\":[");
-    bsSBAppendString(&sb, binary);
-    bsSBAppendChar(&sb, ',');
-    bsSBAppendString(&sb, binary);
-    bsSBAppendChar(&sb, ',');
-    bsSBAppendString(&sb, binary);
-    bsSBAppendString(&sb, "]}}]}}}}]}");
-    bsTestInvalidModelSB(&sb);
+#define BS_TEST_BINARY "{\"binary\":{\"op\":\"+\",\"left\":{\"string\":\"a\"},\"right\":{\"string\":\"a\"}}}"
+    json = bsTestRepeat("{\"statements\":[{\"expr\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[", BS_TEST_BINARY ",", 32766,
+                        "{\"function\":{\"name\":\"g\",\"args\":[" BS_TEST_BINARY "," BS_TEST_BINARY "," BS_TEST_BINARY "]}}]}}}}]}");
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
 
     /* A chunk holds at most 32768 includes */
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "{\"statements\":[{\"include\":{\"includes\":[");
-    for (int ix = 0; ix < 32769; ix++) {
-        bsSBAppendString(&sb, ix == 0 ? "{\"url\":\"a.bare\"}" : ",{\"url\":\"a.bare\"}");
-    }
-    bsSBAppendString(&sb, "]}}]}");
-    bsTestInvalidModelSB(&sb);
+    json = bsTestRepeat("{\"statements\":[{\"include\":{\"includes\":[{\"url\":\"a.bare\"}", ",{\"url\":\"a.bare\"}", 32768, "]}}]}");
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
 
     /* A script defines at most 65536 functions */
     static const char *functionJSON = "{\"function\":{\"name\":\"f\",\"args\":[],\"statements\":[]}}";
@@ -200,7 +176,7 @@ TEST(model_operand_limits)
         bsSBAppendString(&sb, statement);
     }
     bsSBAppendString(&sb, "]}");
-    BSValue json = bsSBToValue(&sb);
+    json = bsSBToValue(&sb);
     bsTestInvalidModel(bsStringData(json));
     bsTestInvalidModelJSON(bsStringData(json), "Invalid BareScript model");
     bsRelease(json);

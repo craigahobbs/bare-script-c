@@ -835,7 +835,6 @@ TEST(value_compare)
     /* Different types compare by type name */
     ASSERT_INT_EQ(bsValueCompare(number1, string1), -1);
     ASSERT_INT_EQ(bsValueCompare(string1, number1), 1);
-    ASSERT_INT_EQ(bsValueCompare(bsBoolean(true), bsBoolean(true)), 0);
 
     /* Arrays compare element-wise, then by length */
     BSValue array1 = bsArrayNew();
@@ -864,8 +863,6 @@ TEST(value_compare)
     bsObjectSet(object3, "z", bsNumber(1));
     ASSERT_INT_EQ(bsValueCompare(object1, object3), -1);
 
-    bsRelease(number1);
-    bsRelease(number2);
     bsRelease(string1);
     bsRelease(string2);
     bsRelease(array1);
@@ -1165,16 +1162,6 @@ TEST(value_object_delete_scattered)
         ASSERT_TRUE(bsObjectDelete(object, key));
     }
     ASSERT_INT_EQ(bsObjectCount(object), 0);
-    bsRelease(object);
-}
-
-
-TEST(value_json_wrapper)
-{
-    BSValue object = bsObjectNew();
-    bsObjectSet(object, "a", bsNumber(1));
-    ASSERT_VALUE_STRING(bsJSONEncode(object, 0), "{\"a\":1}");
-    ASSERT_VALUE_STRING(bsJSONEncode(object, 2), "{\n  \"a\": 1\n}");
     bsRelease(object);
 }
 

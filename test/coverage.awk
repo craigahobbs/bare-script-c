@@ -56,10 +56,9 @@ FNR == 1 {
     # Tally the line
     if (count == "#####" || count == "=====") {
         missed[file]++
-        if (missCount[file] < 10) {
+        if (missed[file] <= 10) {
             missLines[file] = missLines[file] " " lineNumber
         }
-        missCount[file]++
         if (verbose) {
             printf "%s:%d:%s\n", file, lineNumber, source
         }
@@ -83,7 +82,7 @@ END {
         totalMissed += missed[file]
         printf "%-24s %8d %8d %8.1f%%\n", file, lines, missed[file], 100 * covered[file] / lines
         if (missed[file] > 0) {
-            printf "%-24s   missed lines:%s%s\n", "", missLines[file], (missCount[file] > 10 ? " ..." : "")
+            printf "%-24s   missed lines:%s%s\n", "", missLines[file], (missed[file] > 10 ? " ..." : "")
         }
     }
     totalLines = totalCovered + totalMissed

@@ -8,7 +8,6 @@
  * also covers the expression evaluator's call dispatch.
  */
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 

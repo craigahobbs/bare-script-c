@@ -366,17 +366,9 @@ TEST(runtime_depth_limit)
      * A deeply nested expression is rejected rather than overflowing the C stack. The parser is
      * itself a BareScript script, so the depth limit stops it while parsing.
      */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "return ");
-    for (int ix = 0; ix < 600; ix++) {
-        bsSBAppendString(&sb, "(");
-    }
-    bsSBAppendString(&sb, "1");
-    for (int ix = 0; ix < 600; ix++) {
-        bsSBAppendString(&sb, ")");
-    }
-    BSValue text = bsSBToValue(&sb);
+    BSValue open = bsTestRepeat("return ", "(", 600, "1");
+    BSValue text = bsTestRepeat(bsStringData(open), ")", 600, NULL);
+    bsRelease(open);
     ASSERT_VALUE(bsTestExecute(bsStringData(text)), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare: Maximum expression depth exceeded\n");
     bsRelease(text);
@@ -1001,20 +993,8 @@ TEST(runtime_call_non_function_debug)
 TEST(runtime_many_arguments)
 {
     /* A function with more arguments than the inline argument buffer */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "function g(a0");
-    for (int ix = 1; ix < 12; ix++) {
-        bsSBAppendFormat(&sb, ", a%d", ix);
-    }
-    bsSBAppendString(&sb, "):\n    return a11\nendfunction\nreturn g(0");
-    for (int ix = 1; ix < 12; ix++) {
-        bsSBAppendFormat(&sb, ", %d", ix);
-    }
-    bsSBAppendString(&sb, ")");
-    BSValue text = bsSBToValue(&sb);
-    ASSERT_VALUE(bsTestExecute(bsStringData(text)), "11");
-    bsRelease(text);
+    ASSERT_VALUE(bsTestExecute("function g(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11):\n"
+                               "    return a11\nendfunction\nreturn g(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)"), "11");
 
     /* Enough values on the stack that LOAD_NULL / LOAD_TRUE / DUP / a 0-arg CALL grow it */
     ASSERT_VALUE(bsTestExecute(

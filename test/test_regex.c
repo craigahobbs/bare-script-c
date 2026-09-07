@@ -5,42 +5,20 @@
  * The regular expression engine unit tests
  */
 
-#include <stdio.h>
 #include <string.h>
 
 #include "test.h"
 #include "../src/internal.h"
 
 
-/* Match a pattern against a subject, returning the matched text or NULL */
-static BSValue bsTestMatch(const char *pattern, const char *subject, unsigned flags)
+/* Match a pattern and return the match's capture groups as a JSON-comparable array, or null */
+static BSValue bsTestGroups(const char *pattern, const char *subject, unsigned flags)
 {
     char error[BS_REGEX_ERROR_MAX];
     BSValue regex = bsRegexNew(pattern, strlen(pattern), flags, error, sizeof(error));
     if (regex.type == BS_NULL) {
         bsTestFail(__FILE__, __LINE__, "bsRegexNew(%s) failed: %s", pattern, error);
     }
-    BSValue string = bsStringNew(subject);
-    BSRegexSubject subjectCodes;
-    bsRegexSubjectInit(&subjectCodes, string);
-    BSRegexMatch match;
-    BSValue result = bsNull();
-    if (bsRegexSearch(regex, &subjectCodes, 0, &match)) {
-        size_t begin = bsStringOffset(string, match.begin);
-        size_t end = bsStringOffset(string, match.end);
-        result = bsStringNewSize(bsStringData(string) + begin, end - begin);
-    }
-    bsRegexSubjectFree(&subjectCodes);
-    bsRelease(string);
-    bsRelease(regex);
-    return result;
-}
-
-
-/* Match a pattern and return the match's capture groups as a JSON-comparable array */
-static BSValue bsTestGroups(const char *pattern, const char *subject, unsigned flags)
-{
-    BSValue regex = bsRegexNew(pattern, strlen(pattern), flags, NULL, 0);
     BSValue string = bsStringNew(subject);
     BSRegexSubject subjectCodes;
     bsRegexSubjectInit(&subjectCodes, string);
@@ -61,6 +39,16 @@ static BSValue bsTestGroups(const char *pattern, const char *subject, unsigned f
     bsRegexSubjectFree(&subjectCodes);
     bsRelease(string);
     bsRelease(regex);
+    return result;
+}
+
+
+/* Match a pattern against a subject, returning the matched text - group 0 - or null */
+static BSValue bsTestMatch(const char *pattern, const char *subject, unsigned flags)
+{
+    BSValue groups = bsTestGroups(pattern, subject, flags);
+    BSValue result = groups.type == BS_ARRAY ? bsRetain(bsArrayGet(groups, 0)) : bsNull();
+    bsRelease(groups);
     return result;
 }
 
@@ -555,14 +543,7 @@ TEST(regex_program)
     ASSERT_VALUE_STRING(bsTestMatch("[ab]*bc", "ababbc", 0), "ababbc");
 
     /* An alternation too wide to index backtracks through its alternatives one at a time */
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    bsSBAppendString(&sb, "(?:");
-    for (int ix = 0; ix < 35; ix++) {
-        bsSBAppendString(&sb, ix == 0 ? "a" : (ix % 2 == 0 ? "|a" : "|b"));
-    }
-    bsSBAppendString(&sb, ")c");
-    BSValue wide = bsSBToValue(&sb);
+    BSValue wide = bsTestRepeat("(?:a", "|b|a", 17, ")c");
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "ax", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "bx", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "bc", 0), "bc");
