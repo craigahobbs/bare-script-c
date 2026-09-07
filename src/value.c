@@ -1255,6 +1255,18 @@ BSValue bsStringInternExisting(const char *data, size_t size)
 }
 
 
+
+/* Free every item on a pool's free list - "next" is the item's link, through "item" - and zero its count */
+#define BS_POOL_DRAIN(head, count, type, next) \
+    do { \
+        while ((head) != NULL) { \
+            type *item = (head); \
+            (head) = (type *) (next); \
+            free(item); \
+        } \
+        (count) = 0; \
+    } while (0)
+
 void bsValueCleanup(void)
 {
     bsRegexScratchFree();
@@ -1284,40 +1296,15 @@ void bsValueCleanup(void)
 
     /* The free lists */
     for (unsigned ix = 0; ix < BS_STRING_POOL_CLASSES; ix++) {
-        while (bsTS.stringPool[ix] != NULL) {
-            BSString *string = bsTS.stringPool[ix];
-            bsTS.stringPool[ix] = (BSString *) string->index;
-            free(string);
-        }
-        bsTS.stringPoolCount[ix] = 0;
+        BS_POOL_DRAIN(bsTS.stringPool[ix], bsTS.stringPoolCount[ix], BSString, item->index);
     }
-    while (bsTS.arrayPool != NULL) {
-        BSArray *array = bsTS.arrayPool;
-        bsTS.arrayPool = (BSArray *) array->values;
-        free(array);
-    }
-    bsTS.arrayPoolCount = 0;
+    BS_POOL_DRAIN(bsTS.arrayPool, bsTS.arrayPoolCount, BSArray, item->values);
     for (int ix = 0; ix < BS_ARRAY_BUF_CLASS_COUNT; ix++) {
-        while (bsTS.arrayBufPool[ix] != NULL) {
-            BSValue *values = bsTS.arrayBufPool[ix];
-            bsTS.arrayBufPool[ix] = (BSValue *) values[0].u.ref;
-            free(values);
-        }
-        bsTS.arrayBufPoolCount[ix] = 0;
+        BS_POOL_DRAIN(bsTS.arrayBufPool[ix], bsTS.arrayBufPoolCount[ix], BSValue, item[0].u.ref);
     }
-    while (bsTS.objectPool != NULL) {
-        BSObject *object = bsTS.objectPool;
-        bsTS.objectPool = (BSObject *) object->entries;
-        free(object);
-    }
-    bsTS.objectPoolCount = 0;
+    BS_POOL_DRAIN(bsTS.objectPool, bsTS.objectPoolCount, BSObject, item->entries);
     for (int ix = 0; ix < BS_ENTRY_POOL_CLASS_COUNT; ix++) {
-        while (bsTS.entryPool[ix] != NULL) {
-            BSObjectEntry *entries = bsTS.entryPool[ix];
-            bsTS.entryPool[ix] = (BSObjectEntry *) entries[0].key;
-            free(entries);
-        }
-        bsTS.entryPoolCount[ix] = 0;
+        BS_POOL_DRAIN(bsTS.entryPool[ix], bsTS.entryPoolCount[ix], BSObjectEntry, item[0].key);
     }
 }
 
