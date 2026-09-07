@@ -407,9 +407,6 @@ static uint16_t bsTempAlloc(BSEmit *e)
 
 static int bsSlotFind(const BSEmit *e, BSValue name)
 {
-    if (e->slotMap.type != BS_OBJECT) {
-        return -1;
-    }
     BSValue index = bsObjectGetString(e->slotMap, name);
     return index.type == BS_NUMBER ? (int) index.u.number : -1;
 }
@@ -458,7 +455,7 @@ static void bsEmitLabel(BSEmit *e, BSValue name)
 /* Emit a jump to a label - patched when the chunk is finished if the label is not yet defined */
 static void bsEmitJump(BSEmit *e, uint8_t op, BSOperand cond, BSValue label)
 {
-    BSValue pc = e->labels.type == BS_OBJECT ? bsObjectGetString(e->labels, label) : bsNull();
+    BSValue pc = bsObjectGetString(e->labels, label);
     if (pc.type == BS_NUMBER) {
         bsEmitJumpInst(e, op, cond, (uint32_t) pc.u.number);
         return;
@@ -523,7 +520,7 @@ static BSValue bsStatementAssignName(BSValue statement)
 {
     BSValue expr;
     BSString *kind = bsModelKind(statement, &expr);
-    return BS_KIND(kind, expr) && expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.name) : bsNull();
+    return BS_KIND(kind, expr) ? bsObjectGetString(expr, bsKeys.name) : bsNull();
 }
 
 
@@ -549,7 +546,7 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
         }
         blockOf[ix] = (uint32_t) (blockCount - 1);
         starts = !isLabel && (BS_KIND(kind, jump) || BS_KIND(kind, return_));
-        BSValue name = isLabel && member.type == BS_OBJECT ? bsObjectGetString(member, bsKeys.name) : bsNull();
+        BSValue name = isLabel ? bsObjectGetString(member, bsKeys.name) : bsNull();
         if (name.type == BS_STRING) {
             BSValue blocks = bsObjectGetString(labelBlocks, name);
             if (blocks.type != BS_ARRAY) {
@@ -1111,8 +1108,8 @@ static bool bsEmitStatement(BSEmit *e, BSValue model)
         BSValue expr = bsObjectGetString(value, bsKeys.expr);
         bool jumpIfTrue = true;
         for (;;) {
-            BSValue unary = expr.type == BS_OBJECT ? bsObjectGetString(expr, bsKeys.unary) : bsNull();
-            BSValue unaryOp = unary.type == BS_OBJECT ? bsObjectGetString(unary, bsKeys.op) : bsNull();
+            BSValue unary = bsObjectGetString(expr, bsKeys.unary);
+            BSValue unaryOp = bsObjectGetString(unary, bsKeys.op);
             if (unaryOp.type != BS_STRING || strcmp(bsStringData(unaryOp), "!") != 0) {
                 break;
             }
@@ -1225,8 +1222,7 @@ int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc)
 static bool bsEmitFinish(BSEmit *e, BSCode *code)
 {
     for (size_t ix = 0; ix < e->patchCount; ix++) {
-        BSValue pc = e->labels.type == BS_OBJECT ? bsObjectGetString(e->labels, e->patches[ix].label) :
-            bsNull();
+        BSValue pc = bsObjectGetString(e->labels, e->patches[ix].label);
         BSInst *inst = &e->inst[e->patches[ix].pc];
         if (pc.type == BS_NUMBER) {
             inst->w = (uint32_t) pc.u.number;
@@ -1462,7 +1458,7 @@ BSValue bsScriptToModel(const BSScript *script)
 {
     /* A parsed script keeps its lines, not its model - parse them again */
     BSValue source = script->model.type == BS_OBJECT ? bsRetain(script->model) : bsScriptReparse(script);
-    BSValue statements = source.type == BS_OBJECT ? bsObjectGet(source, "statements") : bsNull();
+    BSValue statements = bsObjectGet(source, "statements");
     BSValue model = bsObjectNew();
     bsObjectSet(model, "statements",
                 statements.type == BS_ARRAY ? bsRetain(statements) : bsArrayNew());
