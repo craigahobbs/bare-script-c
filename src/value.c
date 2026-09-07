@@ -383,7 +383,6 @@ static BSValue bsStringShort(const char *text, size_t size)
         string = bsStringAlloc(size);
         memcpy(string->data, text, size);
         string->length = (uint32_t) size;
-        string->refcount++;
         *slot = string;
     }
     string->refcount++;
