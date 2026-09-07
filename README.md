@@ -559,6 +559,11 @@ JavaScript regular expressions and `re` is not one:
 | `\1(a)`         | a forward reference, matches empty | `invalid group reference`       |
 | `(?<=a*)b`      | a variable-width lookbehind        | `look-behind requires fixed-width pattern` |
 
+One case goes the other way. A numbered backreference to a group the pattern never defines - `(a)\2` -
+is a legacy octal escape in JavaScript, matching the control character U+0002; this implementation
+reports `re`'s `invalid group reference`, since the reference can only be a mistake. A reference to a
+group defined later in the pattern is still a forward reference, as the table says.
+
 Where a pattern is invalid in both, the message and position match: 3918 of 4000 fuzzed patterns
 agree with CPython character for character, and every one of the remaining 82 is a case from the
 table above.

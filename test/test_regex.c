@@ -370,6 +370,12 @@ TEST(regex_compile_errors)
     bsTestRegexError("a*?*", "multiple repeat at position 3");
     bsTestRegexError("\\999", "invalid group reference 999 at position 1");
 
+    /* A backreference to a group the pattern never defines - a forward reference to one it does is fine */
+    bsTestRegexError("(a)\\2", "invalid group reference 2 at position 4");
+    bsTestRegexError("(a)(b)\\12", "invalid group reference 12 at position 7");
+    bsTestRegexError("(a)\\2)", "invalid group reference 2 at position 4");
+    bsTestRegexError("\\2\\1(a)", "invalid group reference 2 at position 1");
+
     /* Too many capture groups */
     BSValue pattern = bsTestRepeat(NULL, "(a)", 130, NULL);
     char error[BS_REGEX_ERROR_MAX];
@@ -490,8 +496,8 @@ TEST(regex_coverage_gaps2)
     bsTestRegexError("(?:[c-a])", "bad character range c-a at position 4");
 
     /* A lookbehind whose length bound saturates on an unbounded body */
-    ASSERT_VALUE_STRING(bsTestMatch("(?<=\\1{2})b", "ab", 0), "b");
-    ASSERT_VALUE_STRING(bsTestMatch("(?<=\\1{2,4})b", "ab", 0), "b");
+    ASSERT_VALUE_STRING(bsTestMatch("(x)?(?<=\\1{2})b", "ab", 0), "b");
+    ASSERT_VALUE_STRING(bsTestMatch("(x)?(?<=\\1{2,4})b", "ab", 0), "b");
 
     /* Lazy simple repeats that cannot meet their minimum */
     ASSERT_VALUE_STRING(bsTestMatch("a{3,}?b", "aab", 0), "null");

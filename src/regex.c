@@ -232,6 +232,12 @@ typedef struct RxCompiler {
     size_t errorSize;
     bool failed;
     BSValue groupNames[BS_REGEX_GROUPS_MAX];
+    struct RxBackref {
+        int group;
+        size_t offset;
+    } *backrefs; /* the numbered backreferences, checked against the group count once the pattern is parsed */
+    size_t backrefCount;
+    size_t backrefCap;
 } RxCompiler;
 
 
@@ -706,6 +712,8 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
                 rxError(compiler, digitOffset, "invalid group reference %d", group);
                 return NULL;
             }
+            BS_GROW(compiler->backrefs, compiler->backrefCount, compiler->backrefCap, 8);
+            compiler->backrefs[compiler->backrefCount++] = (struct RxBackref) {group, digitOffset};
             RxNode *node = rxNodeNew(compiler, RX_BACKREF);
             node->u.groupIndex = (size_t) group;
             return node;
@@ -1127,6 +1135,14 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
     compiler.error = error;
     compiler.errorSize = errorSize;
     compiler.root = rxParseAlternation(&compiler);
+
+    /* A numbered backreference may precede its group, as in JavaScript, but the group must exist */
+    for (size_t ix = 0; !compiler.failed && ix < compiler.backrefCount; ix++) {
+        if ((size_t) compiler.backrefs[ix].group >= regex->groupCount) {
+            rxError(&compiler, compiler.backrefs[ix].offset, "invalid group reference %d", compiler.backrefs[ix].group);
+        }
+    }
+    free(compiler.backrefs);
     if (!compiler.failed && compiler.offset != patternSize) {
         rxError(&compiler, compiler.offset, "unbalanced parenthesis");
     }
