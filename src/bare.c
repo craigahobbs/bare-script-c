@@ -87,7 +87,7 @@ int bsMain(int argc, char **argv)
     bool debug = false;
     bool staticAnalysis = false;
     bool staticExecute = false;
-    bool markdownUp = false;
+    bool markdown = false;
     bool html = false;
     int statusCode = 0;
 
@@ -117,12 +117,10 @@ int bsMain(int argc, char **argv)
             continue;
         }
         if (strcmp(arg, "-m") == 0 || strcmp(arg, "--markdown") == 0) {
-            markdownUp = true;
-            html = false;
+            markdown = true;
             continue;
         }
         if (strcmp(arg, "-l") == 0 || strcmp(arg, "--html") == 0) {
-            markdownUp = true;
             html = true;
             continue;
         }
@@ -137,7 +135,7 @@ int bsMain(int argc, char **argv)
         }
         if (strcmp(arg, "-v") == 0 || strcmp(arg, "--var") == 0) {
             if (ix + 2 >= argc) {
-                bsPrintError("bare: argument -v/--var: expected two arguments");
+                bsPrintError("bare: argument -v/--var: expected 2 arguments");
                 statusCode = 2;
                 break;
             }
@@ -146,12 +144,17 @@ int bsMain(int argc, char **argv)
             continue;
         }
         if (arg[0] == '-' && arg[1] != '\0') {
-            fprintf(stderr, "bare: unrecognized argument: %s\n", arg);
+            fprintf(stderr, "bare: unrecognized arguments: %s\n", arg);
             statusCode = 2;
             break;
         }
         sources[sourceCount++] = (BSScriptSource) {true, arg};
     }
+    if (statusCode == 0 && markdown && html) {
+        bsPrintError("bare: argument -m/--markdown: not allowed with argument -l/--html");
+        statusCode = 2;
+    }
+    bool markdownUp = markdown || html;
 
     /*
      * The MarkdownUp modes wrap the user's scripts in the markdownUp.bare include and, for HTML
@@ -214,11 +217,18 @@ int bsMain(int argc, char **argv)
             BSValue value = bsEvaluateExpression(expr, options, NULL, true);
             bsExprFree(expr);
             bsObjectSet(sharedGlobals, vars[ix].name, value);
+            const char *error = bsErrorGet(options);
+            if (error != NULL) {
+                bsPrintError(error);
+                bsErrorClear(options);
+                statusCode = 1;
+            }
         }
+        bool varFailed = statusCode != 0;
 
         /* Parse and execute each script source in order */
         size_t inlineCount = 0;
-        for (size_t ix = 0; ix < sourceCount && (statusCode == 0 || staticAnalysis); ix++) {
+        for (size_t ix = 0; ix < sourceCount && !varFailed && (statusCode == 0 || staticAnalysis); ix++) {
             BSValue text = bsNull();
             char scriptNameBuffer[32];
             const char *scriptName;

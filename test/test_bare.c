@@ -149,9 +149,15 @@ TEST(bare_variables)
     ASSERT_INT_EQ(bsTestBare("-v", "vBad", "1 +", "-c", "systemLog('never')", NULL), 1);
     ASSERT_STR_CONTAINS(bsTestMainText(), "Syntax error");
 
+    /* An expression error stops the run, under static analysis too */
+    ASSERT_INT_EQ(bsTestBare("-s", "-v", "vBad", "nope()", "-c", "return 1", NULL), 1);
+    ASSERT_STR_EQ(bsTestMainText(), "Undefined function \"nope\"\n");
+    ASSERT_INT_EQ(bsTestBare("-s", "-v", "vBad", "1 +", "-c", "return 1", NULL), 1);
+    ASSERT_STR_NOT_CONTAINS(bsTestMainText(), "static analysis");
+
     /* A missing argument */
     ASSERT_INT_EQ(bsTestBare("-v", "vName", NULL), 2);
-    ASSERT_STR_CONTAINS(bsTestMainText(), "expected two arguments");
+    ASSERT_STR_CONTAINS(bsTestMainText(), "expected 2 arguments");
 }
 
 
@@ -172,7 +178,7 @@ TEST(bare_files)
 
     /* An unrecognized option */
     ASSERT_INT_EQ(bsTestBare("--nope", NULL), 2);
-    ASSERT_STR_CONTAINS(bsTestMainText(), "unrecognized argument");
+    ASSERT_STR_CONTAINS(bsTestMainText(), "unrecognized arguments: --nope");
 
     /* A bare "-" is a file name */
     ASSERT_INT_EQ(bsTestBare("-", NULL), 1);
@@ -311,6 +317,9 @@ TEST(bare_markdownup)
     ASSERT_STR_CONTAINS(bsTestMainText(), "\"<string2>\" ... OK");
     ASSERT_STR_NOT_CONTAINS(bsTestMainText(), "markdownUp.bare");
 
+    /* The two MarkdownUp modes are exclusive */
+    ASSERT_INT_EQ(bsTestBare("-m", "-l", "-c", "return 1", NULL), 2);
+    ASSERT_STR_EQ(bsTestMainText(), "bare: argument -m/--markdown: not allowed with argument -l/--html\n");
 }
 
 
