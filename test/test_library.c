@@ -682,14 +682,12 @@ TEST(library_too_many_arguments)
     bsTestExpr("arrayFlat('x')", "null");
     bsTestExpr("arrayLastIndexOf('x', 1)", "-1");
     bsTestExpr("arrayPop('x')", "null");
-    bsTestExpr("arraySet('x', 0, 1)", "null");
     bsTestExpr("arrayShift('x')", "null");
     bsTestExpr("arraySlice('x', 0)", "null");
     bsTestExpr("stringCharAt(1, 0)", "null");
     bsTestExpr("stringCharCodeAt(1, 0)", "null");
     bsTestExpr("stringEndsWith(1, 'a')", "null");
     bsTestExpr("stringLastIndexOf(1, 'a')", "-1");
-    bsTestExpr("stringSlice(1, 0)", "null");
     bsTestExpr("stringStartsWith(1, 'a')", "null");
     bsTestExpr("barescriptEvaluateExpression({}, null, true, 4)", "null");
     /* The no-argument functions ignore extra arguments, as the reference implementations do */

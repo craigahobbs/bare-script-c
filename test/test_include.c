@@ -45,7 +45,6 @@ static char *bsTestGzipDecode(const char *text)
 TEST(include_registry)
 {
     ASSERT_INT_EQ(bsIncludeCount(), BS_INCLUDE_COUNT);
-    ASSERT_TRUE(bsIncludeCount() > 0);
 
     /* Every bundled include has a name and decodes to a JSON script model */
     for (size_t ix = 0; ix < bsIncludeCount(); ix++) {

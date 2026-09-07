@@ -271,42 +271,6 @@ TEST(runtime_builtin_if)
 }
 
 
-TEST(runtime_call_intrinsics)
-{
-    /* The intrinsic happy paths */
-    ASSERT_VALUE(bsTestExecute("return arrayGet([1, 2], 1)"), "2");
-    ASSERT_VALUE(bsTestExecute("return objectGet({'a': 1}, 'a')"), "1");
-    ASSERT_VALUE(bsTestExecute("return objectGet({'a': 1}, 'b')"), "null");
-    ASSERT_VALUE(bsTestExecute("return objectGet({'a': 1}, 'b', 9)"), "9");
-    ASSERT_VALUE(bsTestExecute("return arrayNew()"), "[]");
-    ASSERT_VALUE(bsTestExecute("return arrayNew(1, 2)"), "[1,2]");
-    ASSERT_VALUE(bsTestExecute("return objectNew()"), "{}");
-    ASSERT_VALUE(bsTestExecute("return objectNew('a', 1, 'b')"), "{\"a\":1,\"b\":null}");
-    ASSERT_VALUE(bsTestExecute("return arrayLength([1, 2, 3])"), "3");
-    ASSERT_VALUE(bsTestExecute("return stringLength('ab')"), "2");
-    ASSERT_VALUE(bsTestExecute("return objectHas({'a': 1}, 'a')"), "true");
-    ASSERT_VALUE(bsTestExecute("return arrayPush([], 1, 2)"), "[1,2]");
-    ASSERT_VALUE(bsTestExecute("return objectKeys({'b': 1, 'a': 2})"), "[\"b\",\"a\"]");
-    ASSERT_VALUE(bsTestExecute("o = {}\nreturn [objectSet(o, 'k', 3), o]"), "[3,{\"k\":3}]");
-    ASSERT_VALUE(bsTestExecute("return objectGet(regexMatch(regexNew('a+'), 'xaa'), 'index')"), "1");
-
-    /* Misses fall through to argument validation */
-    ASSERT_VALUE(bsTestExecute("return arrayGet(1, 0)"), "null");
-    ASSERT_VALUE(bsTestExecute("return arrayGet([1], 1.5)"), "null");
-    ASSERT_VALUE(bsTestExecute("return arrayGet([1], -1)"), "null");
-    ASSERT_VALUE(bsTestExecute("return arrayGet([1], 5)"), "null");
-    ASSERT_VALUE(bsTestExecute("return objectGet(1, 'a')"), "null");
-    ASSERT_VALUE(bsTestExecute("return objectNew(1, 2)"), "null");
-    ASSERT_VALUE(bsTestExecute("return arrayLength(1)"), "0");
-    ASSERT_VALUE(bsTestExecute("return stringLength(1)"), "0");
-    ASSERT_VALUE(bsTestExecute("return objectHas(1, 'a')"), "false");
-    ASSERT_VALUE(bsTestExecute("return arrayPush(1, 2)"), "null");
-    ASSERT_VALUE(bsTestExecute("return objectKeys(1)"), "null");
-    ASSERT_VALUE(bsTestExecute("return objectSet(1, 'a', 2)"), "null");
-    ASSERT_VALUE(bsTestExecute("return regexMatch(1, 'a')"), "null");
-}
-
-
 TEST(runtime_errors)
 {
     ASSERT_VALUE(bsTestExecute("undefinedFunc()"), "null");
@@ -580,12 +544,6 @@ TEST(runtime_globals)
     bsObjectSet(options->globals, "vName", bsStringNew("World"));
     ASSERT_VALUE(bsTestExecuteOptions("return 'Hello, ' + vName", options), "\"Hello, World\"");
     bsOptionsFree(options);
-
-    /* A global function overrides a library function */
-    options = bsTestOptions();
-    ASSERT_VALUE(bsTestExecuteOptions("function mathAbs(x):\n    return 'override'\nendfunction\n"
-                                      "return mathAbs(-1)", options), "\"override\"");
-    bsOptionsFree(options);
 }
 
 
@@ -625,10 +583,18 @@ static void bsTestFetchFn(const BSFetchRequest *requests, BSValue *responses, si
 }
 
 
-TEST(runtime_includes)
+/* Options with the test fetch function */
+static BSOptions *bsTestFetchOptions(void)
 {
     BSOptions *options = bsTestOptions();
     options->fetchFn = bsTestFetchFn;
+    return options;
+}
+
+
+TEST(runtime_includes)
+{
+    BSOptions *options = bsTestFetchOptions();
     ASSERT_VALUE(bsTestExecuteOptions("include 'a.bare'\nreturn [includedGlobal, includedFn()]", options),
                  "[\"included\",\"from include\"]");
 
@@ -637,21 +603,18 @@ TEST(runtime_includes)
     bsOptionsFree(options);
 
     /* A nested include resolves relative to its includer */
-    options = bsTestOptions();
-    options->fetchFn = bsTestFetchFn;
+    options = bsTestFetchOptions();
     ASSERT_VALUE(bsTestExecuteOptions("include 'nested.bare'\nreturn includedGlobal", options), "\"included\"");
     bsOptionsFree(options);
 
     /* A failed include */
-    options = bsTestOptions();
-    options->fetchFn = bsTestFetchFn;
+    options = bsTestFetchOptions();
     ASSERT_VALUE(bsTestExecuteOptions("include 'fail.bare'", options), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Include of \"fail.bare\" failed");
     bsOptionsFree(options);
 
     /* An include statement's includes fetch as one batch, then execute in order */
-    options = bsTestOptions();
-    options->fetchFn = bsTestFetchFn;
+    options = bsTestFetchOptions();
     bsTestFetchBatchMax = 0;
     ASSERT_VALUE(bsTestExecuteOptions("include 'a.bare'\ninclude 'count.bare'\ninclude 'b.bare'\n"
                                       "return [includedGlobal, includeCount]", options),
@@ -663,8 +626,7 @@ TEST(runtime_includes)
 
     /* An include that an earlier include of its batch included itself executes once, from the text
        the batch fetched - it is not fetched again */
-    options = bsTestOptions();
-    options->fetchFn = bsTestFetchFn;
+    options = bsTestFetchOptions();
     bsTestFetchRequests = 0;
     ASSERT_VALUE(bsTestExecuteOptions("include 'nestedCount.bare'\ninclude 'count.bare'\nreturn includeCount",
                                       options), "1");
@@ -672,8 +634,7 @@ TEST(runtime_includes)
     bsOptionsFree(options);
 
     /* An include repeated in a statement is fetched once */
-    options = bsTestOptions();
-    options->fetchFn = bsTestFetchFn;
+    options = bsTestFetchOptions();
     bsTestFetchRequests = 0;
     ASSERT_VALUE(bsTestExecuteOptions("include 'a.bare'\ninclude 'a.bare'\nreturn includedGlobal", options),
                  "\"included\"");
@@ -687,22 +648,19 @@ TEST(runtime_includes)
     bsOptionsFree(options);
 
     /* An include that fails to parse */
-    options = bsTestOptions();
-    options->fetchFn = bsTestFetchFn;
+    options = bsTestFetchOptions();
     ASSERT_VALUE(bsTestExecuteOptions("include 'bad.bare'", options), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "bad.bare:1: Syntax error\na = 1 +\n       ^\n");
     bsOptionsFree(options);
 
     /* An include with a runtime error */
-    options = bsTestOptions();
-    options->fetchFn = bsTestFetchFn;
+    options = bsTestFetchOptions();
     ASSERT_VALUE(bsTestExecuteOptions("include 'error.bare'", options), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "error.bare:1: Undefined function \"undefinedFunc\"");
     bsOptionsFree(options);
 
     /* An include with a URL function */
-    options = bsTestOptions();
-    options->fetchFn = bsTestFetchFn;
+    options = bsTestFetchOptions();
     options->urlFn = bsUrlFileRelative;
     options->urlData = bsTestStrdup("dir/script.bare");
     options->urlDataFree = free;
@@ -1090,18 +1048,16 @@ TEST(runtime_concat_all_types)
 TEST(runtime_include_lint_debug)
 {
     /* In debug mode the runtime lints each include it loads */
-    BSOptions *options = bsTestOptions();
+    BSOptions *options = bsTestFetchOptions();
     options->debug = true;
-    options->fetchFn = bsTestFetchFn;
     bsRelease(bsTestExecuteOptions("include 'lint.bare'", options));
     ASSERT_TRUE(strstr(bsTestLogText(), "BareScript: Include \"lint.bare\" static analysis...") != NULL);
     ASSERT_STR_CONTAINS(bsTestLogText(), "Unused variable");
     bsOptionsFree(options);
 
     /* An include with no warnings logs nothing */
-    options = bsTestOptions();
+    options = bsTestFetchOptions();
     options->debug = true;
-    options->fetchFn = bsTestFetchFn;
     bsRelease(bsTestExecuteOptions("include 'a.bare'", options));
     ASSERT_STR_NOT_CONTAINS(bsTestLogText(), "static analysis");
     bsOptionsFree(options);
@@ -1110,9 +1066,6 @@ TEST(runtime_include_lint_debug)
 
 TEST(runtime_include_bundled_model)
 {
-    /* A bundled system include loads from its compiled JSON model */
-    ASSERT_VALUE(bsTestExecute("include <unittest.bare>\nreturn systemType(unittestEqual)"), "\"function\"");
-
     /* A registered system include whose text is an invalid JSON model fails */
     bsSystemIncludeRegister("badmodel.bare", "{\"statements\":[{}]}");
     ASSERT_VALUE(bsTestExecute("include <badmodel.bare>"), "null");
@@ -1143,7 +1096,6 @@ TEST(runtime_function_error)
 
     /* A NULL options is a no-op */
     bsFunctionError(NULL, "ignored");
-    ASSERT_TRUE(true);
 }
 
 

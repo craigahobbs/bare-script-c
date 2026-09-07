@@ -105,7 +105,7 @@ struct BSScript {
     BSValue scriptName;
     BSValue scriptLines;
     int startLineNumber;    /* the first script line's line number - bsScriptToModel re-parses with it */
-    BSValue model;          /* the parser model, if kept - a parsed script drops it once compiled */
+    BSValue model;          /* the parser model, if kept - see bsScriptForgetModel */
     BSCode code;            /* top-level bytecode */
     BSFunctionDef **functions;
     size_t functionCount;

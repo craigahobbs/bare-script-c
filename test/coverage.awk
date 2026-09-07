@@ -19,11 +19,7 @@ FNR == 1 {
     sub(/.*\//, "", file)
     sub(/\.gcov$/, "", file)
     excluding = 0
-    if (!(file in covered)) {
-        files[fileCount++] = file
-        covered[file] = 0
-        missed[file] = 0
-    }
+    files[fileCount++] = file
 }
 
 {

@@ -81,7 +81,6 @@ TEST(options_log_stdout)
 {
     /* The stdout log function writes a line - exercised for coverage */
     bsLogStdout("test-log-line", NULL);
-    ASSERT_TRUE(true);
 }
 
 

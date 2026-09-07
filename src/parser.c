@@ -13,8 +13,6 @@
 
 #include <string.h>
 
-#include "barescript/json.h"
-#include "barescript/library.h"
 #include "barescript/parser.h"
 #include "barescript/runtime.h"
 
