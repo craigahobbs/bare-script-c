@@ -1637,15 +1637,61 @@ static bool rxClassMatchFold(const RxClass *cls, uint32_t ch)
  * Precompute a class's membership for the code points 0 - 127, with the case-insensitivity flag
  * and negation applied, so an ASCII subject tests one bit instead of walking the ranges
  */
-static void rxClassFinish(RxClass *cls, unsigned flags)
+static BS_NOINLINE void rxClassFinish(RxClass *cls, unsigned flags)
 {
     cls->fold = (flags & BS_REGEX_IGNORECASE) != 0;
     memset(cls->ascii, 0, sizeof(cls->ascii));
-    for (uint32_t ch = 0; ch < 128; ch++) {
-        bool matched = cls->fold ? rxClassMatchFold(cls, ch) : rxClassMatchOne(cls, ch);
-        if (matched != cls->negate) {
-            cls->ascii[ch >> 3] |= (uint8_t) (1u << (ch & 7));
+    if (cls->fold) {
+        /* A folded class matches a code point through its canonical group's members */
+        for (uint32_t ch = 0; ch < 128; ch++) {
+            if (rxClassMatchFold(cls, ch) != cls->negate) {
+                cls->ascii[ch >> 3] |= (uint8_t) (1u << (ch & 7));
+            }
         }
+        return;
+    }
+
+    /* The predefined classes' members below 128, then the ranges' - as bits, then negated as a whole */
+    static const uint64_t digits = 0x03FF000000000000u;                 /* 0-9 */
+    static const uint64_t spaces = 0x0000000100003E00u;                 /* \t \n \v \f \r and the space */
+    static const uint64_t wordLow = 0x03FF000000000000u;                /* 0-9 */
+    static const uint64_t wordHigh = 0x07FFFFFE87FFFFFEu;               /* A-Z _ a-z */
+    uint64_t bits[2] = {0, 0};
+    unsigned classes = cls->classes;
+    if ((classes & RX_CLASS_DIGIT) != 0) {
+        bits[0] |= digits;
+    }
+    if ((classes & RX_CLASS_NOTDIGIT) != 0) {
+        bits[0] |= ~digits;
+        bits[1] = ~(uint64_t) 0;
+    }
+    if ((classes & RX_CLASS_WORD) != 0) {
+        bits[0] |= wordLow;
+        bits[1] |= wordHigh;
+    }
+    if ((classes & RX_CLASS_NOTWORD) != 0) {
+        bits[0] |= ~wordLow;
+        bits[1] |= ~wordHigh;
+    }
+    if ((classes & RX_CLASS_SPACE) != 0) {
+        bits[0] |= spaces;
+    }
+    if ((classes & RX_CLASS_NOTSPACE) != 0) {
+        bits[0] |= ~spaces;
+        bits[1] = ~(uint64_t) 0;
+    }
+    for (size_t ix = 0; ix < cls->rangeCount; ix++) {
+        for (uint32_t ch = cls->ranges[ix * 2]; ch < 128 && ch <= cls->ranges[ix * 2 + 1]; ch++) {
+            bits[ch >> 6] |= (uint64_t) 1 << (ch & 63);
+        }
+    }
+    if (cls->negate) {
+        bits[0] = ~bits[0];
+        bits[1] = ~bits[1];
+    }
+    for (size_t ix = 0; ix < 8; ix++) {
+        cls->ascii[ix] = (uint8_t) (bits[0] >> (8 * ix));
+        cls->ascii[8 + ix] = (uint8_t) (bits[1] >> (8 * ix));
     }
 }
 

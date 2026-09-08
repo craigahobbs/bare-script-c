@@ -427,6 +427,11 @@ TEST(library_datetime)
 TEST(library_regex)
 {
     bsTestExpr("systemType(regexNew('a'))", "\"regex\"");
+
+    /* The predefined classes past ASCII, and folded - which match through the class's members */
+    bsTestExpr("regexMatch(regexNew('\\\\D\\\\W\\\\S'), '\xc3\xa9\xc3\xa9\xc3\xa9') != null", "true");
+    bsTestExpr("regexMatch(regexNew('\\\\d\\\\w', 'i'), '5a') != null", "true");
+    bsTestExpr("regexMatch(regexNew('\\\\d\\\\w', 'i'), '\xc3\xa9" "a')", "null");
     bsTestExpr("regexNew('(')", "null");
     bsTestExpr("regexNew('a', 'q')", "null");
     bsTestExpr("regexNew(1)", "null");
