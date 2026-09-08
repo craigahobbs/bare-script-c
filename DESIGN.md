@@ -363,10 +363,12 @@ because the parser is itself regex-driven:
 - An unanchored pattern computes the set of code points a match can begin with - a character
   class contributes its finished membership, predefined classes included - and the search skips
   every position whose code point is not in it: over an ASCII subject with `memchr` for a set of
-  one byte and a byte table otherwise. Each alternative of an alternation carries
-  its own first set, and a wide alternation indexes its alternatives by first code point, so an
-  alternation tries only the alternatives that can begin at a position - the markdown span
-  alternation has sixteen, and a position usually admits one or two.
+  one byte and a byte table otherwise. An alternation indexes its alternatives by first code
+  point - a byte of alternative bits per ASCII code point for up to eight alternatives, a word
+  for up to sixty-four, one mask for the code points past ASCII - so it tries only the
+  alternatives that can begin at a position: the markdown span alternation has sixteen, a
+  highlight keyword list up to sixty-two, and a position usually admits one or two. A wider
+  alternation keeps a first set per alternative and tries them one at a time.
 - A quantifier whose body matches exactly one code point - `\s*`, `[0-9]+`, `.*`, the overwhelming
   majority of real patterns - scans its run in one loop and gives back one position at a time
   through a single backtrack entry, skipping the positions that cannot hold a literal that follows.

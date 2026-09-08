@@ -154,15 +154,15 @@ static inline bool rxFirstHas(const RxFirstSet *set, uint32_t code)
 
 
 /*
- * A wide alternation's alternatives indexed by first code point: "codes" holds, per ASCII code
- * point, the set of alternatives that can begin with it as a bit per alternative, so the
- * alternation tries just those, in order, instead of testing every alternative's set; "high"
- * holds the alternatives that can begin with any code point past ASCII, and "always" the
- * alternatives whose sets are not usable. Built for alternations of eight to sixty-four
- * alternatives - the markdown span alternation has sixteen, a highlight keyword list up to
- * sixty-two.
+ * An alternation's alternatives indexed by first code point: "codes" holds, per ASCII code point,
+ * the set of alternatives that can begin with it as a bit per alternative, so the alternation
+ * tries just those, in order, instead of testing every alternative's first set; "high" holds the
+ * alternatives that can begin with any code point past ASCII, and "always" the alternatives
+ * whose sets are not usable. An alternation of up to eight alternatives keeps the sets as bytes,
+ * one of up to sixty-four as words - the markdown span alternation has sixteen, a highlight
+ * keyword list up to sixty-two; a wider one keeps its first sets and tries them one at a time.
  */
-#define RX_ALT_INDEX_MIN 8
+#define RX_ALT_NARROW_MAX 8
 #define RX_ALT_INDEX_MAX 64
 
 typedef struct RxAltIndex {
@@ -170,6 +170,12 @@ typedef struct RxAltIndex {
     uint64_t high;   /* the alternatives that can begin with a code point of 128 or more */
     uint64_t always;
 } RxAltIndex;
+
+typedef struct RxAltIndexNarrow {
+    uint8_t codes[128];
+    uint8_t high;
+    uint8_t always;
+} RxAltIndexNarrow;
 
 
 static inline unsigned rxLowestBit64(uint64_t mask)
@@ -1418,8 +1424,9 @@ struct RxInst {
 typedef struct RxAlt {
     uint32_t count;
     uint32_t *branchPcs;    /* each alternative's program */
-    RxFirstSet *firsts;     /* per-alternative first sets, or NULL if none is usable */
-    RxAltIndex *index;      /* the alternatives by first code point, for a wide alternation */
+    RxFirstSet *firsts;     /* per-alternative first sets - none if unusable or indexed */
+    RxAltIndex *index;      /* the alternatives by first code point, for nine to sixty-four alternatives */
+    RxAltIndexNarrow *narrow; /* the same for up to eight alternatives */
 } RxAlt;
 
 
@@ -1763,7 +1770,8 @@ static uint32_t rxEmitAtom(RxEmit *e, RxNode *atom, unsigned *kind)
 
 /*
  * Each alternative's first set, so an alternation tries only the alternatives that can start at a
- * position - and, for a wide alternation, an index of the alternatives by first code point
+ * position - as an index of the alternatives by first code point, or one set at a time for an
+ * alternation too wide to index
  */
 static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
 {
@@ -1776,33 +1784,46 @@ static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
     }
     alt->firsts = NULL;
     alt->index = NULL;
+    alt->narrow = NULL;
     if (!usable) {
         free(firsts);
         return;
     }
-    alt->firsts = firsts;
-    if (count < RX_ALT_INDEX_MIN || count > RX_ALT_INDEX_MAX) {
+    if (count > RX_ALT_INDEX_MAX) {
+        alt->firsts = firsts;
         return;
     }
-    RxAltIndex *index = bsAlloc(sizeof(RxAltIndex));
-    memset(index, 0, sizeof(*index));
+    RxAltIndex index;
+    memset(&index, 0, sizeof(index));
     for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
         const RxFirstSet *first = &firsts[ixBranch];
         uint64_t bit = (uint64_t) 1 << ixBranch;
         if (first->any) {
-            index->always |= bit;
+            index.always |= bit;
             continue;
         }
         if (first->high || first->bits[2] != 0 || first->bits[3] != 0) {
-            index->high |= bit;
+            index.high |= bit;
         }
         for (unsigned word = 0; word < 2; word++) {
             for (uint64_t bits = first->bits[word]; bits != 0; bits &= bits - 1) {
-                index->codes[word * 64 + rxLowestBit64(bits)] |= bit;
+                index.codes[word * 64 + rxLowestBit64(bits)] |= bit;
             }
         }
     }
-    alt->index = index;
+    free(firsts);
+    if (count > RX_ALT_NARROW_MAX) {
+        alt->index = bsAlloc(sizeof(RxAltIndex));
+        *alt->index = index;
+        return;
+    }
+    RxAltIndexNarrow *narrow = bsAlloc(sizeof(RxAltIndexNarrow));
+    for (size_t code = 0; code < 128; code++) {
+        narrow->codes[code] = (uint8_t) index.codes[code];
+    }
+    narrow->high = (uint8_t) index.high;
+    narrow->always = (uint8_t) index.always;
+    alt->narrow = narrow;
 }
 
 
@@ -1836,6 +1857,7 @@ static void rxEmitNode(RxEmit *e, RxNode *node)
         e->alts[altIndex].count = (uint32_t) count;
         e->alts[altIndex].firsts = NULL;
         e->alts[altIndex].index = NULL;
+        e->alts[altIndex].narrow = NULL;
         if (!e->backward) {
             /* A first set describes a forward match; backward, every alternative is tried */
             rxEmitAltFirsts(&e->alts[altIndex], node, e->flags);
@@ -1980,6 +2002,7 @@ static void rxProgramFree(BSRegex *regex)
         free(regex->alts[ix].branchPcs);
         free(regex->alts[ix].firsts);
         free(regex->alts[ix].index);
+        free(regex->alts[ix].narrow);
     }
     free(regex->alts);
     free(regex->repeatGroups);
@@ -2053,7 +2076,7 @@ static void rxRepeatEnter(RxState *state, uint32_t slot, size_t pos)
 }
 
 
-/* Whether an alternative can begin at a position, by its first set */
+/* Whether an alternative of an alternation too wide to index can begin at a position, by its first set */
 static inline bool rxAltViable(const RxAlt *alt, size_t ix, bool atEnd, uint32_t code)
 {
     const RxFirstSet *firsts = alt->firsts;
@@ -2200,16 +2223,15 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
             if (count <= RX_ALT_INDEX_MAX) {
                 /* The alternatives that can begin here, as a mask; the rest wait on the stack */
                 uint64_t mask;
-                const RxAltIndex *index = alt->index;
-                if (index != NULL) {
+                if (alt->narrow != NULL) {
+                    const RxAltIndexNarrow *narrow = alt->narrow;
+                    mask = narrow->always | (atEnd ? 0 : (code < 128 ? narrow->codes[code] : narrow->high));
+                } else if (alt->index != NULL) {
+                    const RxAltIndex *index = alt->index;
                     mask = index->always | (atEnd ? 0 : (code < 128 ? index->codes[code] : index->high));
                 } else {
-                    mask = 0;
-                    for (size_t ix = 0; ix < count; ix++) {
-                        if (rxAltViable(alt, ix, atEnd, code)) {
-                            mask |= (uint64_t) 1 << ix;
-                        }
-                    }
+                    /* No alternative's first set is usable: all of them */
+                    mask = count == 64 ? UINT64_MAX : ((uint64_t) 1 << count) - 1;
                 }
                 if (mask == 0) {
                     goto backtrack;

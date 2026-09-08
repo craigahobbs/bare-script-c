@@ -176,8 +176,9 @@ general call path.
 `src/regex.c` parses to a node tree, compiles the tree to a linear program, frees the tree, and
 matches by running the program in one loop with an explicit backtrack stack, over Unicode code
 points. It is **on the parser's hot path**, so its performance properties are load-bearing, not
-decoration: anchored-pattern optimization, first sets per alternative (indexed by code point for
-wide alternations; a predefined class contributes its ASCII members), the start-position scan by
+decoration: anchored-pattern optimization, alternations indexed by first code point (a byte or
+a word of alternative bits per ASCII code point; a predefined class contributes its ASCII
+members), the start-position scan by
 memchr or a byte table over an ASCII subject, single-code-point quantifiers that scan in one loop and give back through one
 backtrack entry, a capture and counter undo trail, and a step budget. Syntax is the JavaScript
 subset BareScript exposes - see DESIGN.md's **Regular Expressions** table.

@@ -687,6 +687,9 @@ TEST(regex_program)
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "bx", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "bc", 0), "bc");
     bsRelease(wide);
+    wide = bsTestRepeat("(?:a", "|b|a", 33, "|x*)c");
+    ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "zc", 0), "c");
+    bsRelease(wide);
 }
 
 
