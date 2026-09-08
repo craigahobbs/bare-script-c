@@ -948,34 +948,25 @@ static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t sl
  * function value carrying that intrinsic id, so a script function of the same name is not it - a
  * locals object must not shadow the name, and the arguments must be the happy-path shape. Any
  * other case returns false and the general call runs, which validates and reports as the library
- * function would. They stay out of line so the dispatch loop's own code does not grow.
+ * function would. The two that allocate stay out of line so the dispatch loop's code does not grow.
  */
 
-/* The intrinsic call's arguments, when the site's global is the library function "id" and no locals
-   object shadows the name - "argCount" of them from the DATA word after the instruction */
-static inline const BSInst *bsIntrinArgs(const BSCode *code, const BSInst *inst, BSValue locals, BSOptions *options,
-                                         unsigned char id)
+/*
+ * The intrinsic call's arguments - "argCount" of them from the DATA word after the instruction -
+ * when the site's global is the library function "id": "globals" is the activation's globals
+ * object, or NULL when a locals object could shadow the name, and the site's cache must be warm
+ * for it, its slot pointer then still valid; the intrinsic id catches an in-place override that
+ * does not bump generation. NULL sends the call to the general path, which resolves the site.
+ */
+static inline const BSInst *bsIntrinArgs(const BSCode *code, const BSInst *inst, const BSObject *globals,
+                                         const BSOptions *options, unsigned char id)
 {
-    BSCallCache *cache = &code->caches[inst->b];
-    /*
-     * A warm site with no locals object: the slot pointer is still valid, and the intrinsic id
-     * catches an in-place override that does not bump generation.
-     */
-    if (locals.type != BS_OBJECT && options->globals.type == BS_OBJECT) {
-        BSObject *globals = options->globals.u.object;
-        if (cache->epoch == options->cacheEpoch && cache->gen == globals->generation) {
-            BSValue *hit = cache->slot;
-            if (hit != NULL && hit->type == BS_FUNCTION && hit->u.function->intrinsic == id) {
-                return inst + 1;
-            }
-        }
-    }
-    BSValue name = code->constants[cache->nameIndex];
-    if (locals.type == BS_OBJECT && bsObjectHasString(locals, name)) {
+    const BSCallCache *cache = &code->caches[inst->b];
+    if (globals == NULL || cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
         return NULL;
     }
-    BSValue *slot = bsGlobalSlot(cache, name, options);
-    if (slot == NULL || slot->type != BS_FUNCTION || slot->u.function->intrinsic != id) {
+    const BSValue *hit = cache->slot;
+    if (hit == NULL || hit->type != BS_FUNCTION || hit->u.function->intrinsic != id) {
         return NULL;
     }
     return inst + 1;
@@ -989,10 +980,10 @@ static inline void bsIntrinResult(const BSInst *inst, BSValue *regs, BSValue val
     }
 }
 
-static BS_NOINLINE bool bsIntrinArrayGet(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+static inline bool bsIntrinArrayGet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                          BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_ARRAY_GET);
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_ARRAY_GET);
     size_t index;
     if (args == NULL) {
         return false;
@@ -1006,10 +997,10 @@ static BS_NOINLINE bool bsIntrinArrayGet(const BSCode *code, const BSInst *inst,
     return true;
 }
 
-static BS_NOINLINE bool bsIntrinArrayLength(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+static inline bool bsIntrinArrayLength(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                             BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_ARRAY_LENGTH);
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_ARRAY_LENGTH);
     if (args == NULL) {
         return false;
     }
@@ -1021,10 +1012,10 @@ static BS_NOINLINE bool bsIntrinArrayLength(const BSCode *code, const BSInst *in
     return true;
 }
 
-static BS_NOINLINE bool bsIntrinArrayPush(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+static BS_NOINLINE bool bsIntrinArrayPush(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_ARRAY_PUSH);
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_ARRAY_PUSH);
     if (args == NULL) {
         return false;
     }
@@ -1037,10 +1028,10 @@ static BS_NOINLINE bool bsIntrinArrayPush(const BSCode *code, const BSInst *inst
     return true;
 }
 
-static BS_NOINLINE bool bsIntrinArraySet(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+static inline bool bsIntrinArraySet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                          BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_ARRAY_SET);
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_ARRAY_SET);
     size_t index;
     if (args == NULL) {
         return false;
@@ -1056,10 +1047,10 @@ static BS_NOINLINE bool bsIntrinArraySet(const BSCode *code, const BSInst *inst,
     return true;
 }
 
-static BS_NOINLINE bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+static inline bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_OBJECT_GET);
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_OBJECT_GET);
     if (args == NULL) {
         return false;
     }
@@ -1075,10 +1066,10 @@ static BS_NOINLINE bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst
     return true;
 }
 
-static BS_NOINLINE bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+static inline bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_OBJECT_SET);
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_OBJECT_SET);
     if (args == NULL) {
         return false;
     }
@@ -1100,10 +1091,10 @@ static BS_NOINLINE bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst
     return true;
 }
 
-static BS_NOINLINE bool bsIntrinStringLength(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+static inline bool bsIntrinStringLength(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                              BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_STRING_LENGTH);
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_STRING_LENGTH);
     if (args == NULL) {
         return false;
     }
@@ -1115,10 +1106,10 @@ static BS_NOINLINE bool bsIntrinStringLength(const BSCode *code, const BSInst *i
     return true;
 }
 
-static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *inst, BSValue *regs, BSValue locals,
+static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                             BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, locals, options, BS_INTRIN_STRING_SLICE);
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_STRING_SLICE);
     size_t begin;
     size_t end;
     if (args == NULL) {
@@ -1256,6 +1247,10 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
     }
     BSValue locals = scope != NULL ? scope->object : bsNull();
 
+    /* The globals an intrinsic call site's cache is trusted against - none if a locals object could shadow the name */
+    const BSObject *intrinGlobals = (locals.type != BS_OBJECT && options->globals.type == BS_OBJECT) ?
+        options->globals.u.object : NULL;
+
     bool countStatements = script != NULL && !script->system;
     BSValue coverage = bsNull();
     bool hasCoverage = false;
@@ -1384,7 +1379,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 
 #define BS_CALL_INTRIN(name, function) \
         BS_CASE(name) \
-            if (!function(code, inst, regs, locals, options)) { \
+            if (!function(code, inst, regs, intrinGlobals, options)) { \
                 goto call_general; \
             } \
             pc++; \

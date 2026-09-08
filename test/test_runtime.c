@@ -1147,6 +1147,21 @@ TEST(runtime_intrinsic_opcodes)
                  "[null,null,0,null,null,0,null,null,null]");
     ASSERT_VALUE(bsTestExecute("return arrayGet([1], 0.5)"), "null");
 
+    /* A cold site takes the general call, which resolves it; a warm site's handler sees the shapes
+       itself. The first call warms every site with the happy path; each call after it misses one way. */
+    ASSERT_VALUE(bsTestExecute(
+        "function f(a, i, o, k, s, e):\n"
+        "    stringSlice(s, i, e)\n"
+        "    return [arrayGet(a, i), arrayLength(a), arrayPush(a, 2), arraySet(a, i, 1), objectGet(o, k), "
+        "objectSet(o, k, 1), stringLength(s), stringSlice(s, i, e), stringSlice(s, i)]\n"
+        "endfunction\n"
+        "f([1], 0, {'k': 3}, 'k', 'abc', 1)\n"
+        "return [f([1], 1, {}, 'k', 'ab', 0), f('x', 'y', 1, 'k', 1, 'z'), f([1], 0.5, {}, 'k', 'abc', 'x'), "
+        "f([1], 0, {}, 'k', 'abc', 4), f([1], 0, {}, 'k', 'abc', 'x'), f([1], 'y', {}, 'k', 'abc', 1)]"),
+        "[[null,1,[1,1],1,null,1,2,\"\",\"b\"],[null,0,null,null,null,null,0,null,null],"
+        "[null,1,[1,2],null,null,1,3,null,null],[1,1,[1,2],1,null,1,3,null,\"abc\"],"
+        "[1,1,[1,2],1,null,1,3,null,\"abc\"],[null,1,[1,2],null,null,1,3,null,null]]");
+
     /* A script function of the same name shadows the intrinsic - the site's global is not the library's */
     ASSERT_VALUE(bsTestExecute(
         "function arrayGet(a, i):\n    return 'mine'\nendfunction\n"
