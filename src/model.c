@@ -462,7 +462,7 @@ uint32_t bsAstExpr(BSAst *ast, BSValue model)
         /* The conditional reads its first three arguments and no more, so a fourth of any shape stands */
         BSValue args = bsObjectGetString(member, bsKeys.args);
         size_t argCount = bsArrayCount(args);
-        if (argCount > 3 && strcmp(bsStringData(name), "if") == 0) {
+        if (argCount > 3 && bsNameIs(bsStringData(name), "if")) {
             argCount = 3;
         }
         uint32_t node = bsAstNode(ast, BS_NODE_CALL);
@@ -1016,11 +1016,11 @@ static void bsEmitExprOperand(BSEmit *e, const BSAst *ast, uint32_t id, BSOperan
     case BS_NODE_VARIABLE: {
         BSValue name = bsNodeText(ast, node);
         const char *text = bsStringData(name);
-        if (strcmp(text, "null") == 0) {
+        if (bsNameIs(text, "null")) {
             *operand = e->nullConst;
             return;
         }
-        if (strcmp(text, "true") == 0 || strcmp(text, "false") == 0) {
+        if (bsNameIs(text, "true") || bsNameIs(text, "false")) {
             *operand = bsEmitBool(e, text[0] == 't');
             return;
         }
@@ -1166,7 +1166,7 @@ static uint8_t bsCallOpcode(const char *name, size_t argCount)
         {"stringLength", 1, 1, BS_OP_CALL_STRING_LENGTH}, {"stringSlice", 2, 3, BS_OP_CALL_STRING_SLICE}
     };
     for (size_t ix = 0; ix < sizeof(table) / sizeof(table[0]); ix++) {
-        if (argCount >= table[ix].argMin && argCount <= table[ix].argMax && strcmp(table[ix].name, name) == 0) {
+        if (argCount >= table[ix].argMin && argCount <= table[ix].argMax && bsNameIs(name, table[ix].name)) {
             return table[ix].opcode;
         }
     }
@@ -1211,7 +1211,7 @@ static void bsEmitCallTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t ds
 /* Whether a call node is the conditional, if(cond, then, else) */
 static bool bsNodeIsIf(const BSAst *ast, const BSNode *node)
 {
-    return strcmp(bsStringData(bsNodeText(ast, node)), "if") == 0;
+    return bsNameIs(bsStringData(bsNodeText(ast, node)), "if");
 }
 
 
@@ -1288,7 +1288,7 @@ static void bsEmitExprTo(BSEmit *e, const BSAst *ast, uint32_t id, uint16_t dst)
         /* A global variable or an unassigned local loads into dst; a constant or an assigned local moves */
         BSValue name = bsNodeText(ast, node);
         const char *text = bsStringData(name);
-        if (strcmp(text, "null") != 0 && strcmp(text, "true") != 0 && strcmp(text, "false") != 0) {
+        if (!bsNameIs(text, "null") && !bsNameIs(text, "true") && !bsNameIs(text, "false")) {
             int slot = bsSlotFind(e, name);
             if (slot < 0) {
                 bsEmitInst(e, BS_OP_LOAD_NAME, dst, bsEmitSite(e, name), 0);

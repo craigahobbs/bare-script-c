@@ -365,6 +365,12 @@ BSValue bsStringIntern(const char *data, size_t size);
 /* Reuse an interned string if present; otherwise a new ordinary string. Does not grow the table. */
 BSValue bsStringInternExisting(const char *data, size_t size);
 
+/* Whether a name is the word - a first-character test before the compare, the names rarely being it */
+static inline bool bsNameIs(const char *name, const char *word)
+{
+    return name[0] == word[0] && strcmp(name, word) == 0;
+}
+
 /*
  * Append a value's string representation to a string that nothing else references - the caller
  * holds its only reference and has checked that - growing the allocation in place. Returns the

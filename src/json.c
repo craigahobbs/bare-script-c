@@ -1140,7 +1140,7 @@ static uint32_t bsJSONReadExpr(BSJSONParser *parser, BSAst *ast, int depth)
             return 0;
         }
         /* A malformed argument past the three the conditional reads is not one it can see */
-        bool isIf = strcmp(bsStringData(ast->strings[ast->nodes[node].text - 1]), "if") == 0;
+        bool isIf = bsNameIs(bsStringData(ast->strings[ast->nodes[node].text - 1]), "if");
         if (context.failed && !(isIf && context.failedAt >= 3)) {
             return 0;
         }
