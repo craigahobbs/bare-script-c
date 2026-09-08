@@ -418,21 +418,6 @@ uint8_t bsUnaryOpcode(const char *op)
 }
 
 
-/* The nodes of the expression models in "args" - the conditional's first three, which are all it reads */
-static bool bsAstArgs(BSAst *ast, uint32_t node, BSValue args, size_t argCount)
-{
-    uint32_t tail = 0;
-    for (size_t ix = 0; ix < argCount; ix++) {
-        uint32_t arg = bsAstExpr(ast, bsArrayGet(args, ix));
-        if (arg == 0) {
-            return false;
-        }
-        bsAstAppend(ast, &ast->nodes[node].a, &tail, arg);
-    }
-    return true;
-}
-
-
 uint32_t bsAstExpr(BSAst *ast, BSValue model)
 {
     BSValue member;
@@ -470,6 +455,7 @@ uint32_t bsAstExpr(BSAst *ast, BSValue model)
         if (name.type != BS_STRING) {
             return 0;
         }
+        /* The conditional reads its first three arguments and no more, so a fourth of any shape stands */
         BSValue args = bsObjectGetString(member, bsKeys.args);
         size_t argCount = bsArrayCount(args);
         if (argCount > 3 && strcmp(bsStringData(name), "if") == 0) {
@@ -478,7 +464,15 @@ uint32_t bsAstExpr(BSAst *ast, BSValue model)
         uint32_t node = bsAstNode(ast, BS_NODE_CALL);
         ast->nodes[node].text = bsAstString(ast, bsInternName(name));
         ast->nodes[node].b = (uint32_t) argCount;
-        return bsAstArgs(ast, node, args, argCount) ? node : 0;
+        uint32_t tail = 0;
+        for (size_t ix = 0; ix < argCount; ix++) {
+            uint32_t arg = bsAstExpr(ast, bsArrayGet(args, ix));
+            if (arg == 0) {
+                return 0;
+            }
+            bsAstAppend(ast, &ast->nodes[node].a, &tail, arg);
+        }
+        return node;
     }
     if (BS_KIND(kind, binary)) {
         BSValue op = bsObjectGetString(member, bsKeys.op);
@@ -1526,13 +1520,11 @@ static void bsEmitFunction(BSEmit *e, const BSAst *ast, uint32_t id)
     }
 
     /* The body's statements, indexed for the definite-assignment analysis */
+    uint32_t *statements = NULL;
     size_t count = 0;
+    size_t capacity = 0;
     for (uint32_t statement = node->a; statement != 0; statement = ast->nodes[statement].next) {
-        count++;
-    }
-    uint32_t *statements = bsAlloc((count + 1) * sizeof(uint32_t));
-    count = 0;
-    for (uint32_t statement = node->a; statement != 0; statement = ast->nodes[statement].next) {
+        BS_GROW(statements, count, capacity, 16);
         statements[count++] = statement;
     }
     for (size_t ix = 0; ix < count; ix++) {
