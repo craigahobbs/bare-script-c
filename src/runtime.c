@@ -957,6 +957,19 @@ static inline const BSInst *bsIntrinArgs(const BSCode *code, const BSInst *inst,
                                          unsigned char id)
 {
     BSCallCache *cache = &code->caches[inst->b];
+    /*
+     * A warm site with no locals object: the slot pointer is still valid, and the intrinsic id
+     * catches an in-place override that does not bump generation.
+     */
+    if (locals.type != BS_OBJECT && options->globals.type == BS_OBJECT) {
+        BSObject *globals = options->globals.u.object;
+        if (cache->epoch == options->cacheEpoch && cache->gen == globals->generation) {
+            BSValue *hit = cache->slot;
+            if (hit != NULL && hit->type == BS_FUNCTION && hit->u.function->intrinsic == id) {
+                return inst + 1;
+            }
+        }
+    }
     BSValue name = code->constants[cache->nameIndex];
     if (locals.type == BS_OBJECT && bsObjectHasString(locals, name)) {
         return NULL;

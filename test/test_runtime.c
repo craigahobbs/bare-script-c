@@ -211,6 +211,14 @@ TEST(runtime_functions)
 
     /* An override of a library function must not keep using the intrinsic */
     ASSERT_VALUE(bsTestExecute("function mathSqrt(x):\n    return x\nendfunction\nreturn mathSqrt(9)"), "9");
+    /* Same call site after an in-place override - the warm cache still holds, generation unchanged */
+    ASSERT_VALUE(bsTestExecute(
+        "i = 0\nr = 0\nwhile i < 2:\n    if i == 1:\n        arrayGet = 1\n    endif\n"
+        "    r = arrayGet([9], 0)\n    i = i + 1\nendwhile\nreturn r"), "null");
+    ASSERT_VALUE(bsTestExecute(
+        "i = 0\nr = 0\nwhile i < 2:\n    if i == 1:\n        function arrayGet(a, i):\n"
+        "            return 99\n        endfunction\n    endif\n"
+        "    r = arrayGet([9], 0)\n    i = i + 1\nendwhile\nreturn r"), "99");
     ASSERT_VALUE(bsTestExecute("function objectHas(o, k):\n    return 'ov'\nendfunction\n"
                                "return objectHas({}, 'a')"), "\"ov\"");
     ASSERT_VALUE(bsTestExecute("function objectSet(o, k, v):\n    return 'ov'\nendfunction\n"
