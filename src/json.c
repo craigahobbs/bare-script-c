@@ -912,10 +912,11 @@ static uint32_t bsJSONReadExpr(BSJSONParser *parser, BSAst *ast, int depth);
 static uint32_t bsJSONReadStatement(BSJSONParser *parser, BSAst *ast, int depth);
 
 
-/* A node under construction: the arena, the node, and the tail of the list it is collecting */
+/* A node under construction: the arena, the node, and the list it is collecting - its "a" or "b" */
 typedef struct BSJSONNode {
     BSAst *ast;
     uint32_t node;
+    bool second;       /* the list is the node's "b" */
     uint32_t tail;
     uint32_t count;    /* the elements read, the malformed ones included */
     uint32_t failedAt; /* the index of the first malformed element, when "failed" */
@@ -923,14 +924,21 @@ typedef struct BSJSONNode {
 } BSJSONNode;
 
 
-/* Append a node to the list of "context" - the node's "a" list */
+/* The first node of the list "context" collects */
+static uint32_t *bsJSONNodeHead(BSJSONNode *context)
+{
+    BSNode *node = &context->ast->nodes[context->node];
+    return context->second ? &node->b : &node->a;
+}
+
+
+/* Append a node to the list of "context" */
 static void bsJSONNodeAppend(BSJSONNode *context, uint32_t node)
 {
-    BSAst *ast = context->ast;
     if (context->tail == 0) {
-        ast->nodes[context->node].a = node;
+        *bsJSONNodeHead(context) = node;
     } else {
-        ast->nodes[context->tail].next = node;
+        context->ast->nodes[context->tail].next = node;
     }
     context->tail = node;
     context->count++;
@@ -951,7 +959,7 @@ static BS_NOINLINE bool bsJSONReadElements(BSJSONParser *parser, int depth,
     parser->offset++;
     context->tail = 0;
     context->count = 0;
-    context->ast->nodes[context->node].a = 0;
+    *bsJSONNodeHead(context) = 0;
     if (bsJSONSkipTake(parser, ']')) {
         return true;
     }
@@ -1104,7 +1112,7 @@ static uint32_t bsJSONReadExpr(BSJSONParser *parser, BSAst *ast, int depth)
     bsRelease(decoded);
 
     uint32_t node = 0;
-    BSJSONNode context = {ast, 0, 0, 0, 0, false};
+    BSJSONNode context = {.ast = ast};
     switch (key) {
     case BS_MKEY_NUMBER: {
         BSValue number;
@@ -1175,10 +1183,11 @@ static uint32_t bsJSONReadExpr(BSJSONParser *parser, BSAst *ast, int depth)
 }
 
 
-/* The context of a statement under construction - its node, and the argument and statement lists */
+/* A statement under construction: its node collecting its "a" list, and a function's argument names, its "b" */
 typedef struct BSJSONStatement {
-    BSJSONNode node;   /* the statement, collecting its "a" list */
-    BSJSONNode args;   /* a function's argument names - the "b" list, so a node of its own */
+    BSJSONNode node;
+    BSJSONNode args;
+    bool statements; /* a function's statements were given */
 } BSJSONStatement;
 
 
@@ -1229,7 +1238,7 @@ static BS_NOINLINE bool bsJSONIncludeMember(BSJSONParser *parser, BSModelKey key
 static BS_NOINLINE bool bsJSONReadIncludeElement(BSJSONParser *parser, int depth, BSJSONNode *context)
 {
     uint32_t item = bsAstNode(context->ast, BS_NODE_INCLUDE_ITEM);
-    BSJSONNode itemContext = {context->ast, item, 0, 0, 0, false};
+    BSJSONNode itemContext = {.ast = context->ast, .node = item};
     if (!bsJSONReadMembers(parser, depth, bsJSONIncludeMember, &itemContext) || context->ast->nodes[item].text == 0) {
         return false;
     }
@@ -1299,28 +1308,22 @@ static BS_NOINLINE bool bsJSONStatementMember(BSJSONParser *parser, BSModelKey k
             if (!bsJSONPeek(parser, '[')) {
                 return bsJSONSkipValue(parser, depth, NULL);
             }
-            if (!bsJSONReadElements(parser, depth, bsJSONReadArgNameElement, &context->args)) {
-                return false;
-            }
-            ast->nodes[context->node.node].b = ast->nodes[context->args.node].a;
-            return !context->args.failed;
+            return bsJSONReadElements(parser, depth, bsJSONReadArgNameElement, &context->args) &&
+                !context->args.failed;
         }
         if (key == BS_MKEY_STATEMENTS) {
             if (!bsJSONPeek(parser, '[')) {
                 return false;
             }
-            if (!bsJSONReadElements(parser, depth, bsJSONReadStatementElement, &context->node)) {
-                return false;
-            }
-            node = &ast->nodes[context->node.node];
-            node->flag |= 2; /* the statements were given */
-            return !context->node.failed;
+            context->statements = true;
+            return bsJSONReadElements(parser, depth, bsJSONReadStatementElement, &context->node) &&
+                !context->node.failed;
         }
         if (key == BS_MKEY_LAST_ARG_ARRAY) {
             if (!bsJSONSkipValue(parser, depth, &truth)) {
                 return false;
             }
-            ast->nodes[context->node.node].flag = (uint8_t) ((ast->nodes[context->node.node].flag & 2) | truth);
+            ast->nodes[context->node.node].flag = truth;
             return true;
         }
         break;
@@ -1384,8 +1387,7 @@ static uint32_t bsJSONReadStatement(BSJSONParser *parser, BSAst *ast, int depth)
         return 0;
     }
     uint32_t node = bsAstNode(ast, kind);
-    uint32_t args = kind == BS_NODE_FUNCTION ? bsAstNode(ast, BS_NODE_ARG) : 0;
-    BSJSONStatement context = {{ast, node, 0, 0, 0, false}, {ast, args, 0, 0, 0, false}};
+    BSJSONStatement context = {.node = {.ast = ast, .node = node}, .args = {.ast = ast, .node = node, .second = true}};
     if (!bsJSONReadMembers(parser, depth + 1, bsJSONStatementMember, &context)) {
         return 0;
     }
@@ -1405,8 +1407,7 @@ static uint32_t bsJSONReadStatement(BSJSONParser *parser, BSAst *ast, int depth)
         complete = true;
         break;
     case BS_NODE_FUNCTION:
-        complete = built->text != 0 && (built->flag & 2) != 0;
-        ast->nodes[node].flag &= 1;
+        complete = built->text != 0 && context.statements;
         break;
     default:
         complete = built->a != 0;
