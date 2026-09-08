@@ -5,9 +5,7 @@
  * A targeted JSON encoder/decoder for BareScript
  */
 
-#include <ctype.h>
 #include <math.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "barescript/json.h"
@@ -216,6 +214,13 @@ static bool bsJSONError(BSJSONParser *parser, const char *error, size_t offset)
 }
 
 
+static bool bsJSONStringError(BSJSONParser *parser, BSStringBuilder *sb, const char *error, size_t offset)
+{
+    bsSBFree(sb);
+    return bsJSONError(parser, error, offset);
+}
+
+
 static void bsJSONSkipSpace(BSJSONParser *parser)
 {
     while (parser->offset < parser->size) {
@@ -225,6 +230,18 @@ static void bsJSONSkipSpace(BSJSONParser *parser)
         }
         parser->offset++;
     }
+}
+
+
+/* Skip space and consume "ch" when it is next. True if it was taken. */
+static bool bsJSONSkipTake(BSJSONParser *parser, char ch)
+{
+    bsJSONSkipSpace(parser);
+    if (parser->offset < parser->size && parser->text[parser->offset] == ch) {
+        parser->offset++;
+        return true;
+    }
+    return false;
 }
 
 
@@ -291,8 +308,7 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey
     char utf8[4];
     while (true) {
         if (parser->offset >= parser->size) {
-            bsSBFree(&sb);
-            return bsJSONError(parser, "Unterminated string starting at", begin);
+            return bsJSONStringError(parser, &sb, "Unterminated string starting at", begin);
         }
         char ch = parser->text[parser->offset];
         if (ch == '"') {
@@ -301,8 +317,7 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey
         }
         if (ch != '\\') {
             if ((unsigned char) ch < 0x20) {
-                bsSBFree(&sb);
-                return bsJSONError(parser, "Invalid control character at", parser->offset);
+                return bsJSONStringError(parser, &sb, "Invalid control character at", parser->offset);
             }
             bsSBAppendChar(&sb, ch);
             parser->offset++;
@@ -312,8 +327,7 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey
         size_t escapeOffset = parser->offset;
         parser->offset++;
         if (parser->offset >= parser->size) {
-            bsSBFree(&sb);
-            return bsJSONError(parser, "Unterminated string starting at", begin);
+            return bsJSONStringError(parser, &sb, "Unterminated string starting at", begin);
         }
         char escape = parser->text[parser->offset++];
         if (bsJSONUnescape[(unsigned char) escape] != '\0') {
@@ -321,8 +335,7 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey
         } else if (escape == 'u') {
             uint32_t codePoint;
             if (!bsJSONHex4(parser, &codePoint)) {
-                bsSBFree(&sb);
-                return bsJSONError(parser, "Invalid \\uXXXX escape", escapeOffset + 1);
+                return bsJSONStringError(parser, &sb, "Invalid \\uXXXX escape", escapeOffset + 1);
             }
 
             /* Combine a surrogate pair */
@@ -344,8 +357,7 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey
             }
             bsSBAppend(&sb, utf8, bsUTF8Encode(codePoint, utf8));
         } else {
-            bsSBFree(&sb);
-            return bsJSONError(parser, "Invalid \\escape", escapeOffset);
+            return bsJSONStringError(parser, &sb, "Invalid \\escape", escapeOffset);
         }
     }
 
@@ -364,19 +376,15 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result);
  */
 static int bsJSONSeparator(BSJSONParser *parser, char close)
 {
-    bsJSONSkipSpace(parser);
-    if (parser->offset < parser->size && parser->text[parser->offset] == close) {
-        parser->offset++;
+    if (bsJSONSkipTake(parser, close)) {
         return 1;
     }
     if (parser->offset >= parser->size || parser->text[parser->offset] != ',') {
         bsJSONError(parser, "Expecting ',' delimiter", parser->offset);
         return -1;
     }
-    size_t commaOffset = parser->offset;
-    parser->offset++;
-    bsJSONSkipSpace(parser);
-    if (parser->offset < parser->size && parser->text[parser->offset] == close) {
+    size_t commaOffset = parser->offset++;
+    if (bsJSONSkipTake(parser, close)) {
         bsJSONError(parser, close == ']' ? "Illegal trailing comma before end of array" :
                     "Illegal trailing comma before end of object", commaOffset);
         return -1;
@@ -389,9 +397,7 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
 {
     parser->offset++;
     BSValue array = bsArrayNew();
-    bsJSONSkipSpace(parser);
-    if (parser->offset < parser->size && parser->text[parser->offset] == ']') {
-        parser->offset++;
+    if (bsJSONSkipTake(parser, ']')) {
         *result = array;
         return true;
     }
@@ -426,12 +432,10 @@ static bool bsJSONDecodeKey(BSJSONParser *parser, BSValue *key)
     if (!bsJSONDecodeString(parser, key, true)) {
         return false;
     }
-    bsJSONSkipSpace(parser);
-    if (parser->offset >= parser->size || parser->text[parser->offset] != ':') {
+    if (!bsJSONSkipTake(parser, ':')) {
         bsRelease(*key);
         return bsJSONError(parser, "Expecting ':' delimiter", parser->offset);
     }
-    parser->offset++;
     return true;
 }
 
@@ -440,9 +444,7 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
 {
     parser->offset++;
     BSValue object = bsObjectNew();
-    bsJSONSkipSpace(parser);
-    if (parser->offset < parser->size && parser->text[parser->offset] == '}') {
-        parser->offset++;
+    if (bsJSONSkipTake(parser, '}')) {
         *result = object;
         return true;
     }
@@ -474,6 +476,14 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
 }
 
 
+static void bsJSONScanDigits(const char *text, size_t size, size_t *ix)
+{
+    while (*ix < size && text[*ix] >= '0' && text[*ix] <= '9') {
+        (*ix)++;
+    }
+}
+
+
 /*
  * Decode a number
  *
@@ -497,17 +507,13 @@ static bool bsJSONDecodeNumber(BSJSONParser *parser, BSValue *result)
     if (text[ix] == '0') {
         ix++;
     } else if (text[ix] >= '1' && text[ix] <= '9') {
-        while (ix < size && isdigit((unsigned char) text[ix])) {
-            ix++;
-        }
+        bsJSONScanDigits(text, size, &ix);
     } else {
         return bsJSONError(parser, "Expecting value", begin);
     }
-    if (ix + 1 < size && text[ix] == '.' && isdigit((unsigned char) text[ix + 1])) {
+    if (ix + 1 < size && text[ix] == '.' && text[ix + 1] >= '0' && text[ix + 1] <= '9') {
         ix += 2;
-        while (ix < size && isdigit((unsigned char) text[ix])) {
-            ix++;
-        }
+        bsJSONScanDigits(text, size, &ix);
     }
     if (ix < size && (text[ix] == 'e' || text[ix] == 'E')) {
         size_t save = ix;
@@ -515,10 +521,8 @@ static bool bsJSONDecodeNumber(BSJSONParser *parser, BSValue *result)
         if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
             ix++;
         }
-        if (ix < size && isdigit((unsigned char) text[ix])) {
-            while (ix < size && isdigit((unsigned char) text[ix])) {
-                ix++;
-            }
+        if (ix < size && text[ix] >= '0' && text[ix] <= '9') {
+            bsJSONScanDigits(text, size, &ix);
         } else {
             ix = save;
         }
@@ -564,7 +568,7 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
         *result = bsNull();
         return true;
     }
-    if (ch == '-' || isdigit((unsigned char) ch)) {
+    if (ch == '-' || (ch >= '0' && ch <= '9')) {
         return bsJSONDecodeNumber(parser, result);
     }
     return bsJSONError(parser, "Expecting value", begin);
@@ -608,9 +612,7 @@ BSValue bsJSONDecode(const char *text, size_t size, const char **error)
 static bool bsJSONDecodeStatementArray(BSJSONParser *parser, bool (*emit)(BSValue, void *), void *data)
 {
     parser->offset++;
-    bsJSONSkipSpace(parser);
-    if (parser->offset < parser->size && parser->text[parser->offset] == ']') {
-        parser->offset++;
+    if (bsJSONSkipTake(parser, ']')) {
         return true;
     }
     while (true) {
@@ -636,16 +638,11 @@ static bool bsJSONDecodeStatementArray(BSJSONParser *parser, bool (*emit)(BSValu
 
 static bool bsJSONDecodeModel(BSJSONParser *parser, bool (*emit)(BSValue, void *), void *data, BSValue rest)
 {
-    bsJSONSkipSpace(parser);
-    if (parser->offset >= parser->size || parser->text[parser->offset] != '{') {
+    if (!bsJSONSkipTake(parser, '{')) {
         return bsJSONError(parser, "Expecting value", parser->offset);
     }
-    parser->offset++;
-    bsJSONSkipSpace(parser);
     bool statements = false;
-    if (parser->offset < parser->size && parser->text[parser->offset] == '}') {
-        parser->offset++;
-    } else {
+    if (!bsJSONSkipTake(parser, '}')) {
         while (true) {
             BSValue key;
             if (!bsJSONDecodeKey(parser, &key)) {
