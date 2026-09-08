@@ -654,28 +654,124 @@ typedef enum {
 } BSModelKey;
 
 
-static BSModelKey bsModelKeyOf(const char *data, size_t size)
+static BS_NOINLINE BSModelKey bsModelKeyOf(const char *data, size_t size)
 {
-    static const struct {
-        const char *text;
-        uint8_t size;
-        uint8_t key;
-    } keys[] = {
-        {"args", 4, BS_MKEY_ARGS}, {"binary", 6, BS_MKEY_BINARY}, {"expr", 4, BS_MKEY_EXPR},
-        {"function", 8, BS_MKEY_FUNCTION}, {"group", 5, BS_MKEY_GROUP}, {"include", 7, BS_MKEY_INCLUDE},
-        {"includes", 8, BS_MKEY_INCLUDES}, {"jump", 4, BS_MKEY_JUMP}, {"label", 5, BS_MKEY_LABEL},
-        {"lastArgArray", 12, BS_MKEY_LAST_ARG_ARRAY}, {"left", 4, BS_MKEY_LEFT},
-        {"lineNumber", 10, BS_MKEY_LINE_NUMBER}, {"name", 4, BS_MKEY_NAME}, {"number", 6, BS_MKEY_NUMBER},
-        {"op", 2, BS_MKEY_OP}, {"return", 6, BS_MKEY_RETURN}, {"right", 5, BS_MKEY_RIGHT},
-        {"statements", 10, BS_MKEY_STATEMENTS}, {"string", 6, BS_MKEY_STRING}, {"system", 6, BS_MKEY_SYSTEM},
-        {"unary", 5, BS_MKEY_UNARY}, {"url", 3, BS_MKEY_URL}, {"variable", 8, BS_MKEY_VARIABLE}
-    };
-    for (size_t ix = 0; ix < sizeof(keys) / sizeof(keys[0]); ix++) {
-        if (keys[ix].size == size && memcmp(keys[ix].text, data, size) == 0) {
-            return keys[ix].key;
+    /* The keys are told apart by size and first character - "string" and "system" by the second */
+    const char *text = NULL;
+    BSModelKey key = BS_MKEY_OTHER;
+    switch (size) {
+    case 2:
+        text = "op";
+        key = BS_MKEY_OP;
+        break;
+    case 3:
+        text = "url";
+        key = BS_MKEY_URL;
+        break;
+    case 4:
+        switch (data[0]) {
+        case 'a':
+            text = "args";
+            key = BS_MKEY_ARGS;
+            break;
+        case 'e':
+            text = "expr";
+            key = BS_MKEY_EXPR;
+            break;
+        case 'j':
+            text = "jump";
+            key = BS_MKEY_JUMP;
+            break;
+        case 'l':
+            text = "left";
+            key = BS_MKEY_LEFT;
+            break;
+        case 'n':
+            text = "name";
+            key = BS_MKEY_NAME;
+            break;
+        default:
+            break;
         }
+        break;
+    case 5:
+        switch (data[0]) {
+        case 'g':
+            text = "group";
+            key = BS_MKEY_GROUP;
+            break;
+        case 'l':
+            text = "label";
+            key = BS_MKEY_LABEL;
+            break;
+        case 'r':
+            text = "right";
+            key = BS_MKEY_RIGHT;
+            break;
+        case 'u':
+            text = "unary";
+            key = BS_MKEY_UNARY;
+            break;
+        default:
+            break;
+        }
+        break;
+    case 6:
+        switch (data[0]) {
+        case 'b':
+            text = "binary";
+            key = BS_MKEY_BINARY;
+            break;
+        case 'n':
+            text = "number";
+            key = BS_MKEY_NUMBER;
+            break;
+        case 'r':
+            text = "return";
+            key = BS_MKEY_RETURN;
+            break;
+        case 's':
+            text = data[1] == 't' ? "string" : "system";
+            key = data[1] == 't' ? BS_MKEY_STRING : BS_MKEY_SYSTEM;
+            break;
+        default:
+            break;
+        }
+        break;
+    case 7:
+        text = "include";
+        key = BS_MKEY_INCLUDE;
+        break;
+    case 8:
+        switch (data[0]) {
+        case 'f':
+            text = "function";
+            key = BS_MKEY_FUNCTION;
+            break;
+        case 'i':
+            text = "includes";
+            key = BS_MKEY_INCLUDES;
+            break;
+        case 'v':
+            text = "variable";
+            key = BS_MKEY_VARIABLE;
+            break;
+        default:
+            break;
+        }
+        break;
+    case 10:
+        text = data[0] == 'l' ? "lineNumber" : "statements";
+        key = data[0] == 'l' ? BS_MKEY_LINE_NUMBER : BS_MKEY_STATEMENTS;
+        break;
+    case 12:
+        text = "lastArgArray";
+        key = BS_MKEY_LAST_ARG_ARRAY;
+        break;
+    default:
+        break;
     }
-    return BS_MKEY_OTHER;
+    return text != NULL && memcmp(data, text, size) == 0 ? key : BS_MKEY_OTHER;
 }
 
 

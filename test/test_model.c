@@ -319,6 +319,11 @@ TEST(model_script_from_json_shapes)
         "]}",
         "[[],3,-3,4,[7]]");
 
+    /* Members the reader does not know, of the sizes it does */
+    bsTestModelJSONResult(
+        "{\"statements\": [{\"return\": {\"expr\": {\"number\": 7}, \"zzzz\": 1, \"zzzzzz\": 2, \"zzzzzzzz\": 3, "
+        "\"jzzz\": 4, \"zzzzzzzzzz\": 5}}]}", "7");
+
     /* A conditional's arguments past its third are not read, so their shapes are not checked - any other function's are */
     bsTestModelJSONResult(
         "{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"if\", \"args\": "
