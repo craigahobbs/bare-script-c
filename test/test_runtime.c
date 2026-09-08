@@ -1234,6 +1234,69 @@ TEST(runtime_compare_jumps)
     /* A comparison whose value is the result - a logical operator's left side - is still computed */
     ASSERT_VALUE(bsTestExecute("return [1 < 2 && 'x', 1 > 2 || 'y', 1 < 2 || 'z']"), "[\"x\",\"y\",true]");
 
+    /* A logical condition jumps short-circuit: each comparison is one jump, and a "not" flips the
+       sense - every combination, with the operand evaluation order and short-circuiting observable */
+    ASSERT_VALUE(bsTestExecute(
+        "log = []\n"
+        "function t(v, name):\n"
+        "    arrayPush(log, name)\n"
+        "    return v\n"
+        "endfunction\n"
+        "function j(a, b, c):\n"
+        "    arrayPush(log, '|')\n"
+        "    jumpif (t(a, 'a') < 2 && t(b, 'b') < 2) yes\n"
+        "    arrayPush(log, 'no')\n"
+        "    jumpif (t(a, 'a') < 2 || t(b, 'b') < 2) yes2\n"
+        "    arrayPush(log, 'no2')\n"
+        "    jumpif (!(t(a, 'a') < 2 || t(b, 'b') < 2) && !(t(c, 'c') < 2)) yes3\n"
+        "    arrayPush(log, 'no3')\n"
+        "    jumpif (!(t(a, 'a') < 2 && t(b, 'b') < 2)) yes4\n"
+        "    arrayPush(log, 'no4')\n"
+        "    return\n"
+        "    yes:\n"
+        "    arrayPush(log, 'yes')\n"
+        "    return\n"
+        "    yes2:\n"
+        "    arrayPush(log, 'yes2')\n"
+        "    return\n"
+        "    yes3:\n"
+        "    arrayPush(log, 'yes3')\n"
+        "    return\n"
+        "    yes4:\n"
+        "    arrayPush(log, 'yes4')\n"
+        "endfunction\n"
+        "j(1, 1, 1)\nj(1, 2, 1)\nj(2, 1, 1)\nj(2, 2, 1)\nj(2, 2, 2)\n"
+        "return arrayJoin(log, ' ')"),
+        "\"| a b yes | a b no a yes2 | a no a b yes2 | a no a b no2 a b c no3 a yes4 | a no a b no2 a b c yes3\"");
+
+    /* Truthiness, a mixed operand, a chain of many, and the conditional function's condition */
+    ASSERT_VALUE(bsTestExecute(
+        "function f(a, b, c):\n"
+        "    jumpif (a && b || c) yes\n"
+        "    return 'no'\n"
+        "    yes:\n"
+        "    return 'yes'\n"
+        "endfunction\n"
+        "return [f(1, 1, 0), f(1, 0, 0), f(0, 0, 'c'), f(0, 1, null), f([], 1, 0), f([1], 1, 0)]"),
+        "[\"yes\",\"no\",\"yes\",\"no\",\"no\",\"yes\"]");
+    ASSERT_VALUE(bsTestExecute(
+        "function f(n):\n"
+        "    jumpif (n == 1 || n == 2 || n == 3 || n == 4 || n == 5 || n == 6 || n == 7 || n == 8 || n == 9 || n == 10 || "
+        "n == 11 || n == 12 || n == 13 || n == 14 || n == 15 || n == 16 || n == 17 || n == 18) yes\n"
+        "    return 'no'\n"
+        "    yes:\n"
+        "    return 'yes'\n"
+        "endfunction\n"
+        "return [f(1), f(10), f(18), f(19)]"), "[\"yes\",\"yes\",\"yes\",\"no\"]");
+    ASSERT_VALUE(bsTestExecute(
+        "function f(a, b):\n"
+        "    return [if(a < 2 && b < 2, 'both', 'not'), if(a < 2 || b < 2, 'either', 'neither'), "
+        "if(!(a < 2) && b, 'x', 'y'), if((a < 2) && (b < 2) || a == 3, 'p', 'q')]\n"
+        "endfunction\n"
+        "return [f(1, 1), f(1, 2), f(2, 1), f(3, 3)]"),
+        "[[\"both\",\"either\",\"y\",\"p\"],[\"not\",\"either\",\"y\",\"q\"],[\"not\",\"either\",\"x\",\"q\"],"
+        "[\"not\",\"neither\",\"x\",\"p\"]]");
+
     /* A comparison jump to a missing label errors only when taken */
     ASSERT_VALUE(bsTestExecute("jumpif (2 < 1) nowhere\nreturn 1"), "1");
     ASSERT_VALUE(bsTestExecute("jumpif (1 < 2) nowhere\nreturn 1"), "null");

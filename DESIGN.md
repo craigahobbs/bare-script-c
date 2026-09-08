@@ -222,8 +222,9 @@ built so a literal is read like any other register, with no tag test on the oper
 1` is one instruction that reads the local and the literal in place, and a call's arguments are
 operands in the words that follow it, read into a borrowed argument array without a push or a
 reference count. The emitter counts each chunk's temporaries, so the caller fills a frame's
-registers once - the interpreter never allocates its own - and it folds `jumpif (!expr)` into a
-jump-if-false. The names a call site, load site, or unknown-label trap refers to are not operands
+registers once - the interpreter never allocates its own - and it compiles a jump's condition as
+jumps: a comparison is one comparison jump, `and` and `or` short-circuit through jumps of their
+own, and a `not` flips the sense, so `jumpif (a < b && c < d)` is two instructions. The names a call site, load site, or unknown-label trap refers to are not operands
 and live in a table of their own, so a frame copies only literals. A local read before
 it is assigned falls through to the global of the same name, which would cost every register read
 a test; instead the emitter runs a definite-assignment analysis over each function body - a

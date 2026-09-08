@@ -857,18 +857,79 @@ static void bsEmitLabel(BSEmit *e, BSValue name)
 
 
 /* Emit a jump to a label - patched when the chunk is finished if the label is not yet defined */
-static void bsEmitJump(BSEmit *e, uint8_t op, BSOperand cond, BSValue label)
+/* Point the jump word at "at" to a label - now if the label is behind, at the chunk's end if ahead */
+static void bsEmitJumpLabel(BSEmit *e, uint32_t at, BSValue label)
 {
     BSValue pc = bsObjectGetString(e->labels, label);
     if (pc.type == BS_NUMBER) {
-        bsEmitJumpInst(e, op, cond, (uint32_t) pc.u.number);
+        e->inst[at].w = (uint32_t) pc.u.number;
         return;
     }
     BS_GROW(e->patches, e->patchCount, e->patchCap, 8);
-    uint32_t at = bsEmitJumpInst(e, op, cond, 0xffffffffu);
     e->patches[e->patchCount].pc = at;
     e->patches[e->patchCount].label = bsRetain(label);
     e->patchCount++;
+}
+
+
+static void bsEmitJump(BSEmit *e, uint8_t op, BSOperand cond, BSValue label)
+{
+    bsEmitJumpLabel(e, bsEmitJumpInst(e, op, cond, 0xffffffffu), label);
+}
+
+
+/* The jump words a condition emits, to point at a target once it is known - a few on the stack */
+typedef struct BSJumps {
+    uint32_t *pcs;
+    size_t count;
+    size_t cap;
+    uint32_t inline_[8];
+} BSJumps;
+
+static void bsJumpsInit(BSJumps *jumps)
+{
+    jumps->pcs = jumps->inline_;
+    jumps->count = 0;
+    jumps->cap = sizeof(jumps->inline_) / sizeof(jumps->inline_[0]);
+}
+
+static void bsJumpsAdd(BSJumps *jumps, uint32_t pc)
+{
+    if (jumps->count == jumps->cap) {
+        uint32_t *pcs = bsAlloc(jumps->cap * 2 * sizeof(uint32_t));
+        memcpy(pcs, jumps->pcs, jumps->count * sizeof(uint32_t));
+        if (jumps->pcs != jumps->inline_) {
+            free(jumps->pcs);
+        }
+        jumps->pcs = pcs;
+        jumps->cap *= 2;
+    }
+    jumps->pcs[jumps->count++] = pc;
+}
+
+static void bsJumpsFree(BSJumps *jumps)
+{
+    if (jumps->pcs != jumps->inline_) {
+        free(jumps->pcs);
+    }
+}
+
+/* Point a condition's jumps at an instruction index */
+static void bsJumpsTarget(BSEmit *e, BSJumps *jumps, uint32_t target)
+{
+    for (size_t ix = 0; ix < jumps->count; ix++) {
+        e->inst[jumps->pcs[ix]].w = target;
+    }
+    bsJumpsFree(jumps);
+}
+
+/* Point a condition's jumps at a label */
+static void bsJumpsLabel(BSEmit *e, BSJumps *jumps, BSValue label)
+{
+    for (size_t ix = 0; ix < jumps->count; ix++) {
+        bsEmitJumpLabel(e, jumps->pcs[ix], label);
+    }
+    bsJumpsFree(jumps);
 }
 
 
@@ -1083,9 +1144,6 @@ static uint8_t bsCompareJumpOpcode(const BSAst *ast, uint32_t id, bool jumpIfTru
 {
     static const uint8_t opposite[] = {BS_OP_NE, BS_OP_EQ, BS_OP_GE, BS_OP_GT, BS_OP_LE, BS_OP_LT};
     const BSNode *node = &ast->nodes[id];
-    while (node->kind == BS_NODE_GROUP) {
-        node = &ast->nodes[node->a];
-    }
     if (node->kind != BS_NODE_BINARY || node->op < BS_OP_EQ || node->op > BS_OP_GE) {
         return 0;
     }
@@ -1100,13 +1158,39 @@ static uint8_t bsCompareJumpOpcode(const BSAst *ast, uint32_t id, bool jumpIfTru
 
 
 /*
- * Compile a jump's condition. A comparison emits its comparison jump, on the comparison's operands,
- * and the word to follow - which the caller emits with the target - is a DATA word; any other
- * condition computes into an operand, and the word to follow is the jump on it.
+ * Compile a condition as the jumps that leave when its truth is "jumpIfTrue", collected in "jumps"
+ * for the caller to point at the target, and fall through otherwise. A comparison emits its
+ * comparison jump on the comparison's operands, with a DATA word for the target; "and" and "or"
+ * short-circuit through jumps of their own, so each comparison in a chain is one jump; a "not"
+ * flips the sense; any other condition computes into an operand and jumps on it.
  */
-static void bsEmitCondition(BSEmit *e, const BSAst *ast, uint32_t expr, bool jumpIfTrue, uint8_t *jumpOp,
-                            BSOperand *cond)
+static void bsEmitCondition(BSEmit *e, const BSAst *ast, uint32_t expr, bool jumpIfTrue, BSJumps *jumps)
 {
+    const BSNode *node = &ast->nodes[expr];
+    while (node->kind == BS_NODE_GROUP) {
+        expr = node->a;
+        node = &ast->nodes[expr];
+    }
+    if (node->kind == BS_NODE_UNARY && node->op == BS_OP_NOT) {
+        bsEmitCondition(e, ast, node->a, !jumpIfTrue, jumps);
+        return;
+    }
+    if (node->kind == BS_NODE_BINARY && (node->op == BS_NODE_AND || node->op == BS_NODE_OR)) {
+        if ((node->op == BS_NODE_AND) == jumpIfTrue) {
+            /* A left operand that settles the condition the other way skips past the right's jump */
+            BSJumps skip;
+            bsJumpsInit(&skip);
+            bsEmitCondition(e, ast, node->a, !jumpIfTrue, &skip);
+            bsEmitCondition(e, ast, node->b, jumpIfTrue, jumps);
+            bsJumpsTarget(e, &skip, (uint32_t) e->count);
+        } else {
+            /* Either operand settling the condition this way jumps */
+            bsEmitCondition(e, ast, node->a, jumpIfTrue, jumps);
+            bsEmitCondition(e, ast, node->b, jumpIfTrue, jumps);
+        }
+        return;
+    }
+
     uint16_t base = e->tempTop;
     uint32_t left;
     uint32_t right;
@@ -1118,13 +1202,13 @@ static void bsEmitCondition(BSEmit *e, const BSAst *ast, uint32_t expr, bool jum
         bsEmitExprOperand(e, ast, right, &rightOperand);
         e->tempTop = base;
         bsEmitInst(e, compareJump, 0, leftOperand, rightOperand);
-        *jumpOp = BS_OP_DATA;
-        *cond = 0;
+        bsJumpsAdd(jumps, bsEmitJumpInst(e, BS_OP_DATA, 0, 0xffffffffu));
         return;
     }
-    bsEmitExprOperand(e, ast, expr, cond);
+    BSOperand cond;
+    bsEmitExprOperand(e, ast, expr, &cond);
     e->tempTop = base;
-    *jumpOp = jumpIfTrue ? BS_OP_JUMP_TRUE : BS_OP_JUMP_FALSE;
+    bsJumpsAdd(jumps, bsEmitJumpInst(e, jumpIfTrue ? BS_OP_JUMP_TRUE : BS_OP_JUMP_FALSE, cond, 0xffffffffu));
 }
 
 
@@ -1138,13 +1222,12 @@ static void bsEmitIfTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t dst)
     }
     uint32_t then = ast->nodes[cond].next;
     uint32_t otherwise = then != 0 ? ast->nodes[then].next : 0;
-    uint8_t jumpOp;
-    BSOperand condOperand;
-    bsEmitCondition(e, ast, cond, false, &jumpOp, &condOperand);
-    uint32_t jumpElse = bsEmitJumpInst(e, jumpOp, condOperand, 0);
+    BSJumps jumpsElse;
+    bsJumpsInit(&jumpsElse);
+    bsEmitCondition(e, ast, cond, false, &jumpsElse);
     bsEmitArgOrNull(e, ast, then, dst);
     uint32_t jumpEnd = bsEmitJumpInst(e, BS_OP_JUMP, 0, 0);
-    e->inst[jumpElse].w = (uint32_t) e->count;
+    bsJumpsTarget(e, &jumpsElse, (uint32_t) e->count);
     bsEmitArgOrNull(e, ast, otherwise, dst);
     e->inst[jumpEnd].w = (uint32_t) e->count;
 }
@@ -1383,17 +1466,10 @@ static void bsEmitStatement(BSEmit *e, const BSAst *ast, uint32_t id)
             bsEmitJump(e, BS_OP_JUMP, 0, label);
             return;
         }
-        /* "jumpif (!expr)" - each NOT folds into the jump's sense */
-        uint32_t expr = node->a;
-        bool jumpIfTrue = true;
-        while (ast->nodes[expr].kind == BS_NODE_UNARY && ast->nodes[expr].op == BS_OP_NOT) {
-            expr = ast->nodes[expr].a;
-            jumpIfTrue = !jumpIfTrue;
-        }
-        uint8_t jumpOp;
-        BSOperand cond;
-        bsEmitCondition(e, ast, expr, jumpIfTrue, &jumpOp, &cond);
-        bsEmitJump(e, jumpOp, cond, label);
+        BSJumps jumps;
+        bsJumpsInit(&jumps);
+        bsEmitCondition(e, ast, node->a, true, &jumps);
+        bsJumpsLabel(e, &jumps, label);
         return;
     }
 
