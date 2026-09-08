@@ -10,11 +10,6 @@
  */
 
 #include <stdlib.h>
-#include <string.h>
-
-#include "barescript/json.h"
-#include "barescript/parser.h"
-#include "barescript/runtime.h"
 
 #include "internal.h"
 
@@ -709,6 +704,25 @@ static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
 }
 
 
+/*
+ * Accumulate into dst, or a temporary when dst is a named local whose new value must not be
+ * visible to later operands. Pair with bsEmitAccStore.
+ */
+static uint16_t bsEmitAcc(BSEmit *e, uint16_t dst, uint16_t *base)
+{
+    *base = e->tempTop;
+    return dst < e->slotCount ? bsTempAlloc(e) : dst;
+}
+
+static void bsEmitAccStore(BSEmit *e, uint16_t dst, uint16_t acc, uint16_t base)
+{
+    if (acc != dst) {
+        bsEmitInst(e, BS_OP_MOVE, dst, acc, 0);
+        e->tempTop = base;
+    }
+}
+
+
 /* Compile args[ix] into dst, or move null if that argument is missing */
 static bool bsEmitArgOrNull(BSEmit *e, BSValue args, size_t ix, size_t argCount, uint16_t dst)
 {
@@ -889,15 +903,12 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
          * evaluated, so when dst is a named local those operands might read the new value - they
          * accumulate in a temporary instead
          */
-        uint16_t base = e->tempTop;
-        uint16_t acc = dst < e->slotCount ? bsTempAlloc(e) : dst;
+        uint16_t base;
+        uint16_t acc = bsEmitAcc(e, dst, &base);
         if (!bsEmitIfTo(e, bsObjectGetString(function, bsKeys.args), acc)) {
             return false;
         }
-        if (acc != dst) {
-            bsEmitInst(e, BS_OP_MOVE, dst, acc, 0);
-            e->tempTop = base;
-        }
+        bsEmitAccStore(e, dst, acc, base);
         return true;
     }
 
@@ -910,8 +921,8 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
         const char *opText = bsStringData(op);
         bool isAnd = strcmp(opText, "&&") == 0;
         if (isAnd || strcmp(opText, "||") == 0) {
-            uint16_t base = e->tempTop;
-            uint16_t acc = dst < e->slotCount ? bsTempAlloc(e) : dst;
+            uint16_t base;
+            uint16_t acc = bsEmitAcc(e, dst, &base);
             if (!bsEmitExprTo(e, bsObjectGetString(binary, bsKeys.left), acc)) {
                 return false;
             }
@@ -920,10 +931,7 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
                 return false;
             }
             e->inst[jump].w = (uint32_t) e->count;
-            if (acc != dst) {
-                bsEmitInst(e, BS_OP_MOVE, dst, acc, 0);
-                e->tempTop = base;
-            }
+            bsEmitAccStore(e, dst, acc, base);
             return true;
         }
         uint8_t opcode = bsBinaryOpcode(opText);

@@ -10,7 +10,8 @@
  * bytecode; the original model is kept for lint and coverage.
  *
  * Structured statements - if/elif/else, while, for, break, continue - never reach the runtime; the
- * parser lowers them to labels and jumps, which compile to JUMP, JUMP_TRUE, and JUMP_FALSE.
+ * parser lowers them to labels and jumps, which compile to JUMP, JUMP_TRUE, JUMP_FALSE, and the
+ * comparison jumps JUMP_EQ through JUMP_GE.
  */
 
 #ifndef BARESCRIPT_PARSER_H

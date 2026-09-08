@@ -984,8 +984,8 @@ static const BSArgModel objectGetArgs[] = {
 static BSValue bsFnObjectGet(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(objectGetArgs, bsRetain(argCount >= 3 ? args[2] : bsNull()));
-    BSValue found;
-    return bsRetain(bsObjectLookupString(values[0], values[1], &found) ? found : values[2]);
+    BSValue *slot = bsObjectValuePtrString(values[0], values[1]);
+    return bsRetain(slot != NULL ? *slot : values[2]);
 }
 
 

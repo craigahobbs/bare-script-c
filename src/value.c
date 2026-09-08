@@ -1577,8 +1577,8 @@ bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out)
 
 BSValue bsObjectGetString(BSValue value, BSValue key)
 {
-    BSValue found;
-    return bsObjectLookupString(value, key, &found) ? found : bsNull();
+    BSValue *found = value.type == BS_OBJECT ? bsObjectValuePtrString(value, key) : NULL;
+    return found != NULL ? *found : bsNull();
 }
 
 
