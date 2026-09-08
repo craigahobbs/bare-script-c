@@ -1169,6 +1169,26 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
         cmp = bsValueCompare(left, right); \
     }
 
+/*
+ * Whether the instruction's operands are equal, in "equal" - numbers and strings decided in place:
+ * two strings are equal by pointer, unequal when both are interned, and compared by content
+ * otherwise
+ */
+#define BS_EQUAL_OPERANDS(equal) \
+    BSValue left = BS_READ(inst->b); \
+    BSValue right = BS_READ(inst->c); \
+    bool equal; \
+    if (left.type == BS_NUMBER && right.type == BS_NUMBER) { \
+        equal = left.u.number == right.u.number; \
+    } else if (left.type == BS_STRING && right.type == BS_STRING) { \
+        const BSString *ls = left.u.string; \
+        const BSString *rs = right.u.string; \
+        equal = ls == rs || ((ls->flags & rs->flags & BS_STR_INTERNED) == 0 && ls->size == rs->size && \
+                             memcmp(ls->data, rs->data, ls->size) == 0); \
+    } else { \
+        equal = bsValueCompare(left, right) == 0; \
+    }
+
 #define BS_COMPARE(name, test) \
     BS_CASE(name) { \
         BS_COMPARE_OPERANDS(cmp) \
@@ -1176,16 +1196,33 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
     } \
     BS_NEXT()
 
+#define BS_EQUAL(name, test) \
+    BS_CASE(name) { \
+        BS_EQUAL_OPERANDS(equal) \
+        bsAssign(&regs[inst->a], bsBoolean(test)); \
+    } \
+    BS_NEXT()
+
 /* A jump on a comparison - the target is in the data word that follows, stepped over when not taken */
+#define BS_JUMP_TEST(test) \
+    if (test) { \
+        BS_JUMP_COVER(insts[pc].w); \
+        pc = insts[pc].w; \
+    } else { \
+        pc++; \
+    }
+
 #define BS_JUMP_COMPARE(name, test) \
     BS_CASE(name) { \
         BS_COMPARE_OPERANDS(cmp) \
-        if (test) { \
-            BS_JUMP_COVER(insts[pc].w); \
-            pc = insts[pc].w; \
-        } else { \
-            pc++; \
-        } \
+        BS_JUMP_TEST(test) \
+    } \
+    BS_NEXT()
+
+#define BS_JUMP_EQUAL(name, test) \
+    BS_CASE(name) { \
+        BS_EQUAL_OPERANDS(equal) \
+        BS_JUMP_TEST(test) \
     } \
     BS_NEXT()
 
@@ -1466,15 +1503,15 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_ARITHMETIC(MOD, bsModulo(left.u.number, right.u.number));
         BS_ARITHMETIC(POW, pow(left.u.number, right.u.number));
 
-        BS_COMPARE(EQ, cmp == 0);
-        BS_COMPARE(NE, cmp != 0);
+        BS_EQUAL(EQ, equal);
+        BS_EQUAL(NE, !equal);
         BS_COMPARE(LT, cmp < 0);
         BS_COMPARE(LE, cmp <= 0);
         BS_COMPARE(GT, cmp > 0);
         BS_COMPARE(GE, cmp >= 0);
 
-        BS_JUMP_COMPARE(JUMP_EQ, cmp == 0);
-        BS_JUMP_COMPARE(JUMP_NE, cmp != 0);
+        BS_JUMP_EQUAL(JUMP_EQ, equal);
+        BS_JUMP_EQUAL(JUMP_NE, !equal);
         BS_JUMP_COMPARE(JUMP_LT, cmp < 0);
         BS_JUMP_COMPARE(JUMP_LE, cmp <= 0);
         BS_JUMP_COMPARE(JUMP_GT, cmp > 0);
