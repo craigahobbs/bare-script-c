@@ -510,6 +510,18 @@ uint32_t bsAstExpr(BSAst *ast, BSValue model)
 }
 
 
+/* A statement's optional expression member, into "*expr" - zero when absent - or false for a malformed one */
+static bool bsAstOptionalExpr(BSAst *ast, BSValue value, uint32_t *expr)
+{
+    *expr = 0;
+    if (!bsObjectHasString(value, bsKeys.expr)) {
+        return true;
+    }
+    *expr = bsAstExpr(ast, bsObjectGetString(value, bsKeys.expr));
+    return *expr != 0;
+}
+
+
 uint32_t bsAstStatement(BSAst *ast, BSValue model)
 {
     BSValue value;
@@ -535,23 +547,17 @@ uint32_t bsAstStatement(BSAst *ast, BSValue model)
         if (label.type != BS_STRING) {
             return 0;
         }
-        uint32_t cond = 0;
-        if (bsObjectHasString(value, bsKeys.expr)) {
-            cond = bsAstExpr(ast, bsObjectGetString(value, bsKeys.expr));
-            if (cond == 0) {
-                return 0;
-            }
+        uint32_t cond;
+        if (!bsAstOptionalExpr(ast, value, &cond)) {
+            return 0;
         }
         node = bsAstNode(ast, BS_NODE_JUMP);
         ast->nodes[node].a = cond;
         ast->nodes[node].text = bsAstString(ast, bsInternName(label));
     } else if (BS_KIND(kind, return_)) {
-        uint32_t expr = 0;
-        if (bsObjectHasString(value, bsKeys.expr)) {
-            expr = bsAstExpr(ast, bsObjectGetString(value, bsKeys.expr));
-            if (expr == 0) {
-                return 0;
-            }
+        uint32_t expr;
+        if (!bsAstOptionalExpr(ast, value, &expr)) {
+            return 0;
         }
         node = bsAstNode(ast, BS_NODE_RETURN);
         ast->nodes[node].a = expr;

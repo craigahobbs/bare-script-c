@@ -1374,10 +1374,7 @@ static uint32_t bsJSONReadStatement(BSJSONParser *parser, BSAst *ast, int depth)
         complete = built->a != 0;
         break;
     }
-    if (!complete) {
-        return 0;
-    }
-    return bsJSONSkipTake(parser, '}') ? node : 0;
+    return complete && bsJSONSkipTake(parser, '}') ? node : 0;
 }
 
 
@@ -1400,11 +1397,9 @@ static bool bsJSONReadStatements(BSJSONParser *parser, BSAst *ast, bool (*emit)(
             }
             /* Not a statement's shape: as any value, a syntax error inside reports as one */
             parser->offset = begin;
-            BSValue value;
-            if (!bsJSONDecodeValue(parser, 2, &value)) {
+            if (!bsJSONSkipValue(parser, 2)) {
                 return false;
             }
-            bsRelease(value);
             return bsJSONError(parser, "Invalid BareScript model", parser->offset);
         }
         if (!emit(ast, statement, data)) {
