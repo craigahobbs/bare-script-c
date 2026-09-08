@@ -35,7 +35,15 @@ static void bsOutOfMemory(void)
 /* GCOV_EXCL_STOP */
 
 
-void *bsAlloc(size_t size)
+/*
+ * The allocation wrappers are the runtime's only calls to malloc and realloc, and they stay out of
+ * line on purpose: macOS's xzone allocator pools untyped allocations by call site, hashed with a key
+ * drawn at random for each process, and chunks emptied by one pool are not reused by another until
+ * the kernel reclaims them. Inlined, the wrappers became more than a hundred call sites, and a
+ * workload that frees strings made by one and allocates the same sizes through another kept or
+ * dropped tens of megabytes at random per process. One call site keeps every allocation in one pool.
+ */
+BS_NOINLINE void *bsAlloc(size_t size)
 {
     void *ptr = malloc(size);
     /* GCOV_EXCL_START */
@@ -47,7 +55,7 @@ void *bsAlloc(size_t size)
 }
 
 
-void *bsRealloc(void *ptr, size_t size)
+BS_NOINLINE void *bsRealloc(void *ptr, size_t size)
 {
     void *result = realloc(ptr, size);
     /* GCOV_EXCL_START */
