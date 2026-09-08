@@ -34,11 +34,11 @@ typedef struct {
     size_t offset;
     unsigned bitBuf;
     int bitCount;
-} BsBits;
+} BSBits;
 
 
 /* Fill the bit buffer to "n" bits where the input allows; bitCount is how many it then holds */
-static void bsBitsFill(BsBits *bits, int n)
+static void bsBitsFill(BSBits *bits, int n)
 {
     while (bits->bitCount < n && bits->offset < bits->size) {
         bits->bitBuf |= (unsigned) bits->data[bits->offset++] << bits->bitCount;
@@ -47,7 +47,7 @@ static void bsBitsFill(BsBits *bits, int n)
 }
 
 
-static int bsGetBits(BsBits *bits, int n)
+static int bsGetBits(BSBits *bits, int n)
 {
     bsBitsFill(bits, n);
     if (bits->bitCount < n) {
@@ -100,7 +100,7 @@ static void bsFixedTable(uint16_t *table)
 
 
 /* Decode a literal/length symbol; -1 at the end of the input */
-static int bsFixedLiteral(BsBits *bits, const uint16_t *table)
+static int bsFixedLiteral(BSBits *bits, const uint16_t *table)
 {
     bsBitsFill(bits, BS_FIXED_TABLE_BITS);
     unsigned entry = table[bits->bitBuf & (BS_FIXED_TABLE_SIZE - 1)];
@@ -115,7 +115,7 @@ static int bsFixedLiteral(BsBits *bits, const uint16_t *table)
 
 
 /* Decode a distance symbol - a five-bit code, most-significant bit first; -1 at the end of the input */
-static int bsFixedDistance(BsBits *bits)
+static int bsFixedDistance(BSBits *bits)
 {
     int value = bsGetBits(bits, 5);
     if (value < 0) {
@@ -142,7 +142,7 @@ static const unsigned short bsDistBase[30] = {
 
 
 /* Decode one block's codes into "out". Returns the output length, or SIZE_MAX for a malformed stream. */
-static size_t bsInflateCodes(BsBits *bits, unsigned char *out, size_t outCap)
+static size_t bsInflateCodes(BSBits *bits, unsigned char *out, size_t outCap)
 {
     size_t outLen = 0;
     uint16_t table[BS_FIXED_TABLE_SIZE];
@@ -216,7 +216,7 @@ char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
     }
     uint32_t isize = bsReadU32LE(src + srcSize - 4);
     unsigned char *out = bsAlloc((size_t) isize + 1);
-    BsBits bits = {src + 10, srcSize - 18, 0, 0, 0};
+    BSBits bits = {src + 10, srcSize - 18, 0, 0, 0};
     if (bsGetBits(&bits, 3) != 3 || bsInflateCodes(&bits, out, isize) != isize) {
         free(out);
         return NULL;

@@ -94,7 +94,6 @@ BSValue bsBoolean(bool boolean)
 {
     BSValue value;
     value.type = BS_BOOLEAN;
-    value.u.ref = NULL;
     value.u.boolean = boolean;
     return value;
 }
@@ -1850,9 +1849,7 @@ void bsRelease(BSValue value)
 
 void bsAssign(BSValue *target, BSValue value)
 {
-    BSValue previous = *target;
-    *target = value;
-    bsReleaseInline(previous);
+    bsAssignInline(target, value);
 }
 
 
