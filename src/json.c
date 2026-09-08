@@ -827,6 +827,11 @@ static BS_NOINLINE bool bsJSONSkipValue(BSJSONParser *parser, int depth, bool *t
 }
 
 
+/*
+ * The reader's member and element callbacks stay out of line: called through pointers, the
+ * profile-guided build would otherwise inline the hot ones into the loops, kilobytes at a time
+ */
+
 /* Whether the next character - past any space - is "ch" */
 static bool bsJSONPeek(BSJSONParser *parser, char ch)
 {
@@ -978,7 +983,7 @@ static BS_NOINLINE bool bsJSONReadElements(BSJSONParser *parser, int depth,
 }
 
 
-static bool bsJSONReadArgElement(BSJSONParser *parser, int depth, BSJSONNode *context)
+static BS_NOINLINE bool bsJSONReadArgElement(BSJSONParser *parser, int depth, BSJSONNode *context)
 {
     uint32_t arg = bsJSONReadExpr(parser, context->ast, depth);
     if (arg == 0) {
@@ -994,7 +999,7 @@ static bool bsJSONReadArgElement(BSJSONParser *parser, int depth, BSJSONNode *co
 }
 
 
-static bool bsJSONCallMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+static BS_NOINLINE bool bsJSONCallMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
 {
     BSJSONNode *context = data;
     BSAst *ast = context->ast;
@@ -1012,7 +1017,7 @@ static bool bsJSONCallMember(BSJSONParser *parser, BSModelKey key, int depth, vo
 }
 
 
-static bool bsJSONBinaryMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+static BS_NOINLINE bool bsJSONBinaryMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
 {
     BSJSONNode *context = data;
     BSAst *ast = context->ast;
@@ -1046,7 +1051,7 @@ static bool bsJSONBinaryMember(BSJSONParser *parser, BSModelKey key, int depth, 
 }
 
 
-static bool bsJSONUnaryMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+static BS_NOINLINE bool bsJSONUnaryMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
 {
     BSJSONNode *context = data;
     BSAst *ast = context->ast;
@@ -1177,7 +1182,7 @@ typedef struct BSJSONStatement {
 } BSJSONStatement;
 
 
-static bool bsJSONReadArgNameElement(BSJSONParser *parser, int depth, BSJSONNode *context)
+static BS_NOINLINE bool bsJSONReadArgNameElement(BSJSONParser *parser, int depth, BSJSONNode *context)
 {
     uint32_t text;
     if (!bsJSONReadText(parser, context->ast, &text)) {
@@ -1190,7 +1195,7 @@ static bool bsJSONReadArgNameElement(BSJSONParser *parser, int depth, BSJSONNode
 }
 
 
-static bool bsJSONReadStatementElement(BSJSONParser *parser, int depth, BSJSONNode *context)
+static BS_NOINLINE bool bsJSONReadStatementElement(BSJSONParser *parser, int depth, BSJSONNode *context)
 {
     uint32_t statement = bsJSONReadStatement(parser, context->ast, depth);
     if (statement == 0) {
@@ -1201,7 +1206,7 @@ static bool bsJSONReadStatementElement(BSJSONParser *parser, int depth, BSJSONNo
 }
 
 
-static bool bsJSONIncludeMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+static BS_NOINLINE bool bsJSONIncludeMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
 {
     BSJSONNode *context = data;
     BSAst *ast = context->ast;
@@ -1221,7 +1226,7 @@ static bool bsJSONIncludeMember(BSJSONParser *parser, BSModelKey key, int depth,
 }
 
 
-static bool bsJSONReadIncludeElement(BSJSONParser *parser, int depth, BSJSONNode *context)
+static BS_NOINLINE bool bsJSONReadIncludeElement(BSJSONParser *parser, int depth, BSJSONNode *context)
 {
     uint32_t item = bsAstNode(context->ast, BS_NODE_INCLUDE_ITEM);
     BSJSONNode itemContext = {context->ast, item, 0, 0, 0, false};
@@ -1233,7 +1238,7 @@ static bool bsJSONReadIncludeElement(BSJSONParser *parser, int depth, BSJSONNode
 }
 
 
-static bool bsJSONStatementMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+static BS_NOINLINE bool bsJSONStatementMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
 {
     BSJSONStatement *context = data;
     BSAst *ast = context->node.ast;
