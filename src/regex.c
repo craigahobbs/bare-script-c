@@ -154,35 +154,22 @@ static inline bool rxFirstHas(const RxFirstSet *set, uint32_t code)
 
 
 /*
- * A wide alternation's alternatives indexed by first code point: "codes" holds, per code point,
- * the set of alternatives that can begin with it as a bit per alternative, so the alternation
- * tries just those, in order, instead of testing every alternative's set. "always" holds the
- * alternatives whose sets are not usable. Built for alternations of eight to thirty-two
- * alternatives - the markdown span alternation has sixteen.
+ * A wide alternation's alternatives indexed by first code point: "codes" holds, per ASCII code
+ * point, the set of alternatives that can begin with it as a bit per alternative, so the
+ * alternation tries just those, in order, instead of testing every alternative's set; "high"
+ * holds the alternatives that can begin with any code point past ASCII, and "always" the
+ * alternatives whose sets are not usable. Built for alternations of eight to sixty-four
+ * alternatives - the markdown span alternation has sixteen, a highlight keyword list up to
+ * sixty-two.
  */
 #define RX_ALT_INDEX_MIN 8
-#define RX_ALT_INDEX_MAX 32
+#define RX_ALT_INDEX_MAX 64
 
 typedef struct RxAltIndex {
-    uint32_t codes[256];
-    uint32_t high;   /* the alternatives that can begin with a code point of 256 or more */
-    uint32_t always;
+    uint64_t codes[128];
+    uint64_t high;   /* the alternatives that can begin with a code point of 128 or more */
+    uint64_t always;
 } RxAltIndex;
-
-
-static inline unsigned rxLowestBit(uint32_t mask)
-{
-#if defined(__GNUC__)
-    return (unsigned) __builtin_ctz(mask);
-#else
-    unsigned bit = 0;
-    while ((mask & 1u) == 0) {
-        mask >>= 1;
-        bit++;
-    }
-    return bit;
-#endif
-}
 
 
 static inline unsigned rxLowestBit64(uint64_t mask)
@@ -1454,7 +1441,7 @@ typedef struct RxBacktrack {
     uint32_t pc;
     uint32_t pos;
     uint32_t trail;
-    uint32_t aux;
+    uint64_t aux;
 } RxBacktrack;
 
 /*
@@ -1801,15 +1788,15 @@ static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
     memset(index, 0, sizeof(*index));
     for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
         const RxFirstSet *first = &firsts[ixBranch];
-        uint32_t bit = (uint32_t) 1 << ixBranch;
+        uint64_t bit = (uint64_t) 1 << ixBranch;
         if (first->any) {
             index->always |= bit;
             continue;
         }
-        if (first->high) {
+        if (first->high || first->bits[2] != 0 || first->bits[3] != 0) {
             index->high |= bit;
         }
-        for (unsigned word = 0; word < 4; word++) {
+        for (unsigned word = 0; word < 2; word++) {
             for (uint64_t bits = first->bits[word]; bits != 0; bits &= bits - 1) {
                 index->codes[word * 64 + rxLowestBit64(bits)] |= bit;
             }
@@ -2020,7 +2007,7 @@ static void rxEmitProgram(RxCompiler *compiler)
 }
 
 
-static void rxBtPush(RxState *state, uint32_t kind, uint32_t pc, size_t pos, uint32_t aux)
+static void rxBtPush(RxState *state, uint32_t kind, uint32_t pc, size_t pos, uint64_t aux)
 {
     if (state->btCount == state->btCapacity) {
         /* GCOV_EXCL_START - a memory guard the step budget reaches first */
@@ -2212,22 +2199,22 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
             uint32_t code = atEnd ? 0 : rxCode(state, pos);
             if (count <= RX_ALT_INDEX_MAX) {
                 /* The alternatives that can begin here, as a mask; the rest wait on the stack */
-                uint32_t mask;
+                uint64_t mask;
                 const RxAltIndex *index = alt->index;
                 if (index != NULL) {
-                    mask = index->always | (atEnd ? 0 : (code < 256 ? index->codes[code] : index->high));
+                    mask = index->always | (atEnd ? 0 : (code < 128 ? index->codes[code] : index->high));
                 } else {
                     mask = 0;
                     for (size_t ix = 0; ix < count; ix++) {
                         if (rxAltViable(alt, ix, atEnd, code)) {
-                            mask |= (uint32_t) 1 << ix;
+                            mask |= (uint64_t) 1 << ix;
                         }
                     }
                 }
                 if (mask == 0) {
                     goto backtrack;
                 }
-                unsigned ix = rxLowestBit(mask);
+                unsigned ix = rxLowestBit64(mask);
                 mask &= mask - 1;
                 if (mask != 0) {
                     rxBtPush(state, RX_BT_ALT_MASK, pc, pos, mask);
@@ -2588,8 +2575,8 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
                 break;
 
             case RX_BT_ALT_MASK: {
-                uint32_t mask = bt->aux;
-                unsigned ix = rxLowestBit(mask);
+                uint64_t mask = bt->aux;
+                unsigned ix = rxLowestBit64(mask);
                 mask &= mask - 1;
                 pc = state->alts[prog[bt->pc].operand].branchPcs[ix];
                 pos = bt->pos;

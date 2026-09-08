@@ -682,7 +682,7 @@ TEST(regex_program)
     ASSERT_VALUE_STRING(bsTestMatch("[ab]*bc", "ababbc", 0), "ababbc");
 
     /* An alternation too wide to index backtracks through its alternatives one at a time */
-    BSValue wide = bsTestRepeat("(?:a", "|b|a", 17, ")c");
+    BSValue wide = bsTestRepeat("(?:a", "|b|a", 33, ")c");
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "ax", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "bx", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(wide), "bc", 0), "bc");
