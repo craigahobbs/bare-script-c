@@ -42,7 +42,6 @@ typedef struct BSCasePair {
 #define BS_TABLE_COUNT(table) (sizeof(table) / sizeof((table)[0]))
 
 /* The simple upper-case mappings - one code point to one - as runs of a shared delta */
-/* The simple upper-case mappings - one code point to one - as runs of a shared delta */
 static const BSCaseRange bsUnicodeUpper[] = {
     {0x0061, 26, 1, -32},    /* LATIN SMALL LETTER A - Z */
     {0x00B5, 1, 1, 743},     /* MICRO SIGN */

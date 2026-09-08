@@ -837,9 +837,6 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
             compiler->backrefs[compiler->backrefCount++] = (struct RxBackref) {group, digitOffset};
             RxNode *node = rxNodeNew(compiler, RX_BACKREF);
             node->u.backref.group = (size_t) group;
-            node->u.backref.groups = NULL;
-            node->u.backref.count = 0;
-            node->u.backref.name = bsNull();
             return node;
         }
 
@@ -855,9 +852,6 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
             }
             /* The name resolves once the pattern is parsed - its group may follow, as in JavaScript */
             RxNode *node = rxNodeNew(compiler, RX_BACKREF);
-            node->u.backref.group = 0;
-            node->u.backref.groups = NULL;
-            node->u.backref.count = 0;
             node->u.backref.name = name;
             BS_GROW(compiler->namedRefs, compiler->namedRefCount, compiler->namedRefCap, 4);
             compiler->namedRefs[compiler->namedRefCount].node = node;
@@ -1173,9 +1167,10 @@ static void bsRegexFree(BSRegex *regex)
 }
 
 
-/* Free the compiler's own lists - the named references' names and group tables, the group paths */
+/* Free the compiler's own lists - the numbered and named references, the group paths */
 static void rxCompilerFree(RxCompiler *compiler)
 {
+    free(compiler->backrefs);
     for (size_t ix = 0; ix < compiler->namedRefCount; ix++) {
         bsRelease(compiler->namedRefs[ix].node->u.backref.name);
         free(compiler->namedRefs[ix].node->u.backref.groups);
@@ -1215,7 +1210,6 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
             rxError(&compiler, compiler.backrefs[ix].offset, "invalid group reference %d", compiler.backrefs[ix].group);
         }
     }
-    free(compiler.backrefs);
 
     /* A named backreference may precede its group too, and a name shared across the branches of an
        alternation refers to whichever group took part */
@@ -2103,17 +2097,13 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
             pc++;
             RX_NEXT();
 
-        RX_CASE(ANY) {
-            if (pos >= length) {
-                goto backtrack;
-            }
-            if (rxIsLineTerminator(rxCode(state, pos))) {
+        RX_CASE(ANY)
+            if (pos >= length || rxIsLineTerminator(rxCode(state, pos))) {
                 goto backtrack;
             }
             pos++;
             pc++;
-        }
-        RX_NEXT();
+            RX_NEXT();
 
         RX_CASE(ANY_ALL)
             if (pos >= length) {
