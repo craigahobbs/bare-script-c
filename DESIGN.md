@@ -104,8 +104,8 @@ typedef BSValue (*BSFunctionFn)(const BSValue *args, size_t argCount, BSOptions 
 ```
 
 - `args` is a **borrowed** array of `argCount` values - the interpreter's reads of the call's
-  operand registers and constants, never an allocated array object, so a call costs nothing beyond
-  the argument evaluation itself.
+  operand registers, never an allocated array object, so a call costs nothing beyond the argument
+  evaluation itself.
 - The return value is an **owned** reference.
 - `data` is the function's closure data, which script functions use to carry their definition and
   `systemPartial` uses to carry its bound arguments.
@@ -215,13 +215,16 @@ simply is not a key of the locals dictionary. Group nodes stay in the model (the
 observe them) and flatten only in the code stream.
 
 The code is register code: an eight-byte instruction names a destination register and two
-operands, each a register or a constant. A chunk's registers are its slots followed by
-temporaries, which the emitter allocates stack-fashion as it compiles an expression - a
-subexpression's result lands in the lowest free temporary, freed again once consumed - so `x = a +
+operand registers. A chunk's registers are its slots, then the temporaries the emitter allocates
+stack-fashion as it compiles an expression - a subexpression's result lands in the lowest free
+temporary, freed again once consumed - then the chunk's constants, copied in when the frame is
+built so a literal is read like any other register, with no tag test on the operand; so `x = a +
 1` is one instruction that reads the local and the literal in place, and a call's arguments are
 operands in the words that follow it, read into a borrowed argument array without a push or a
-reference count. The emitter counts each chunk's temporaries, so the interpreter allocates a
-frame's registers once, and it folds `jumpif (!expr)` into a jump-if-false. A local read before
+reference count. The emitter counts each chunk's temporaries, so the caller fills a frame's
+registers once - the interpreter never allocates its own - and it folds `jumpif (!expr)` into a
+jump-if-false. The names a call site, load site, or unknown-label trap refers to are not operands
+and live in a table of their own, so a frame copies only literals. A local read before
 it is assigned falls through to the global of the same name, which would cost every register read
 a test; instead the emitter runs a definite-assignment analysis over each function body - a
 forward must-analysis across the basic blocks its labels and jumps delimit - and reads a slot

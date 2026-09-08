@@ -18,9 +18,13 @@
 #include "internal.h"
 
 
-/* Run a compiled bytecode chunk. Returns an owned value. */
-static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
-                         bool builtins);
+/* Run a compiled bytecode chunk on the registers its caller filled. Returns an owned value. */
+static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSValue *regs,
+                         BSValue locals, bool builtins);
+
+/* Run a top-level chunk or an expression, which gets its registers here. Returns an owned value. */
+static BSValue bsRunChunk(const BSCode *code, BSScript *script, BSOptions *options, BSValue locals,
+                          bool builtins);
 
 
 /* The maximum expression evaluation recursion depth */
@@ -230,7 +234,7 @@ void bsSystemIncludeClear(void)
 
 
 /* The registers a chunk gets on the C stack before it needs the heap */
-#define BS_REGS_INLINE 48
+#define BS_REGS_INLINE 192
 
 
 static void bsRegsRelease(BSValue *regs, size_t count, const BSValue *inlineBuf)
@@ -419,12 +423,12 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     BSScriptFunction *scriptFunction = data;
     BSFunctionDef *def = scriptFunction->def;
     size_t slotCount = def->code.slotCount;
-    size_t regCount = slotCount + def->code.tempCount;
+    size_t ownedCount = slotCount + def->code.tempCount;
+    size_t regCount = ownedCount + def->code.constantCount;
 
-    /* The registers: the slots, filled from the arguments, then the temporaries, nulled */
+    /* The registers: the slots, filled from the arguments, then the temporaries, nulled, then the constants */
     BSValue regsInline[BS_REGS_INLINE];
     BSValue *regs = regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue));
-    BSScope scope = {regs, bsNull()};
 
     for (size_t ix = 0; ix < def->argCount; ix++) {
         if (def->lastArgArray && ix + 1 == def->argCount) {
@@ -436,12 +440,30 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     for (size_t ix = def->argCount; ix < slotCount; ix++) {
         regs[ix] = bsUnset();
     }
-    for (size_t ix = slotCount; ix < regCount; ix++) {
+    for (size_t ix = slotCount; ix < ownedCount; ix++) {
         regs[ix] = bsNull();
     }
+    memcpy(regs + ownedCount, def->code.constants, def->code.constantCount * sizeof(BSValue));
 
-    BSValue result = bsRunCode(&def->code, scriptFunction->script, options, &scope, false);
-    bsRegsRelease(regs, regCount, regsInline);
+    BSValue result = bsRunCode(&def->code, scriptFunction->script, options, regs, bsNull(), false);
+    bsRegsRelease(regs, ownedCount, regsInline);
+    return result;
+}
+
+
+static BSValue bsRunChunk(const BSCode *code, BSScript *script, BSOptions *options, BSValue locals,
+                          bool builtins)
+{
+    size_t ownedCount = code->slotCount + code->tempCount;
+    size_t regCount = ownedCount + code->constantCount;
+    BSValue regsInline[BS_REGS_INLINE];
+    BSValue *regs = regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue));
+    for (size_t ix = 0; ix < ownedCount; ix++) {
+        regs[ix] = bsNull();
+    }
+    memcpy(regs + ownedCount, code->constants, code->constantCount * sizeof(BSValue));
+    BSValue result = bsRunCode(code, script, options, regs, locals, builtins);
+    bsRegsRelease(regs, ownedCount, regsInline);
     return result;
 }
 
@@ -614,7 +636,7 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
         }
     } else {
         BSCallCache *cache = &code->caches[inst->b];
-        name = code->constants[cache->nameIndex];
+        name = code->names[cache->nameIndex];
         if (locals.type == BS_OBJECT) {
             BSValue found;
             if (bsObjectLookupString(locals, name, &found)) {
@@ -700,7 +722,7 @@ static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSV
         if (includeScript == NULL) {
             return bsIncludeFailed(script, url, lineNumber, options);
         }
-        bsRelease(bsRunCode(&includeScript->code, includeScript, options, NULL, false));
+        bsRelease(bsRunChunk(&includeScript->code, includeScript, options, bsNull(), false));
         bsScriptRelease(includeScript);
         return options->error.type != BS_STRING;
     }
@@ -737,7 +759,7 @@ static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSV
     options->urlFn = bsUrlFileRelative;
     options->urlData = bsStrdup(url);
     options->urlDataFree = free;
-    bsRelease(bsRunCode(&includeScript->code, includeScript, options, NULL, false));
+    bsRelease(bsRunChunk(&includeScript->code, includeScript, options, bsNull(), false));
 
     if (options->logFn != NULL && options->debug && options->error.type != BS_STRING) {
         BSValue warnings = bsLintScript(includeScript, options->globals);
@@ -917,30 +939,25 @@ static inline double bsModulo(double left, double right)
 
 
 /*
- * An operand's value, borrowed: a constant, or a register. The emitter's definite-assignment
- * analysis guarantees a register operand is never the unset marker - a slot that might be unset
- * is read through LOAD_SLOT instead.
+ * An operand's value, borrowed: a register - a slot, a temporary, or one of the constants copied
+ * in after them. The emitter's definite-assignment analysis guarantees a register operand is
+ * never the unset marker - a slot that might be unset is read through LOAD_SLOT instead.
  */
-static inline BSValue bsOperandRead(const BSCode *code, const BSValue *regs, uint16_t operand)
+static inline BSValue bsOperandRead(const BSValue *regs, uint16_t operand)
 {
-    /* Read as signed: a constant is negative, and a register index is its own sign extension */
-    int32_t signedOperand = (int16_t) operand;
-    if (signedOperand < 0) {
-        return code->constants[signedOperand & 0x7fff];
-    }
-    return regs[signedOperand];
+    return regs[operand];
 }
 
 
 /* Take a temporary's value; retain a slot's or a constant's */
-static inline BSValue bsOperandTake(const BSCode *code, BSValue *regs, size_t slotCount, uint16_t operand)
+static inline BSValue bsOperandTake(BSValue *regs, size_t slotCount, size_t ownedCount, uint16_t operand)
 {
-    if ((operand & BS_OPERAND_CONST) == 0 && operand >= slotCount) {
+    if (operand >= slotCount && operand < ownedCount) {
         BSValue value = regs[operand];
         regs[operand] = bsNull();
         return value;
     }
-    return bsRetain(bsOperandRead(code, regs, operand));
+    return bsRetain(regs[operand]);
 }
 
 
@@ -992,8 +1009,8 @@ static inline bool bsIntrinArrayGet(const BSCode *code, const BSInst *inst, BSVa
     if (args == NULL) {
         return false;
     }
-    BSValue array = bsOperandRead(code, regs, args->a);
-    if (array.type != BS_ARRAY || !bsIntrinsicIndex(bsOperandRead(code, regs, args->b), &index) ||
+    BSValue array = bsOperandRead(regs, args->a);
+    if (array.type != BS_ARRAY || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) ||
         index >= array.u.array->count) {
         return false;
     }
@@ -1008,7 +1025,7 @@ static inline bool bsIntrinArrayLength(const BSCode *code, const BSInst *inst, B
     if (args == NULL) {
         return false;
     }
-    BSValue array = bsOperandRead(code, regs, args->a);
+    BSValue array = bsOperandRead(regs, args->a);
     if (array.type != BS_ARRAY) {
         return false;
     }
@@ -1023,11 +1040,11 @@ static BS_NOINLINE bool bsIntrinArrayPush(const BSCode *code, const BSInst *inst
     if (args == NULL) {
         return false;
     }
-    BSValue array = bsOperandRead(code, regs, args->a);
+    BSValue array = bsOperandRead(regs, args->a);
     if (array.type != BS_ARRAY) {
         return false;
     }
-    bsArrayPush(array, bsRetain(bsOperandRead(code, regs, args->b)));
+    bsArrayPush(array, bsRetain(bsOperandRead(regs, args->b)));
     bsIntrinResult(inst, regs, array);
     return true;
 }
@@ -1040,12 +1057,12 @@ static inline bool bsIntrinArraySet(const BSCode *code, const BSInst *inst, BSVa
     if (args == NULL) {
         return false;
     }
-    BSValue array = bsOperandRead(code, regs, args->a);
-    if (array.type != BS_ARRAY || !bsIntrinsicIndex(bsOperandRead(code, regs, args->b), &index) ||
+    BSValue array = bsOperandRead(regs, args->a);
+    if (array.type != BS_ARRAY || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) ||
         index >= array.u.array->count) {
         return false;
     }
-    BSValue value = bsOperandRead(code, regs, args->c);
+    BSValue value = bsOperandRead(regs, args->c);
     bsArraySet(array, index, bsRetain(value));
     bsIntrinResult(inst, regs, value);
     return true;
@@ -1058,14 +1075,14 @@ static inline bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst, BSV
     if (args == NULL) {
         return false;
     }
-    BSValue object = bsOperandRead(code, regs, args->a);
-    BSValue key = bsOperandRead(code, regs, args->b);
+    BSValue object = bsOperandRead(regs, args->a);
+    BSValue key = bsOperandRead(regs, args->b);
     if (object.type != BS_OBJECT || key.type != BS_STRING) {
         return false;
     }
     BSObjectEntry *entry = bsObjectEntryMemo(object.u.object, key.u.string, &code->caches[inst->b].memo);
     BSValue found = entry != NULL ? entry->value :
-        (inst->c == 3 ? bsOperandRead(code, regs, args->c) : bsNull());
+        (inst->c == 3 ? bsOperandRead(regs, args->c) : bsNull());
     bsIntrinResult(inst, regs, found);
     return true;
 }
@@ -1077,12 +1094,12 @@ static inline bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSV
     if (args == NULL) {
         return false;
     }
-    BSValue object = bsOperandRead(code, regs, args->a);
-    BSValue key = bsOperandRead(code, regs, args->b);
+    BSValue object = bsOperandRead(regs, args->a);
+    BSValue key = bsOperandRead(regs, args->b);
     if (object.type != BS_OBJECT || key.type != BS_STRING) {
         return false;
     }
-    BSValue value = bsOperandRead(code, regs, args->c);
+    BSValue value = bsOperandRead(regs, args->c);
     uint32_t *memo = &code->caches[inst->b].memo;
     BSObjectEntry *entry = bsObjectEntryMemo(object.u.object, key.u.string, memo);
     if (entry != NULL) {
@@ -1102,7 +1119,7 @@ static inline bool bsIntrinStringLength(const BSCode *code, const BSInst *inst, 
     if (args == NULL) {
         return false;
     }
-    BSValue string = bsOperandRead(code, regs, args->a);
+    BSValue string = bsOperandRead(regs, args->a);
     if (string.type != BS_STRING) {
         return false;
     }
@@ -1119,12 +1136,12 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
     if (args == NULL) {
         return false;
     }
-    BSValue string = bsOperandRead(code, regs, args->a);
-    if (string.type != BS_STRING || !bsIntrinsicIndex(bsOperandRead(code, regs, args->b), &begin)) {
+    BSValue string = bsOperandRead(regs, args->a);
+    if (string.type != BS_STRING || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &begin)) {
         return false;
     }
     size_t length = string.u.string->length;
-    BSValue endValue = inst->c == 3 ? bsOperandRead(code, regs, args->c) : bsNull();
+    BSValue endValue = inst->c == 3 ? bsOperandRead(regs, args->c) : bsNull();
     if (endValue.type == BS_NULL) {
         end = length;
     } else if (!bsIntrinsicIndex(endValue, &end)) {
@@ -1150,7 +1167,7 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
  * Operands are borrowed reads; only the result is owned, and storing it releases what the
  * destination register held.
  */
-#define BS_READ(operand) bsOperandRead(code, regs, (operand))
+#define BS_READ(operand) bsOperandRead(regs, (operand))
 
 #define BS_ARITHMETIC(name, expr) \
     BS_CASE(name) { \
@@ -1264,29 +1281,16 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
     BS_NEXT()
 
 
-static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSScope *scope,
-                  bool builtins)
+static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSValue *regs,
+                         BSValue locals, bool builtins)
 {
     if (options->error.type == BS_STRING) {
         return bsNull();
     }
 
-    /*
-     * A function call arrives with its registers - the slots the caller filled followed by the
-     * temporaries it nulled; a top-level chunk or an expression allocates its own temporaries
-     */
-    BSValue regsInline[BS_REGS_INLINE];
+    /* The registers arrive filled: the slots, the temporaries nulled, and the constants copied in */
     size_t slotCount = code->slotCount;
-    size_t regCount = slotCount + code->tempCount;
-    bool ownRegs = scope == NULL || scope->slots == NULL;
-    BSValue *regs = !ownRegs ? scope->slots :
-        (regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue)));
-    if (ownRegs) {
-        for (size_t ix = 0; ix < regCount; ix++) {
-            regs[ix] = bsNull();
-        }
-    }
-    BSValue locals = scope != NULL ? scope->object : bsNull();
+    size_t ownedCount = slotCount + code->tempCount;
 
     /* The globals an intrinsic call site's cache is trusted against - none if a locals object could shadow the name */
     const BSObject *intrinGlobals = (locals.type != BS_OBJECT && options->globals.type == BS_OBJECT) ?
@@ -1361,7 +1365,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         switch (inst->op) {
 #endif
         BS_CASE(MOVE)
-            bsAssign(&regs[inst->a], bsOperandTake(code, regs, slotCount, inst->b));
+            bsAssign(&regs[inst->a], bsOperandTake(regs, slotCount, ownedCount, inst->b));
             BS_NEXT();
 
         BS_CASE(LOAD_SLOT) {
@@ -1376,7 +1380,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 
         BS_CASE(LOAD_NAME) {
             BSCallCache *cache = &code->caches[inst->b];
-            BSValue name = code->constants[cache->nameIndex];
+            BSValue name = code->names[cache->nameIndex];
             BSValue value;
             if (locals.type != BS_OBJECT || !bsObjectLookupString(locals, name, &value)) {
                 value = bsGlobalLookup(cache, name, options);
@@ -1387,7 +1391,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 
         BS_CASE(STORE_NAME) {
             BSCallCache *cache = &code->caches[inst->a];
-            BSValue name = code->constants[cache->nameIndex];
+            BSValue name = code->names[cache->nameIndex];
             BSValue value = bsRetain(BS_READ(inst->b));
             BSValue *slot = bsGlobalSlot(cache, name, options);
             if (slot != NULL) {
@@ -1410,12 +1414,12 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CASE(JUMP_UNDEF) {
             /* The trap past the chunk's return carries the jump statement's line in the data word that follows */
             bsErrorSetStatement(options, script, (int) insts[pc].w, "Unknown jump label \"%s\"",
-                                bsStringData(code->constants[inst->a]));
+                                bsStringData(code->names[inst->a]));
             goto fail;
         }
 
         BS_CASE(RETURN)
-            result = bsOperandTake(code, regs, slotCount, inst->a);
+            result = bsOperandTake(regs, slotCount, ownedCount, inst->a);
             goto done;
 
 #define BS_CALL_INTRIN(name, function) \
@@ -1589,16 +1593,13 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 fail:
     result = bsNull();
 done:
-    if (ownRegs) {
-        bsRegsRelease(regs, regCount, regsInline);
-    }
     return result;
 }
 
 
 BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins)
 {
-    return bsRunCode(&expr->code, NULL, options, scope, builtins);
+    return bsRunChunk(&expr->code, NULL, options, scope != NULL ? scope->object : bsNull(), builtins);
 }
 
 
@@ -1608,8 +1609,7 @@ BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue
     if (expr == NULL) {
         return bsNull();
     }
-    BSScope scope = {NULL, locals};
-    BSValue result = bsRunCode(&expr->code, NULL, options, &scope, builtins);
+    BSValue result = bsRunChunk(&expr->code, NULL, options, locals, builtins);
     bsExprFree(expr);
     return result;
 }
@@ -1620,6 +1620,6 @@ BSValue bsExecuteScript(BSScript *script, BSOptions *options)
     bsLibraryGlobals(options->globals);
     options->statementCount = 0;
     options->cacheEpoch = ++bsCacheEpoch;
-    return bsRunCode(&script->code, script, options, NULL, false);
+    return bsRunChunk(&script->code, script, options, bsNull(), false);
 }
 

@@ -218,8 +218,10 @@ bool bsJSONDecodeScript(const char *text, size_t size, BSAst *ast,
 
 /*
  * Bytecode: fixed eight-byte register instructions. "a" is the destination register or an index;
- * "b" and "c" are operands, each a register or - with the high bit set - a constant. A jump's
- * target is the 32-bit word "w" that overlays b and c.
+ * "b" and "c" are operands, each a register - a slot, a temporary, or one of the chunk's
+ * constants, which a frame copies in after the temporaries (while a chunk is emitted a constant
+ * operand carries the high bit and its constant index instead, until the temporaries are
+ * counted). A jump's target is the 32-bit word "w" that overlays b and c.
  */
 struct BSInst {
     uint8_t op;
@@ -233,7 +235,7 @@ struct BSInst {
     };
 };
 
-#define BS_OPERAND_CONST 0x8000u           /* an operand naming a constant rather than a register */
+#define BS_OPERAND_CONST 0x8000u           /* while emitting, an operand naming a constant rather than a register */
 #define BS_OPERAND_INDEX(o) ((o) & 0x7fffu)
 #define BS_REG_DISCARD 0xffffu              /* a call destination that drops the result */
 #define BS_OPERANDS_PER_DATA 3              /* call argument operands per DATA word */

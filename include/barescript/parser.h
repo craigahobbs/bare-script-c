@@ -52,7 +52,7 @@ typedef struct BSCallCache {
     BSValue *slot;      /* the value slot in the globals object, or NULL if the name is absent */
     uint32_t gen;       /* the globals object's structural generation the slot was resolved at */
     uint32_t epoch;     /* the options instance the slot was resolved for */
-    uint32_t nameIndex; /* the name's constant index */
+    uint32_t nameIndex; /* the name's index in the chunk's names */
     uint32_t memo;      /* the entry index an object call site last found its key at */
 } BSCallCache;
 
@@ -73,8 +73,10 @@ typedef struct BSCode {
     BSInst *inst;
     size_t count;
     size_t tempCount;    /* the temporary registers past the slots */
-    BSValue *constants;
+    BSValue *constants;  /* the operand constants - literals - which a frame copies in after its temporaries */
     size_t constantCount;
+    BSValue *names;      /* the names the name sites and the unknown-label traps refer to */
+    size_t nameCount;
     BSCallCache *caches;
     BSInclude *includes;
     size_t includeCount;

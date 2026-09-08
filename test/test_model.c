@@ -168,12 +168,13 @@ TEST(model_operand_limits)
     ASSERT_NULL(bsScriptFromModel(model, NULL));
     bsRelease(model);
 
-    /* A jump to an unknown label needs a constant for the label's name, after the last one was taken */
+    /* A chunk names at most 65536 names - here the labels of jumps to labels that are never defined
+       (long enough that the intern table does not keep them) */
     bsSBInit(&sb);
-    bsSBAppendString(&sb, "{\"statements\":[{\"jump\":{\"label\":\"nope\"}}");
-    for (int ix = 0; ix < 32767; ix++) {
-        char statement[64];
-        snprintf(statement, sizeof(statement), ",{\"expr\":{\"expr\":{\"number\":%d.5}}}", ix);
+    bsSBAppendString(&sb, "{\"statements\":[");
+    for (int ix = 0; ix < 65537; ix++) {
+        char statement[160];
+        snprintf(statement, sizeof(statement), "%s{\"jump\":{\"label\":\"%080d\"}}", ix == 0 ? "" : ",", ix);
         bsSBAppendString(&sb, statement);
     }
     bsSBAppendString(&sb, "]}");

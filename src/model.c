@@ -118,6 +118,10 @@ static void bsCodeFree(BSCode *code)
         bsRelease(code->constants[ix]);
     }
     free(code->constants);
+    for (size_t ix = 0; ix < code->nameCount; ix++) {
+        bsRelease(code->names[ix]);
+    }
+    free(code->names);
     free(code->caches);
     for (size_t ix = 0; ix < code->includeCount; ix++) {
         bsRelease(code->includes[ix].url);
@@ -653,6 +657,9 @@ typedef struct {
     BSValue *constants;
     size_t constCount;
     size_t constCap;
+    BSValue *names;       /* the name sites' and unknown-label traps' names, interned */
+    size_t nameCount;
+    size_t nameCap;
     BSValue *cover;
     int *coverLines;
     uint32_t *coverPcs;
@@ -679,6 +686,7 @@ typedef struct {
     size_t slotCap;
     BSValue slotMap;
     BSValue constMap;     /* interned constant string -> constant index */
+    BSValue nameMap;      /* interned name -> name index */
     BSValue labels;
     BSPatch *patches;
     size_t patchCount;
@@ -719,7 +727,7 @@ static uint32_t bsEmitJumpInst(BSEmit *e, uint8_t op, uint16_t a, uint32_t targe
  * bsEmitFinish rejects the chunk.
  */
 
-/* A constant's operand. Interned strings - names and literals - are shared, so a chunk holds each once. */
+/* A constant's operand. Interned strings - literals - are shared, so a chunk holds each once. */
 static BSOperand bsEmitConst(BSEmit *e, BSValue value)
 {
     bool interned = value.type == BS_STRING && (value.u.string->flags & BS_STR_INTERNED) != 0;
@@ -739,6 +747,26 @@ static BSOperand bsEmitConst(BSEmit *e, BSValue value)
     BS_GROW(e->constants, e->constCount, e->constCap, 16);
     e->constants[e->constCount] = bsRetain(value);
     return (BSOperand) (BS_OPERAND_CONST | (uint32_t) e->constCount++);
+}
+
+
+/* A name's index in the chunk's names, each held once - the name is interned */
+static uint16_t bsEmitName(BSEmit *e, BSValue name)
+{
+    if (e->nameMap.type != BS_OBJECT) {
+        e->nameMap = bsObjectNew();
+    }
+    BSValue index = bsObjectGetString(e->nameMap, name);
+    if (index.type == BS_NUMBER) {
+        return (uint16_t) index.u.number;
+    }
+    if (e->nameCount > 0xffffu) {
+        e->overflow = true;
+    }
+    bsObjectSetString(e->nameMap, name, bsNumber((double) e->nameCount));
+    BS_GROW(e->names, e->nameCount, e->nameCap, 8);
+    e->names[e->nameCount] = bsRetain(name);
+    return (uint16_t) e->nameCount++;
 }
 
 
@@ -813,7 +841,7 @@ static uint16_t bsEmitSite(BSEmit *e, BSValue name)
     BSCallCache *cache = &e->caches[e->cacheCount];
     memset(cache, 0, sizeof(*cache));
     BSValue interned = bsInternName(name);
-    cache->nameIndex = BS_OPERAND_INDEX(bsEmitConst(e, interned));
+    cache->nameIndex = bsEmitName(e, interned);
     bsRelease(interned);
     return (uint16_t) e->cacheCount++;
 }
@@ -1437,8 +1465,53 @@ int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc)
 
 
 /*
- * Finish a chunk into "code", resolving its forward jumps. Returns false if an operand space
- * overflowed - the chunk is then invalid, but complete, so bsCodeFree releases it.
+ * A constant operand names its register: the constants follow the slots and temporaries in a
+ * chunk's registers, so once the temporaries are counted every operand that named a constant
+ * becomes that register, and the interpreter reads every operand the same way
+ */
+static inline uint16_t bsOperandRelocate(uint16_t operand, uint16_t base)
+{
+    return (operand & BS_OPERAND_CONST) != 0 ? (uint16_t) (base + BS_OPERAND_INDEX(operand)) : operand;
+}
+
+static void bsCodeRelocateConstants(BSInst *inst, size_t count, uint16_t base)
+{
+    for (size_t pc = 0; pc < count; pc++) {
+        uint8_t op = inst[pc].op;
+        if (op == BS_OP_JUMP_FALSE || op == BS_OP_JUMP_TRUE || op == BS_OP_RETURN) {
+            inst[pc].a = bsOperandRelocate(inst[pc].a, base);
+        } else if (op == BS_OP_MOVE || op == BS_OP_STORE_NAME || op == BS_OP_NEG || op == BS_OP_NOT || op == BS_OP_BNOT) {
+            inst[pc].b = bsOperandRelocate(inst[pc].b, base);
+        } else if (op >= BS_OP_ADD && op <= BS_OP_SHR) {
+            inst[pc].b = bsOperandRelocate(inst[pc].b, base);
+            inst[pc].c = bsOperandRelocate(inst[pc].c, base);
+        } else if (op >= BS_OP_JUMP_EQ && op <= BS_OP_JUMP_GE) {
+            /* The target word that follows is not operands */
+            inst[pc].b = bsOperandRelocate(inst[pc].b, base);
+            inst[pc].c = bsOperandRelocate(inst[pc].c, base);
+            pc++;
+        } else if (op == BS_OP_JUMP_UNDEF) {
+            /* The line word that follows is not operands, and a is the label's name index */
+            pc++;
+        } else if (op == BS_OP_CALL_NAME || op == BS_OP_CALL_SLOT ||
+                   (op >= BS_OP_CALL_ARRAY_GET && op <= BS_OP_CALL_STRING_SLICE)) {
+            /* The argument operands, three per data word - an unused field is zero, which names a slot */
+            size_t argCount = inst[pc].c;
+            for (size_t ix = 0; ix < argCount; ix += BS_OPERANDS_PER_DATA) {
+                pc++;
+                inst[pc].a = bsOperandRelocate(inst[pc].a, base);
+                inst[pc].b = bsOperandRelocate(inst[pc].b, base);
+                inst[pc].c = bsOperandRelocate(inst[pc].c, base);
+            }
+        }
+    }
+}
+
+
+/*
+ * Finish a chunk into "code", resolving its forward jumps and naming its constants' registers.
+ * Returns false if an operand space overflowed - the chunk is then invalid, but complete, so
+ * bsCodeFree releases it.
  */
 static bool bsEmitFinish(BSEmit *e, BSCode *code)
 {
@@ -1452,14 +1525,15 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
              * A jump to a missing label only errors if the jump is taken. The trap sits past the
              * chunk's return, so it carries the jump statement's line in a data word.
              */
-            BSOperand name = bsEmitConst(e, e->patches[ix].label);
+            uint16_t name = bsEmitName(e, e->patches[ix].label);
             int line = bsCoverLine(e->coverPcs, e->coverLines, e->coverCount, e->patches[ix].pc);
-            uint32_t trap = bsEmitInst(e, BS_OP_JUMP_UNDEF, BS_OPERAND_INDEX(name), 0, 0);
+            uint32_t trap = bsEmitInst(e, BS_OP_JUMP_UNDEF, name, 0, 0);
             bsEmitJumpInst(e, BS_OP_DATA, 0, (uint32_t) line);
             e->inst[e->patches[ix].pc].w = trap;
         }
         bsRelease(e->patches[ix].label);
     }
+    bsCodeRelocateConstants(e->inst, e->count, (uint16_t) (e->slotCount + e->tempMax));
     free(e->patches);
     free(e->assigned);
     free(e->blockOf);
@@ -1467,6 +1541,7 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
     bsRelease(e->labels);
     bsRelease(e->slotMap);
     bsRelease(e->constMap);
+    bsRelease(e->nameMap);
 
     memset(code, 0, sizeof(*code));
     code->inst = e->inst;
@@ -1474,6 +1549,8 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
     code->tempCount = e->tempMax;
     code->constants = e->constants;
     code->constantCount = e->constCount;
+    code->names = e->names;
+    code->nameCount = e->nameCount;
     code->includes = e->includes;
     code->includeCount = e->includeCount;
     code->cover = e->cover;
