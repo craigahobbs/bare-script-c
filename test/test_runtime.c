@@ -1070,7 +1070,7 @@ TEST(runtime_include_lint_debug)
     BSOptions *options = bsTestFetchOptions();
     options->debug = true;
     bsRelease(bsTestExecuteOptions("include 'lint.bare'", options));
-    ASSERT_TRUE(strstr(bsTestLogText(), "BareScript: Include \"lint.bare\" static analysis...") != NULL);
+    ASSERT_STR_CONTAINS(bsTestLogText(), "BareScript: Include \"lint.bare\" static analysis...");
     ASSERT_STR_CONTAINS(bsTestLogText(), "Unused variable");
     bsOptionsFree(options);
 

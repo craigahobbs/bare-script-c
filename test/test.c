@@ -93,7 +93,7 @@ void bsTestAssertEqual(const char *file, int line, const char *subject, const ch
 {
     if (!bsTestStringEqual(actual, expected)) {
         bsTestFail(file, line, "%s\n    actual:   %s\n    expected: %s", subject, actual != NULL ? actual : "(null)",
-                   expected);
+                   expected != NULL ? expected : "(null)");
     } else {
         bsTestPass();
     }

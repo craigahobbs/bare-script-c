@@ -15,6 +15,16 @@
 
 /* Inflate base64-encoded gzip test data. The bundled models are
  * raw bytes, so the library has no base64 decoder; this one trusts its input. */
+static size_t bsTestIncludeIndex(const char *name)
+{
+    size_t ix = 0;
+    while (strcmp(bsIncludeName(ix), name) != 0) {
+        ix++;
+    }
+    return ix;
+}
+
+
 static char *bsTestGzipDecode(const char *text)
 {
     static const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -76,14 +86,10 @@ TEST(include_decode)
         BSValue model = bsJSONDecode(source, strlen(source), &error);
         if (error != NULL) {
             bsTestFail(__FILE__, __LINE__, "%s: %s", name, error);
-            bsRelease(model);
-            return;
         }
         BSScript *script = bsScriptFromModel(model, name);
         if (script == NULL) {
             bsTestFail(__FILE__, __LINE__, "%s: invalid model", name);
-            bsRelease(model);
-            return;
         }
         bsTestPass();
         bsScriptRelease(script);
@@ -116,10 +122,7 @@ TEST(include_stub_accessors)
 TEST(include_compiled_out)
 {
     /* A compiled-out include keeps its registry entry with no model - as here, with its data cleared */
-    size_t ix = 0;
-    while (strcmp(bsIncludeName(ix), "url.bare") != 0) {
-        ix++;
-    }
+    size_t ix = bsTestIncludeIndex("url.bare");
     bsIncludeCleanup();
     BSIncludeSource saved = bsIncludeSources[ix];
     bsIncludeSources[ix].gzip = NULL;
@@ -239,10 +242,7 @@ TEST(include_gzip_invalid)
     }
 
     /* A missing or empty gzip blob fails to decode - patched into a registry entry, then restored */
-    size_t ixUrl = 0;
-    while (strcmp(bsIncludeName(ixUrl), "url.bare") != 0) {
-        ixUrl++;
-    }
+    size_t ixUrl = bsTestIncludeIndex("url.bare");
     bsIncludeCleanup();
     BSIncludeSource saved = bsIncludeSources[ixUrl];
     static const unsigned char dummyGzip[1] = {0};

@@ -434,8 +434,8 @@ TEST(value_object_new_capacity)
     bsTestObjectFill(object, "cap%d", 0, 100);
     ASSERT_INT_EQ(bsObjectCount(object), 100);
     ASSERT_INT_EQ(object.u.object->index->mask + 1, 256);
-    ASSERT_VALUE(bsRetain(bsObjectGet(object, "cap99")), "99");
-    ASSERT_VALUE(bsRetain(bsObjectGet(object, "cap0")), "0");
+    ASSERT_VALUE_KEEP(bsObjectGet(object, "cap99"), "99");
+    ASSERT_VALUE_KEEP(bsObjectGet(object, "cap0"), "0");
     ASSERT_TRUE(bsObjectDelete(object, "cap50"));
     ASSERT_INT_EQ(bsObjectGet(object, "cap50").type, BS_NULL);
     bsRelease(object);
@@ -443,7 +443,7 @@ TEST(value_object_new_capacity)
     object = bsObjectNewCapacity(3);
     ASSERT_TRUE(object.u.object->entries == object.u.object->inline_);
     bsObjectSet(object, "a", bsNumber(1));
-    ASSERT_VALUE(bsRetain(bsObjectGet(object, "a")), "1");
+    ASSERT_VALUE_KEEP(bsObjectGet(object, "a"), "1");
     bsRelease(object);
 }
 
