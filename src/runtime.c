@@ -1068,10 +1068,9 @@ static BS_NOINLINE bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst
     if (object.type != BS_OBJECT || key.type != BS_STRING) {
         return false;
     }
-    BSValue found;
-    if (!bsObjectLookupString(object, key, &found)) {
-        found = inst->c == 3 ? bsOperandRead(code, regs, args->c) : bsNull();
-    }
+    BSValue *slot = bsObjectValuePtrString(object, key);
+    BSValue found = slot != NULL ? *slot :
+        (inst->c == 3 ? bsOperandRead(code, regs, args->c) : bsNull());
     bsIntrinResult(inst, regs, found);
     return true;
 }
