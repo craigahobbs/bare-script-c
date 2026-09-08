@@ -1564,6 +1564,12 @@ BSValue *bsObjectValuePtrString(BSValue object, BSValue key)
 }
 
 
+BSObjectEntry *bsObjectEntryFind(BSObject *object, BSString *key)
+{
+    return bsObjectFind(object, key, key->data, key->size);
+}
+
+
 bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out)
 {
     BSValue *found = object.type == BS_OBJECT ? bsObjectValuePtrString(object, key) : NULL;

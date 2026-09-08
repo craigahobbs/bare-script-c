@@ -44,13 +44,16 @@ typedef struct BSInclude {
  *
  * The cache points at the globals object's value slot for the name, so an assignment to the name
  * is seen through the slot. The slot is re-resolved when the globals object's structural
- * generation changes (a key added or removed) or the options instance changes.
+ * generation changes (a key added or removed) or the options instance changes. An objectGet or
+ * objectSet call site also remembers the entry index its key was found at, since records built
+ * the same way keep a key at the same index; the entry's key is checked before the memo is used.
  */
 typedef struct BSCallCache {
     BSValue *slot;      /* the value slot in the globals object, or NULL if the name is absent */
     uint32_t gen;       /* the globals object's structural generation the slot was resolved at */
     uint32_t epoch;     /* the options instance the slot was resolved for */
     uint32_t nameIndex; /* the name's constant index */
+    uint32_t memo;      /* the entry index an object call site last found its key at */
 } BSCallCache;
 
 

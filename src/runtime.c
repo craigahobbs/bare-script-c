@@ -1068,8 +1068,8 @@ static BS_NOINLINE bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst
     if (object.type != BS_OBJECT || key.type != BS_STRING) {
         return false;
     }
-    BSValue *slot = bsObjectValuePtrString(object, key);
-    BSValue found = slot != NULL ? *slot :
+    BSObjectEntry *entry = bsObjectEntryMemo(object.u.object, key.u.string, &code->caches[inst->b].memo);
+    BSValue found = entry != NULL ? entry->value :
         (inst->c == 3 ? bsOperandRead(code, regs, args->c) : bsNull());
     bsIntrinResult(inst, regs, found);
     return true;
@@ -1088,7 +1088,14 @@ static BS_NOINLINE bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst
         return false;
     }
     BSValue value = bsOperandRead(code, regs, args->c);
-    bsObjectSetString(object, key, bsRetain(value));
+    uint32_t *memo = &code->caches[inst->b].memo;
+    BSObjectEntry *entry = bsObjectEntryMemo(object.u.object, key.u.string, memo);
+    if (entry != NULL) {
+        bsAssign(&entry->value, bsRetain(value));
+    } else {
+        bsObjectAppend(object, key, bsRetain(value));
+        *memo = object.u.object->count - 1;
+    }
     bsIntrinResult(inst, regs, value);
     return true;
 }

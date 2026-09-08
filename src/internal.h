@@ -257,6 +257,27 @@ bool bsObjectKeyIs(const BSString *stored, BSValue key);
 BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size);
 BSValue *bsObjectValuePtrString(BSValue object, BSValue key);
 
+/* The entry holding a string key, or NULL if absent. Valid until a key is added or removed. */
+BSObjectEntry *bsObjectEntryFind(BSObject *object, BSString *key);
+
+/*
+ * The entry holding a key, checked first at "*memo" - the entry index a call site found its key
+ * at last time, which a find updates - so a record built the same way as the last one costs one
+ * pointer compare. NULL if the key is absent.
+ */
+static inline BSObjectEntry *bsObjectEntryMemo(BSObject *object, BSString *key, uint32_t *memo)
+{
+    uint32_t ix = *memo;
+    if (ix < object->count && object->entries[ix].key == key) {
+        return &object->entries[ix];
+    }
+    BSObjectEntry *entry = bsObjectEntryFind(object, key);
+    if (entry != NULL) {
+        *memo = (uint32_t) (entry - object->entries);
+    }
+    return entry;
+}
+
 /*
  * Append a key known to be absent, skipping the duplicate scan. Takes ownership of "item" and
  * retains "key". For building an object from keys that are distinct by construction.
