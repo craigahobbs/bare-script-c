@@ -327,6 +327,47 @@ static inline int bsHexValue(char ch)
 }
 
 
+/*
+ * The Unicode spaces - JavaScript's WhiteSpace and LineTerminator sets: the ASCII spaces, U+00A0,
+ * U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, and U+FEFF. The regex \s class,
+ * stringTrim, and number parsing all read this one set.
+ */
+static inline bool bsIsSpaceCode(uint32_t code)
+{
+    if (code < 0x80) {
+        return code == ' ' || (code >= 0x09 && code <= 0x0D);
+    }
+    return code == 0xA0 || code == 0x1680 || (code >= 0x2000 && code <= 0x200A) || code == 0x2028 ||
+        code == 0x2029 || code == 0x202F || code == 0x205F || code == 0x3000 || code == 0xFEFF;
+}
+
+
+/*
+ * Unicode case mapping (unicode.c)
+ */
+
+/*
+ * A string's full upper or lower case, as an owned string value - the sharp s upper-cases to "SS",
+ * a capital sigma that ends a word lower-cases to the final sigma
+ */
+BSValue bsStringToCase(BSValue string, bool upper);
+
+/*
+ * JavaScript's canonical form of a code point for case-insensitive matching: its simple upper
+ * case, unless that would map a non-ASCII code point to ASCII
+ */
+uint32_t bsUnicodeCanon(uint32_t code);
+
+/*
+ * The code points a canonical form matches case-insensitively - itself, its lower case when that
+ * maps back, and the further members of its group when it has several lower-case forms - into
+ * "members", which holds BS_CANON_MEMBERS; returns the count. The largest group has three members
+ * past its canonical form.
+ */
+#define BS_CANON_MEMBERS 4
+size_t bsUnicodeCanonMembers(uint32_t canon, uint32_t *members);
+
+
 /* True if "string" begins or ends with "search". Both must be strings. */
 static inline bool bsStringStartsWith(BSValue string, BSValue search)
 {

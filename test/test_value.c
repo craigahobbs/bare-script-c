@@ -92,6 +92,9 @@ TEST(value_number_parse)
     ASSERT_DOUBLE_EQ(number, 1.5);
     ASSERT_TRUE(bsNumberParse("  -2e3  ", 8, &number));
     ASSERT_DOUBLE_EQ(number, -2000);
+    ASSERT_TRUE(bsNumberParse("\xe3\x80\x80" "7" "\xef\xbb\xbf", 7, &number));
+    ASSERT_DOUBLE_EQ(number, 7);
+    ASSERT_FALSE(bsNumberParse("\xc2\x85" "7", 3, &number));
     ASSERT_TRUE(bsNumberParse("+.5", 3, &number));
     ASSERT_DOUBLE_EQ(number, 0.5);
     ASSERT_TRUE(bsNumberParse("5.", 2, &number));

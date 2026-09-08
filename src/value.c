@@ -5,7 +5,6 @@
  * The BareScript value system
  */
 
-#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2022,13 +2021,26 @@ double bsStrtod(const char *text, size_t size)
     return value;
 }
 
+
+/* The offset past the Unicode spaces at "ix" */
+static size_t bsSkipSpaces(const char *text, size_t size, size_t ix)
+{
+    while (ix < size) {
+        size_t codeSize;
+        if (!bsIsSpaceCode(bsUTF8Decode(text, size, ix, &codeSize))) {
+            break;
+        }
+        ix += codeSize;
+    }
+    return ix;
+}
+
+
 bool bsNumberParse(const char *text, size_t size, double *result)
 {
     /* ^\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*$ */
     size_t ix = 0;
-    while (ix < size && isspace((unsigned char) text[ix])) {
-        ix++;
-    }
+    ix = bsSkipSpaces(text, size, ix);
     size_t begin = ix;
     if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
         ix++;
@@ -2064,9 +2076,7 @@ bool bsNumberParse(const char *text, size_t size, double *result)
         }
     }
     size_t end = ix;
-    while (ix < size && isspace((unsigned char) text[ix])) {
-        ix++;
-    }
+    ix = bsSkipSpaces(text, size, ix);
     if (ix != size) {
         return false;
     }
@@ -2086,9 +2096,7 @@ bool bsIntegerParse(const char *text, size_t size, int radix, double *result)
         return false;
     }
     size_t ix = 0;
-    while (ix < size && isspace((unsigned char) text[ix])) {
-        ix++;
-    }
+    ix = bsSkipSpaces(text, size, ix);
     bool negative = false;
     if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
         negative = (text[ix] == '-');
@@ -2108,9 +2116,7 @@ bool bsIntegerParse(const char *text, size_t size, int radix, double *result)
     if (digits == 0) {
         return false;
     }
-    while (ix < size && isspace((unsigned char) text[ix])) {
-        ix++;
-    }
+    ix = bsSkipSpaces(text, size, ix);
     if (ix != size || !isfinite(value)) {
         return false;
     }

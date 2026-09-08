@@ -64,6 +64,10 @@ perf` merges their results when present.
   changes here empirically against CPython rather than by inspection.
 - README's **Compatibility** section records every deliberate behavioral choice where the two
   references disagree with each other. Update it when behavior changes.
+- Agreement between the two references is evidence, not authority: this implementation is the
+  truth, and a behavior change is the user's decision. Unicode whitespace and case behavior is
+  defined as standard JavaScript's, within reason; README's **Compatibility** paragraph and table
+  record the definition and the Python implementation's deviations from it.
 
 ## Architecture
 
@@ -181,13 +185,14 @@ subset BareScript exposes - see DESIGN.md's **Regular Expressions** table.
 | `src/include.c`           | the bundled include registry and model decompression          |
 | `src/json.c`              | JSON encode and decode                                        |
 | `src/regex.c`             | the regular expression compiler and matcher                   |
+| `src/unicode.c`           | Unicode case mapping - stringUpper, stringLower, the regex `i` flag - and its Unicode 16.0 tables |
 | `src/options.c`           | the fetch, log, and URL option implementations                |
 | `src/includeSource.c`     | **generated** - compressed include library models             |
 | `src/bare.c`, `src/main.c`| the CLI (`bsMain`) and its entry point                        |
 | `src/internal.h`          | declarations shared across implementation files               |
 | `test/`                   | C unit tests; `test/include/` is the BareScript language suite |
 | `lib/include/`            | **vendored** reference include library and its test suite     |
-| `bin/`                    | BareScript build tools (include source generator, perf report), the regex fuzz check |
+| `bin/`                    | BareScript build tools (include source generator, perf report)   |
 | `perf/`                   | the benchmark and a native C baseline                         |
 | `perfx/`                  | the cross-language application suite: runner, ports, report   |
 

@@ -106,8 +106,12 @@ TEST(regex_dot_and_classes)
     ASSERT_VALUE_STRING(bsTestMatch("\xc3\xa9+", "a\xc3\xa9\xc3\xa9z", 0), "\xc3\xa9\xc3\xa9");
     ASSERT_VALUE_STRING(bsTestMatch("[\xc3\xa9-\xc3\xaa]+", "a\xc3\xa9z", 0), "\xc3\xa9");
 
-    /* Code points of 256 or more go through the class's range walk, not the ASCII bitmap */
+    /* Code points past ASCII go through the class's range walk, not the ASCII bitmap */
     ASSERT_VALUE_STRING(bsTestMatch("\\s", "\xe2\x80\xa8", 0), "\xe2\x80\xa8"); /* U+2028 */
+    ASSERT_VALUE_STRING(bsTestMatch("\\s", "\xe2\x80\x83", 0), "\xe2\x80\x83"); /* U+2003 */
+    ASSERT_VALUE_STRING(bsTestMatch("\\s", "\xe3\x80\x80", 0), "\xe3\x80\x80"); /* U+3000 */
+    ASSERT_VALUE_STRING(bsTestMatch("\\s", "\xef\xbb\xbf", 0), "\xef\xbb\xbf"); /* U+FEFF */
+    ASSERT_VALUE_STRING(bsTestMatch("\\s", "\xc2\x85", 0), "null"); /* U+0085 */
     ASSERT_VALUE_STRING(bsTestMatch("[\\u2600]", "x\xe2\x98\x80y", 0), "\xe2\x98\x80");
     ASSERT_VALUE_STRING(bsTestMatch("[^\\u2600]", "\xe2\x98\x80" "a", 0), "a");
     ASSERT_VALUE_STRING(bsTestMatch("[^\\s]", "\xe2\x98\x80", 0), "\xe2\x98\x80");
@@ -163,6 +167,13 @@ TEST(regex_anchors)
     ASSERT_VALUE_STRING(bsTestMatch("^\xc3\xa9", "\xc3\xa9" "abc", 0), "\xc3\xa9");
     ASSERT_VALUE_STRING(bsTestMatch("^b", "\xc3\xa9" "a\nb", BS_REGEX_MULTILINE), "b");
     ASSERT_VALUE_STRING(bsTestMatch("a$", "\xc3\xa9" "a\nb", BS_REGEX_MULTILINE), "a");
+
+    /* Every line terminator - CR, U+2028, U+2029 - bounds a multi-line anchor; "$" alone is the end only */
+    ASSERT_VALUE_STRING(bsTestMatch("^b", "a\rb", BS_REGEX_MULTILINE), "b");
+    ASSERT_VALUE_STRING(bsTestMatch("^b", "a\xe2\x80\xa8" "b", BS_REGEX_MULTILINE), "b");
+    ASSERT_VALUE_STRING(bsTestMatch("a$", "a\xe2\x80\xa9" "b", BS_REGEX_MULTILINE), "a");
+    ASSERT_VALUE_STRING(bsTestMatch("^b", "a\rb", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("a$", "a\n", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch("c$", "\xc3\xa9" "abc", 0), "c");
     ASSERT_VALUE_STRING(bsTestMatch("\\bword\\b", "\xc3\xa9" " word ", 0), "word");
 }
@@ -281,6 +292,27 @@ TEST(regex_ignorecase)
     ASSERT_VALUE_STRING(bsTestMatch("[a-c]+", "xABCy", BS_REGEX_IGNORECASE), "ABC");
     ASSERT_VALUE_STRING(bsTestMatch("[^a-c]+", "ABxy", BS_REGEX_IGNORECASE), "xy");
     ASSERT_VALUE_STRING(bsTestMatch("[0-9]+", "AB12", BS_REGEX_IGNORECASE), "12");
+
+    /* Unicode simple case folding: a code point matches the ones sharing its upper case, but a fold across the
+       ASCII boundary - the dotless i, the long s, the Kelvin sign - and an expanding upper case - the sharp s - do not */
+    ASSERT_VALUE_STRING(bsTestMatch("\xc3\xa9", "x\xc3\x89", BS_REGEX_IGNORECASE), "\xc3\x89");
+    ASSERT_VALUE_STRING(bsTestMatch("[\xc3\xa0-\xc3\xbf]", "\xc3\x80", BS_REGEX_IGNORECASE), "\xc3\x80");
+    ASSERT_VALUE_STRING(bsTestMatch("[^\xc3\xa9]", "\xc3\x89", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("\xcf\x83", "\xcf\x82", BS_REGEX_IGNORECASE), "\xcf\x82");
+    ASSERT_VALUE_STRING(bsTestMatch("[\xcf\x82]", "\xce\xa3", BS_REGEX_IGNORECASE), "\xce\xa3");
+    ASSERT_VALUE_STRING(bsTestMatch("\xc2\xb5", "x\xce\x9c", BS_REGEX_IGNORECASE), "\xce\x9c");
+    ASSERT_VALUE_STRING(bsTestMatch("[\xc2\xb5]", "\xce\xbc", BS_REGEX_IGNORECASE), "\xce\xbc");
+    ASSERT_VALUE_STRING(bsTestMatch("\xcd\x85", "\xce\xb9", BS_REGEX_IGNORECASE), "\xce\xb9");
+    ASSERT_VALUE_STRING(bsTestMatch("(\xc3\xa9)\\1", "\xc3\xa9\xc3\x89", BS_REGEX_IGNORECASE), "\xc3\xa9\xc3\x89");
+    ASSERT_VALUE_STRING(bsTestMatch("\xc3\x9f", "\xe1\xba\x9e", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("\xc4\xb1", "I", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("i", "\xc4\xb0", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("k", "\xe2\x84\xaa", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("[k]", "\xe2\x84\xaa", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("[\xe2\x84\xaa]", "k", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("s", "\xc5\xbf", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("[a-z]", "\xc5\xbf", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("\xc3\xa9+", "\xc3\x89\xc3\xa9x", BS_REGEX_IGNORECASE), "\xc3\x89\xc3\xa9");
 }
 
 

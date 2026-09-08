@@ -11,7 +11,6 @@
  * including the documented per-function error return values.
  */
 
-#include <ctype.h>
 #include <float.h>
 #include <math.h>
 #include <stdio.h>
@@ -1480,23 +1479,8 @@ static BSValue bsFnStringLastIndexOf(const BSValue *args, size_t argCount, BSOpt
 BS_LIBRARY_FN(bsFnStringLength, stringArgs, bsNumber(0), bsNumber((double) bsStringLength(values[0])))
 
 
-static BSValue bsStringCase(const BSValue *args, size_t argCount, BSOptions *options, bool upper)
-{
-    BS_ARGS(stringArgs, bsNull());
-    size_t size = bsStringSize(values[0]);
-    const char *text = bsStringData(values[0]);
-    BSStringBuilder sb;
-    bsSBInit(&sb);
-    for (size_t ix = 0; ix < size; ix++) {
-        char ch = text[ix];
-        bsSBAppendChar(&sb, upper ? (char) toupper((unsigned char) ch) : (char) tolower((unsigned char) ch));
-    }
-    return bsSBToValue(&sb);
-}
-
-
-BS_RAW_FN(bsFnStringLower, bsStringCase(args, argCount, options, false))
-BS_RAW_FN(bsFnStringUpper, bsStringCase(args, argCount, options, true))
+BS_LIBRARY_FN(bsFnStringLower, stringArgs, bsNull(), bsStringToCase(values[0], false))
+BS_LIBRARY_FN(bsFnStringUpper, stringArgs, bsNull(), bsStringToCase(values[0], true))
 
 
 BS_LIBRARY_FN(bsFnStringNewFn, valueArgs, bsNull(), bsValueString(values[0]))
@@ -1635,7 +1619,7 @@ static BSValue bsFnStringSplitLines(const BSValue *args, size_t argCount, BSOpti
         const char *newline = memchr(text + position, '\n', size - position);
         size_t next = newline != NULL ? (size_t) (newline - text) : size;
         size_t end = next;
-        if (end > position && text[end - 1] == '\r') {
+        if (newline != NULL && end > position && text[end - 1] == '\r') {
             end--;
         }
         /* A line of an ASCII string is ASCII */
@@ -1653,14 +1637,6 @@ BS_LIBRARY_FN(bsFnStringStartsWith, stringSearchArgs, bsNull(),
               bsBoolean(bsStringStartsWith(values[0], values[1])))
 
 
-/* Whitespace as both references trim it: ASCII's, and the Unicode spaces the two agree on */
-static bool bsIsTrimSpace(uint32_t code)
-{
-    return code == ' ' || (code >= 0x09 && code <= 0x0D) || code == 0xA0 || code == 0x1680 ||
-        (code >= 0x2000 && code <= 0x200A) || code == 0x2028 || code == 0x2029 || code == 0x202F ||
-        code == 0x205F || code == 0x3000;
-}
-
 static BSValue bsFnStringTrim(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringArgs, bsNull());
@@ -1669,7 +1645,7 @@ static BSValue bsFnStringTrim(const BSValue *args, size_t argCount, BSOptions *o
     size_t begin = 0;
     size_t end = size;
     size_t codeSize;
-    while (begin < end && bsIsTrimSpace(bsUTF8Decode(text, end, begin, &codeSize))) {
+    while (begin < end && bsIsSpaceCode(bsUTF8Decode(text, end, begin, &codeSize))) {
         begin += codeSize;
     }
     while (end > begin) {
@@ -1677,7 +1653,7 @@ static BSValue bsFnStringTrim(const BSValue *args, size_t argCount, BSOptions *o
         while (lead > begin && ((unsigned char) text[lead] & 0xC0) == 0x80) {
             lead--;
         }
-        if (!bsIsTrimSpace(bsUTF8Decode(text, end, lead, &codeSize))) {
+        if (!bsIsSpaceCode(bsUTF8Decode(text, end, lead, &codeSize))) {
             break;
         }
         end = lead;

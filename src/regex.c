@@ -78,6 +78,7 @@ typedef struct RxClass {
     size_t rangeCount;
     unsigned classes;
     bool negate;
+    bool fold;        /* matched case-insensitively */
     uint8_t ascii[16]; /* membership of the code points 0 - 127, with flags and negation applied */
 } RxClass;
 
@@ -320,21 +321,20 @@ static void rxError(RxCompiler *compiler, size_t position, const char *format, .
 }
 
 
-static uint32_t rxFold(uint32_t ch)
+/* The canonical form of a code point for case-insensitive matching - the ASCII letters in line */
+static inline uint32_t rxCanon(uint32_t ch)
 {
-    return (ch >= 'A' && ch <= 'Z') ? ch + 32 : ch;
+    if (ch < 128) {
+        return (ch >= 'a' && ch <= 'z') ? ch - 32 : ch;
+    }
+    return bsUnicodeCanon(ch);
 }
 
 
-static uint32_t rxSwapCase(uint32_t ch)
+/* Whether a code point is one of JavaScript's line terminators */
+static bool rxIsLineTerminator(uint32_t ch)
 {
-    if (ch >= 'A' && ch <= 'Z') {
-        return ch + 32;
-    }
-    if (ch >= 'a' && ch <= 'z') {
-        return ch - 32;
-    }
-    return ch;
+    return ch == '\n' || ch == '\r' || ch == 0x2028 || ch == 0x2029;
 }
 
 
@@ -367,7 +367,7 @@ static void rxClassRange(RxNode *node, uint32_t lo, uint32_t hi)
 static RxNode *rxCharNode(RxCompiler *compiler, uint32_t ch)
 {
     RxNode *node = rxNodeNew(compiler, RX_CHAR);
-    node->u.ch = (compiler->flags & BS_REGEX_IGNORECASE) != 0 ? rxFold(ch) : ch;
+    node->u.ch = (compiler->flags & BS_REGEX_IGNORECASE) != 0 ? rxCanon(ch) : ch;
     return node;
 }
 
@@ -1026,18 +1026,23 @@ static void rxNodeLength(const RxNode *node, size_t *minLength, size_t *maxLengt
 }
 
 
-/* Add a code point, and its other case when matching case-insensitively, to a first set */
+/*
+ * Add a code point to a first set - and, matching case-insensitively, every code point its
+ * canonical form matches
+ */
 static void rxFirstAddCode(RxFirstSet *set, unsigned flags, uint32_t code)
 {
-    if (code >= 256) {
-        set->high = true;
-        return;
-    }
-    set->bits[code >> 6] |= (uint64_t) 1 << (code & 63);
+    uint32_t members[BS_CANON_MEMBERS];
+    size_t count = 1;
+    members[0] = code;
     if ((flags & BS_REGEX_IGNORECASE) != 0) {
-        uint32_t other = rxSwapCase(code);
-        if (other < 256) {
-            set->bits[other >> 6] |= (uint64_t) 1 << (other & 63);
+        count = bsUnicodeCanonMembers(rxCanon(code), members);
+    }
+    for (size_t ix = 0; ix < count; ix++) {
+        if (members[ix] >= 256) {
+            set->high = true;
+        } else {
+            set->bits[members[ix] >> 6] |= (uint64_t) 1 << (members[ix] & 63);
         }
     }
 }
@@ -1496,13 +1501,6 @@ static void rxTrailUnwind(RxState *state, size_t mark)
 }
 
 
-static bool rxIsSpaceCode(uint32_t ch)
-{
-    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == 0x0B ||
-        ch == 0xA0 || ch == 0xFEFF || ch == 0x2028 || ch == 0x2029;
-}
-
-
 static bool rxClassMatchOne(const RxClass *cls, uint32_t ch)
 {
     unsigned classes = cls->classes;
@@ -1518,14 +1516,28 @@ static bool rxClassMatchOne(const RxClass *cls, uint32_t ch)
     if ((classes & RX_CLASS_NOTWORD) != 0 && !rxIsWordCode(ch)) {
         return true;
     }
-    if ((classes & RX_CLASS_SPACE) != 0 && rxIsSpaceCode(ch)) {
+    if ((classes & RX_CLASS_SPACE) != 0 && bsIsSpaceCode(ch)) {
         return true;
     }
-    if ((classes & RX_CLASS_NOTSPACE) != 0 && !rxIsSpaceCode(ch)) {
+    if ((classes & RX_CLASS_NOTSPACE) != 0 && !bsIsSpaceCode(ch)) {
         return true;
     }
     for (size_t ix = 0; ix < cls->rangeCount; ix++) {
         if (ch >= cls->ranges[ix * 2] && ch <= cls->ranges[ix * 2 + 1]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+/* Whether a class has a member that a code point matches case-insensitively */
+static bool rxClassMatchFold(const RxClass *cls, uint32_t ch)
+{
+    uint32_t members[BS_CANON_MEMBERS];
+    size_t count = bsUnicodeCanonMembers(rxCanon(ch), members);
+    for (size_t ix = 0; ix < count; ix++) {
+        if (rxClassMatchOne(cls, members[ix])) {
             return true;
         }
     }
@@ -1539,10 +1551,10 @@ static bool rxClassMatchOne(const RxClass *cls, uint32_t ch)
  */
 static void rxClassFinish(RxClass *cls, unsigned flags)
 {
+    cls->fold = (flags & BS_REGEX_IGNORECASE) != 0;
     memset(cls->ascii, 0, sizeof(cls->ascii));
     for (uint32_t ch = 0; ch < 128; ch++) {
-        bool matched = rxClassMatchOne(cls, ch) ||
-            ((flags & BS_REGEX_IGNORECASE) != 0 && rxClassMatchOne(cls, rxSwapCase(ch)));
+        bool matched = cls->fold ? rxClassMatchFold(cls, ch) : rxClassMatchOne(cls, ch);
         if (matched != cls->negate) {
             cls->ascii[ch >> 3] |= (uint8_t) (1u << (ch & 7));
         }
@@ -1555,8 +1567,7 @@ static inline bool rxClassMatch(const RxClass *cls, uint32_t ch)
     if (ch < 128) {
         return (cls->ascii[ch >> 3] >> (ch & 7)) & 1u;
     }
-    /* Case folding only maps ASCII letters, so past them the ranges alone decide */
-    return rxClassMatchOne(cls, ch) != cls->negate;
+    return (cls->fold ? rxClassMatchFold(cls, ch) : rxClassMatchOne(cls, ch)) != cls->negate;
 }
 
 
@@ -1894,9 +1905,9 @@ static inline bool rxAtomAt(const RxState *state, unsigned kind, uint32_t operan
     case RXI_CHAR:
         return ch == operand;
     case RXI_CHAR_FOLD:
-        return rxFold(ch) == operand;
+        return rxCanon(ch) == operand;
     case RXI_ANY:
-        return ch != '\n' && ch != '\r' && ch != 0x2028 && ch != 0x2029;
+        return !rxIsLineTerminator(ch);
     case RXI_ANY_ALL:
         return true;
     default:
@@ -1956,7 +1967,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             RX_NEXT();
 
         RX_CASE(CHAR_FOLD)
-            if (pos >= length || rxFold(rxCode(state, pos)) != inst->operand) {
+            if (pos >= length || rxCanon(rxCode(state, pos)) != inst->operand) {
                 goto backtrack;
             }
             pos++;
@@ -1967,8 +1978,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             if (pos >= length) {
                 goto backtrack;
             }
-            uint32_t ch = rxCode(state, pos);
-            if (ch == '\n' || ch == '\r' || ch == 0x2028 || ch == 0x2029) {
+            if (rxIsLineTerminator(rxCode(state, pos))) {
                 goto backtrack;
             }
             pos++;
@@ -2064,7 +2074,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             RX_NEXT();
 
         RX_CASE(BOL_ML)
-            if (pos != 0 && rxCode(state, pos - 1) != '\n') {
+            if (pos != 0 && !rxIsLineTerminator(rxCode(state, pos - 1))) {
                 goto backtrack;
             }
             pc++;
@@ -2078,7 +2088,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
             RX_NEXT();
 
         RX_CASE(EOL_ML)
-            if (pos != length && rxCode(state, pos) != '\n') {
+            if (pos != length && !rxIsLineTerminator(rxCode(state, pos))) {
                 goto backtrack;
             }
             pc++;
@@ -2106,7 +2116,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                 for (size_t ix = 0; ix < size; ix++) {
                     uint32_t expected = rxCode(state, span.begin + ix);
                     uint32_t actual = rxCode(state, pos + ix);
-                    if (inst->aux != 0 ? rxFold(expected) != rxFold(actual) : expected != actual) {
+                    if (inst->aux != 0 ? rxCanon(expected) != rxCanon(actual) : expected != actual) {
                         goto backtrack;
                     }
                 }
@@ -2204,7 +2214,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, size_t anch
                     }
                     break;
                 case RXI_CHAR_FOLD:
-                    while (end < limit && rxFold(bytes[end]) == operand) {
+                    while (end < limit && rxCanon(bytes[end]) == operand) {
                         end++;
                     }
                     break;

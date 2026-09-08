@@ -528,11 +528,29 @@ each other, it follows the one shown in bold.
 | `stringFromCharCode` past 0xFFFF       | the low 16 bits   | the code point  | **the code point**  |
 | `regexEscape`                          | the metacharacters | also `-`, `#`, `&`, `~`, and whitespace | **the metacharacters** |
 | A relative path normalizing to nothing, `a/..` | the empty string | `.`      | **`.`**             |
-| `stringTrim` past the Unicode spaces both trim | also U+FEFF   | also U+001C-U+001F and U+0085 | **the shared spaces only** |
+| Unicode whitespace past the spaces both match | also U+FEFF   | also U+0085 and U+001C-U+001F | **also U+FEFF** |
+| `\w`, `\d`, `\b`                       | ASCII             | Unicode letters and digits | **ASCII**     |
+| `.` and multi-line `^` `$` at CR, U+2028, U+2029 | line terminators | LF only    | **line terminators** |
+| `$` before a trailing LF               | no match          | matches         | **no match**        |
+| The `i` flag on ß, ı, İ, K (Kelvin), ſ | not folded        | folded to ẞ, I, i, k, s | **not folded** |
 
 `objectKeys` returns keys in insertion order, matching both references for ordinary keys.
 JavaScript additionally hoists integer-like keys to the front in ascending numeric order; this
 implementation does not, matching Python.
+
+BareScript's Unicode whitespace and case behavior is defined as standard JavaScript's, within
+reason. Whitespace - the regex `\s` class, `stringTrim`, and the space around a parsed number - is
+JavaScript's WhiteSpace and LineTerminator sets: the ASCII spaces, U+00A0, U+1680, U+2000-U+200A,
+U+2028, U+2029, U+202F, U+205F, U+3000, and U+FEFF. The regex `\w`, `\d`, and `\b` are ASCII; `.`
+and the multi-line anchors know every line terminator - LF, CR, U+2028, U+2029 - and `$` alone is
+the end of the string. `stringUpper` and `stringLower` apply Unicode's full case mapping (Unicode
+16.0): ß upper-cases to `SS`, the ligatures expand, and a capital sigma that ends a word
+lower-cases to the final sigma. The `i` flag folds as JavaScript does: a code point matches the
+ones sharing its simple upper case, but never across the ASCII boundary, and never through an
+expanding upper case. JavaScript has all of this natively. The Python implementation keeps
+Python's own definitions where they differ - the rows above - which is within reason: in
+practice the differences are a leading byte-order mark, whitespace to JavaScript and this
+implementation but not to Python, and `$` before a trailing newline, which Python's `$` matches.
 
 One capability of the reference implementations is out of scope here:
 
@@ -540,8 +558,6 @@ One capability of the reference implementations is out of scope here:
   synchronously; the `async` keyword parses and is recorded in the model, but imposes no
   restriction. Scripts written for the JavaScript runtime run unchanged, and the linter's async
   checks - which need to know which functions are async - are skipped, as they are in Python.
-- **Unicode case mapping.** `stringUpper` and `stringLower` map ASCII letters only; both references
-  use Unicode's.
 - **A match's group key order.** A match model's `groups` object keys each named group right after
   its number; both references list every number first, then the names. Only `objectKeys` can tell.
 
@@ -583,10 +599,8 @@ octal escape past `\377` - `\477`, which JavaScript reads as `\47` then `7` - is
 \477 outside of range` here. This implementation also limits a pattern to 127 capture groups,
 reporting `sorry, but this version only supports 127 groups`; both references allow more.
 
-Where a pattern is invalid in both, the message and position match. `bin/regexFuzz.py` compiles
-random patterns with both engines: 3789 of 4000 agree with CPython character for character, and
-every disagreement is a case from the table above or a pattern that is invalid in both for two
-reasons, where each engine reports the one it meets first.
+Where a pattern is invalid in both, the message and position match, except for a pattern that is
+invalid for two reasons, where each engine reports the one it meets first.
 
 
 ## Design

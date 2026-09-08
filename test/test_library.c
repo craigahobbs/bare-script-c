@@ -216,10 +216,24 @@ TEST(library_string)
     bsTestExpr("stringUpper('abc')", "\"ABC\"");
     bsTestExpr("stringLower(1)", "null");
     bsTestExpr("stringUpper(1)", "null");
+
+    /* Unicode case mapping - the full mapping, so the sharp s and the ligature expand */
+    bsTestExpr("stringUpper('\xc3\xa9\xc3\x9f\xef\xac\x81 x\xd0\xb4\xc4\x81\xc4\x82')",
+               "\"\xc3\x89SSFI X\xd0\x94\xc4\x80\xc4\x82\"");
+    bsTestExpr("stringLower('\xc3\x89\xc4\xb0\xe1\xba\x9e X\xd0\x94\xc4\x80\xc4\x81')",
+               "\"\xc3\xa9i\xcc\x87\xc3\x9f x\xd0\xb4\xc4\x81\xc4\x81\"");
+    bsTestExpr("stringUpper(stringFromCharCode(0x10428, 0x1E900))", "\"\xf0\x90\x90\x80\xf0\x9e\xa4\x80\"");
+
+    /* A capital sigma lowers to the final sigma only where it ends a word */
+    bsTestExpr("stringLower('\xce\xa3')", "\"\xcf\x83\"");
+    bsTestExpr("stringLower('\xce\x9f\xce\x94\xce\x9f\xce\xa3 \xce\xa3 \xce\x91\xce\xa3. \xce\x91.\xce\xa3 \xce\x91\xce\xa3\xce\x91 1\xce\xa3 "
+               "\xce\x91\xce\xa3\xcc\x81 \xce\x91\xce\xa3\xcc\x81\xce\x91 a\xce\xa3')",
+               "\"\xce\xbf\xce\xb4\xce\xbf\xcf\x82 \xcf\x83 \xce\xb1\xcf\x82. \xce\xb1.\xcf\x82 \xce\xb1\xcf\x83\xce\xb1 1\xcf\x83 "
+               "\xce\xb1\xcf\x82\xcc\x81 \xce\xb1\xcf\x83\xcc\x81\xce\xb1 a\xcf\x82\"");
     bsTestExpr("stringTrim('  abc  ')", "\"abc\"");
     bsTestExpr("stringTrim(stringFromCharCode(160, 0x3000) + ' x ' + stringFromCharCode(0x2003, 10))", "\"x\"");
-    bsTestExpr("stringTrim(stringFromCharCode(0xFEFF) + 'x' + stringFromCharCode(0x85))",
-               "\"\xef\xbb\xbfx\xc2\x85\"");
+    /* U+FEFF is a space, U+0085 is not */
+    bsTestExpr("stringTrim(stringFromCharCode(0xFEFF) + 'x' + stringFromCharCode(0x85))", "\"x\xc2\x85\"");
     bsTestExpr("stringTrim('   ')", "\"\"");
     bsTestExpr("stringTrim(1)", "null");
     bsTestExpr("stringRepeat('ab', 3)", "\"ababab\"");
@@ -234,6 +248,7 @@ TEST(library_string)
     bsTestExpr("stringSplit('abc', 'z')", "[\"abc\"]");
     bsTestExpr("stringSplit(1, ',')", "null");
     bsTestExpr("stringSplitLines('a\\nb\\r\\nc')", "[\"a\",\"b\",\"c\"]");
+    bsTestExpr("stringSplitLines('a\\r\\nb\\r')", "[\"a\",\"b\\r\"]");
     bsTestExpr("stringSplitLines('é\\nb')", "[\"é\",\"b\"]");
     bsTestExpr("stringSplitLines('')", "[\"\"]");
     bsTestExpr("stringSplitLines(1)", "null");
@@ -322,6 +337,10 @@ TEST(library_number)
 {
     bsTestExpr("numberParseFloat('1.5')", "1.5");
     bsTestExpr("numberParseFloat('x')", "null");
+    bsTestExpr("numberParseFloat(stringFromCharCode(0xFEFF, 0x3000) + '1.5' + stringFromCharCode(0xA0))", "1.5");
+    bsTestExpr("numberParseFloat(stringFromCharCode(0x85) + '1.5')", "null");
+    bsTestExpr("numberParseInt(stringFromCharCode(0x2003) + '15' + stringFromCharCode(0x2028))", "15");
+    bsTestExpr("numberParseInt(stringFromCharCode(0x1C) + '15')", "null");
     bsTestExpr("numberParseFloat(1)", "null");
     bsTestExpr("numberParseInt('ff', 16)", "255");
     bsTestExpr("numberParseInt('12')", "12");

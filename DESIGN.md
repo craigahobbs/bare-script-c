@@ -52,10 +52,16 @@ NUL-terminated payload in the same allocation. They cache their code point lengt
 all-ASCII string - the common case - indexes by byte. Construction skips the UTF-8 walk when the
 buffer has no high bit. Non-ASCII indexing keeps, in an index block allocated on first use, a
 cursor and, for a string of thirty-two code points or more, a sparse stride-16 offset table.
-String library functions index by Unicode code point. The header also caches the string's content
-hash, for object lookups, and records the allocation's capacity: the `+` operator appends in
-place when its left operand is a function local holding the string's only reference - so
-`s = s + piece` in a loop is linear rather than quadratic - growing the allocation geometrically
+String library functions index by Unicode code point. `stringUpper` and `stringLower` apply
+Unicode's full case mapping (`unicode.c`): the simple mappings are runs of code points sharing one
+delta - stepping by two through the alternating upper/lower blocks - found by binary search, the
+few expanding mappings (ß to `SS`, the ligatures) a sorted special table, and a capital sigma that
+ends a word - a cased code point before it and none after, case-ignorable code points aside -
+lowers to the final sigma. An ASCII string maps byte for byte. The header also caches the
+string's content hash, for object lookups, and records the allocation's capacity: the `+`
+operator appends in place when its left operand is a function local holding the string's only
+reference - so `s = s + piece` in a loop is linear rather than quadratic - growing the allocation
+geometrically
 (a global loads into a temporary first, and never qualifies). Strings are the runtime's most
 frequent allocation and most are short, so an allocation that fits one of five size classes is
 rounded up and recycled through that class's free list.
@@ -317,6 +323,16 @@ functions expose:
 | Repeats    | `* + ? {n} {n,} {n,m}` and their lazy `?` forms                             |
 | Anchors    | `^ $`                                                                      |
 | Flags      | `i` (case-insensitive), `m` (multi-line), `s` (dot matches newline)         |
+
+`\s` is the Unicode whitespace set README's Compatibility section defines (`bsIsSpaceCode`, shared
+with `stringTrim` and number parsing); `\w`, `\d`, and `\b` are ASCII; `.` and the multi-line
+anchors stop at every line terminator (LF, CR, U+2028, U+2029). The `i` flag folds by
+JavaScript's rule: a code point's canonical form is its simple upper case unless that crosses
+from non-ASCII to ASCII (`bsUnicodeCanon`, with the ASCII letters folded in line), a literal is
+stored canonical and compared canonical, and a class matches a code point when it holds any
+member of the code point's canonical group - the canonical form, its lower case when that maps
+back, and the further members of the twenty-odd groups with several lower-case forms
+(`bsUnicodeCanonMembers`). The ASCII membership table folds the same way at compile time.
 
 Matching is over Unicode code points, so match indexes agree with the string library's indexes.
 ASCII subjects match the original bytes without widening to a `uint32_t` buffer. Five properties
