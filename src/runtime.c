@@ -261,10 +261,14 @@ static bool bsIsInteger(BSValue value)
 }
 
 
-/* Normalize an arithmetic result - a non-finite result is an invalid operation */
+/*
+ * Normalize an arithmetic result - a non-finite result is an invalid operation. A double is
+ * finite exactly when subtracting it from itself gives zero: an infinity or a NaN gives a NaN,
+ * which is a subtract and a compare where the classification is a run of integer bit tests.
+ */
 static BSValue bsArithmetic(double result)
 {
-    return isfinite(result) ? bsNumber(result) : bsNull();
+    return result - result == 0 ? bsNumber(result) : bsNull();
 }
 
 
