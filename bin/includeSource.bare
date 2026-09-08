@@ -4,11 +4,26 @@
 # Generate the bundled include library source, "src/includeSource.c" and
 # "include/barescript/includeSource.h"
 #
-# Each include library script is embedded as its parser-compiled JSON script model - the runtime
-# JSON-parses any system include starting with "{", skipping the parser entirely - gzip-compressed
-# at level 9 with gzip.bare and emitted as a C unsigned-char array. Each array but the required
-# includes' is compiled out by defining NO_BARESCRIPT_INCLUDE_<NAME>. The unit tests decode every
-# bundled model with the runtime's inflater, so the models are not verified here.
+# Each include library script is embedded as its parser-compiled script model in the binary
+# encoding below, which the runtime reads straight into its compiler with no parser and no model
+# objects, gzip-compressed at level 9 with gzip.bare and emitted as a C unsigned-char array. Each
+# array but the required includes' is compiled out by defining NO_BARESCRIPT_INCLUDE_<NAME>. The
+# unit tests decode every bundled model with the runtime's inflater and decoder, so the models are
+# not verified here.
+#
+# The binary model encoding (src/model.c, bsScriptFromModelBinary, reads it): a version byte, 1;
+# the string table - a count, then each string as a length and its UTF-8 bytes; the statements -
+# a count, then each. Counts, lengths, indexes, and line numbers are unsigned LEB128 varints; a
+# string is referred to by its table index plus one, zero meaning none. A statement is a kind byte
+# (1 expr, 2 jump, 3 return, 4 label, 5 function, 6 include), its line number, then its members:
+# expr - the name assigned or none, the expression; jump - the label, the condition or none;
+# return - the expression or none; label - the name; function - the name, a flags byte (1: the
+# last argument takes the rest), the argument count and names, the statement count and
+# statements; include - the count, then each include's url and a system flag byte. An expression
+# is a tag byte - 0 none, 1 an integer as a zigzag varint, 2 a number as its text, 3 a string,
+# 4 a variable, 5 a call (the name, the argument count, the arguments), 6 a binary operator (the
+# operator, left, right), 7 a unary operator (the operator, the operand), 8 a group (the
+# expression).
 #
 # Run with the built command-line interface:
 #
@@ -17,6 +32,155 @@
 
 include <barescriptParser.bare>
 include <gzip.bare>
+
+
+# Append an unsigned LEB128 varint
+function includeSourceVarint(bytes, value):
+    while value >= 128:
+        arrayPush(bytes, value % 128 + 128)
+        value = mathFloor(value / 128)
+    endwhile
+    arrayPush(bytes, value)
+endfunction
+
+
+# A string's table index plus one, adding it to the table on first use
+function includeSourceString(encoder, text):
+    stringIndex = objectGet(encoder, 'stringIndex')
+    index = objectGet(stringIndex, text)
+    if index == null:
+        strings = objectGet(encoder, 'strings')
+        arrayPush(strings, text)
+        index = arrayLength(strings)
+        objectSet(stringIndex, text, index)
+    endif
+    return index
+endfunction
+
+
+# Append an expression model, or the none tag for null
+function includeSourceExpr(encoder, expr):
+    bytes = objectGet(encoder, 'body')
+    if expr == null:
+        arrayPush(bytes, 0)
+    elif objectHas(expr, 'number'):
+        number = objectGet(expr, 'number')
+        if number == mathFloor(number) && number > -4503599627370496 && number < 4503599627370496:
+            arrayPush(bytes, 1)
+            includeSourceVarint(bytes, if(number >= 0, 2 * number, -2 * number - 1))
+        else:
+            arrayPush(bytes, 2)
+            includeSourceVarint(bytes, includeSourceString(encoder, jsonStringify(number)))
+        endif
+    elif objectHas(expr, 'string'):
+        arrayPush(bytes, 3)
+        includeSourceVarint(bytes, includeSourceString(encoder, objectGet(expr, 'string')))
+    elif objectHas(expr, 'variable'):
+        arrayPush(bytes, 4)
+        includeSourceVarint(bytes, includeSourceString(encoder, objectGet(expr, 'variable')))
+    elif objectHas(expr, 'function'):
+        call = objectGet(expr, 'function')
+        args = objectGet(call, 'args', [])
+        arrayPush(bytes, 5)
+        includeSourceVarint(bytes, includeSourceString(encoder, objectGet(call, 'name')))
+        includeSourceVarint(bytes, arrayLength(args))
+        for arg in args:
+            includeSourceExpr(encoder, arg)
+        endfor
+    elif objectHas(expr, 'binary'):
+        binary = objectGet(expr, 'binary')
+        arrayPush(bytes, 6)
+        includeSourceVarint(bytes, includeSourceString(encoder, objectGet(binary, 'op')))
+        includeSourceExpr(encoder, objectGet(binary, 'left'))
+        includeSourceExpr(encoder, objectGet(binary, 'right'))
+    elif objectHas(expr, 'unary'):
+        unary = objectGet(expr, 'unary')
+        arrayPush(bytes, 7)
+        includeSourceVarint(bytes, includeSourceString(encoder, objectGet(unary, 'op')))
+        includeSourceExpr(encoder, objectGet(unary, 'expr'))
+    else:
+        arrayPush(bytes, 8)
+        includeSourceExpr(encoder, objectGet(expr, 'group'))
+    endif
+endfunction
+
+
+# Append a statement model
+function includeSourceStatement(encoder, statement):
+    bytes = objectGet(encoder, 'body')
+    if objectHas(statement, 'expr'):
+        expr = objectGet(statement, 'expr')
+        arrayPush(bytes, 1)
+        includeSourceVarint(bytes, objectGet(expr, 'lineNumber', 0))
+        name = objectGet(expr, 'name')
+        includeSourceVarint(bytes, if(name != null, includeSourceString(encoder, name), 0))
+        includeSourceExpr(encoder, objectGet(expr, 'expr'))
+    elif objectHas(statement, 'jump'):
+        jump = objectGet(statement, 'jump')
+        arrayPush(bytes, 2)
+        includeSourceVarint(bytes, objectGet(jump, 'lineNumber', 0))
+        includeSourceVarint(bytes, includeSourceString(encoder, objectGet(jump, 'label')))
+        includeSourceExpr(encoder, objectGet(jump, 'expr'))
+    elif objectHas(statement, 'return'):
+        return_ = objectGet(statement, 'return')
+        arrayPush(bytes, 3)
+        includeSourceVarint(bytes, objectGet(return_, 'lineNumber', 0))
+        includeSourceExpr(encoder, objectGet(return_, 'expr'))
+    elif objectHas(statement, 'label'):
+        label = objectGet(statement, 'label')
+        arrayPush(bytes, 4)
+        includeSourceVarint(bytes, objectGet(label, 'lineNumber', 0))
+        includeSourceVarint(bytes, includeSourceString(encoder, objectGet(label, 'name')))
+    elif objectHas(statement, 'function'):
+        function = objectGet(statement, 'function')
+        args = objectGet(function, 'args', [])
+        statements = objectGet(function, 'statements')
+        arrayPush(bytes, 5)
+        includeSourceVarint(bytes, objectGet(function, 'lineNumber', 0))
+        includeSourceVarint(bytes, includeSourceString(encoder, objectGet(function, 'name')))
+        arrayPush(bytes, if(objectGet(function, 'lastArgArray'), 1, 0))
+        includeSourceVarint(bytes, arrayLength(args))
+        for arg in args:
+            includeSourceVarint(bytes, includeSourceString(encoder, arg))
+        endfor
+        includeSourceVarint(bytes, arrayLength(statements))
+        for functionStatement in statements:
+            includeSourceStatement(encoder, functionStatement)
+        endfor
+    else:
+        includes = objectGet(objectGet(statement, 'include'), 'includes')
+        arrayPush(bytes, 6)
+        includeSourceVarint(bytes, objectGet(objectGet(statement, 'include'), 'lineNumber', 0))
+        includeSourceVarint(bytes, arrayLength(includes))
+        for include in includes:
+            includeSourceVarint(bytes, includeSourceString(encoder, objectGet(include, 'url')))
+            arrayPush(bytes, if(objectGet(include, 'system'), 1, 0))
+        endfor
+    endif
+endfunction
+
+
+# Encode a script model as the binary model's bytes
+function includeSourceEncode(model):
+    encoder = {'body': [], 'strings': [], 'stringIndex': {}}
+    statements = objectGet(model, 'statements')
+    includeSourceVarint(objectGet(encoder, 'body'), arrayLength(statements))
+    for statement in statements:
+        includeSourceStatement(encoder, statement)
+    endfor
+
+    # The version, the string table, then the statements
+    bytes = [1]
+    strings = objectGet(encoder, 'strings')
+    includeSourceVarint(bytes, arrayLength(strings))
+    for text in strings:
+        textBytes = stringEncode(text)
+        includeSourceVarint(bytes, arrayLength(textBytes))
+        arrayExtend(bytes, textBytes)
+    endfor
+    arrayExtend(bytes, objectGet(encoder, 'body'))
+    return bytes
+endfunction
 
 
 # The required includes - the runtime bootstraps its parser and linter from these, so they are
@@ -42,9 +206,10 @@ async function main():
         '/*\n' + \
         ' * The bundled BareScript include library\n' + \
         ' *\n' + \
-        ' * Each include is embedded as its parser-compiled JSON script model, gzip-compressed.\n' + \
-        " * An accessor decodes its include's model on first use and caches it for the calling\n" + \
-        ' * thread; the text is released by bsIncludeCleanup. An include compiled out of the library\n' + \
+        ' * Each include is embedded as its parser-compiled script model in the binary encoding\n' + \
+        ' * bin/includeSource.bare describes, gzip-compressed. An accessor inflates its include\'s\n' + \
+        " * model on first use and caches it for the calling thread; the bytes are released by\n" + \
+        ' * bsIncludeCleanup. An include compiled out of the library\n' + \
         ' * with its NO_BARESCRIPT_INCLUDE_<NAME> macro - see src/includeSource.c - keeps its\n' + \
         ' * registry entry and accessor, which return no model.\n' + \
         ' */\n\n' + \
@@ -108,8 +273,8 @@ async function main():
         model = objectGet(parseResult, 'result')
         objectDelete(model, 'scriptLines')
 
-        # Compress the model at gzip level 9 (max) and emit the bytes as a C initializer, 18 per line
-        compressed = gzipCompress(stringEncode(jsonStringify(model)), 9)
+        # Encode the model, compress it at gzip level 9 (max), and emit the bytes as a C initializer, 18 per line
+        compressed = gzipCompress(includeSourceEncode(model), 9)
         totalSource = totalSource + stringLength(text)
         totalEncoded = totalEncoded + arrayLength(compressed)
         lines = []
@@ -131,10 +296,10 @@ async function main():
             '#define BS_INCLUDE_SOURCE_' + macroName + ' bsIncludeSourceData' + exportName + \
             ', sizeof(bsIncludeSourceData' + exportName + ')\n' + \
             if(required, '', '#else\n#define BS_INCLUDE_SOURCE_' + macroName + ' NULL, 0\n#endif\n') + \
-            '\nconst char *bsIncludeSource' + exportName + '(void)\n{\n' + \
-            '    return bsIncludeSourceDecode(' + ixFile + ');\n}\n')
-        arrayPush(accessors, '/* ' + includeName + ' - the decoded JSON script model */\n' + \
-            'const char *bsIncludeSource' + exportName + '(void);')
+            '\nconst unsigned char *bsIncludeSource' + exportName + '(size_t *size)\n{\n' + \
+            '    return bsIncludeSourceDecode(' + ixFile + ', size);\n}\n')
+        arrayPush(accessors, '/* ' + includeName + ' - the inflated binary script model and its size */\n' + \
+            'const unsigned char *bsIncludeSource' + exportName + '(size_t *size);')
         arrayPush(registry, '    {"' + includeName + '", BS_INCLUDE_SOURCE_' + macroName + '}')
         arrayPush(stubs, '    bsIncludeSource' + exportName)
     endfor
@@ -154,8 +319,8 @@ async function main():
         '} BSIncludeSource;\n\n' + \
         '/* The bundled include library registry, in name order */\n' + \
         'extern BSIncludeSource bsIncludeSources[BS_INCLUDE_COUNT];\n\n' + \
-        "/* A bundled include library stub accessor - returns its include's decoded JSON script model */\n" + \
-        'typedef const char *(*BSIncludeSourceFn)(void);\n\n' + \
+        "/* A bundled include library stub accessor - returns its include's inflated binary script model and its size */\n" + \
+        'typedef const unsigned char *(*BSIncludeSourceFn)(size_t *size);\n\n' + \
         '/* The bundled include library stub accessors, in registry order */\n' + \
         'extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];\n\n\n' + \
         '/*\n * The bundled include library stub accessors\n */\n\n' + \

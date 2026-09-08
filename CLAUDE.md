@@ -80,14 +80,15 @@ lowering of structured statements, and the exact text and column of every parse 
 inherited rather than reimplemented, so **parser bugs are usually runtime, regex, or library
 bugs**.
 
-The bootstrap: the bundled parser is stored as its own parser-compiled JSON model, so loading it
-needs no parser: `bsScriptFromModelJSON` reads the JSON straight into the emitter's transient
-syntax tree a statement at a time and builds no model objects at all (DESIGN.md's **The Parser and
-Linter** draws it).
+The bootstrap: the bundled parser is stored as its own parser-compiled model in a binary encoding
+(`bin/includeSource.bare` describes it), so loading it needs no parser: `bsScriptFromModelBinary`
+reads the bytes straight into the emitter's transient syntax tree a statement at a time and builds
+no model objects at all (DESIGN.md's **The Parser and Linter** draws it).
 
 `src/model.c` compiles a statement from a transient syntax tree (`BSAst`, an arena of nodes) to
 bytecode. A parsed script's model objects are loaded into the tree a statement at a time by
-`bsAstStatement`; a bundled include's model JSON is read into it by `bsJSONDecodeScript`. The
+`bsAstStatement`; a bundled include's binary model is read into it by `bsScriptFromModelBinary`,
+and a system include's JSON model by `bsJSONDecodeScript`. The
 loaders reject a malformed model; the emitter assumes a well-formed tree. A script keeps its model
 only where something will read it - the CLI under static analysis, an include while coverage is
 recording; otherwise `bsScriptForgetModel` drops it and `bsScriptToModel` re-parses the retained

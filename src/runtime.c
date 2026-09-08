@@ -217,7 +217,7 @@ static BSValue bsSystemIncludeText(const char *name)
 const char *bsSystemIncludeGet(const char *name)
 {
     BSValue text = bsSystemIncludeText(name);
-    return text.type == BS_STRING ? bsStringData(text) : bsIncludeSource(name);
+    return text.type == BS_STRING ? bsStringData(text) : NULL;
 }
 
 

@@ -6,9 +6,10 @@
 /*
  * The bundled BareScript include library
  *
- * Each include is embedded as its parser-compiled JSON script model, gzip-compressed.
- * An accessor decodes its include's model on first use and caches it for the calling
- * thread; the text is released by bsIncludeCleanup. An include compiled out of the library
+ * Each include is embedded as its parser-compiled script model in the binary encoding
+ * bin/includeSource.bare describes, gzip-compressed. An accessor inflates its include's
+ * model on first use and caches it for the calling thread; the bytes are released by
+ * bsIncludeCleanup. An include compiled out of the library
  * with its NO_BARESCRIPT_INCLUDE_<NAME> macro - see src/includeSource.c - keeps its
  * registry entry and accessor, which return no model.
  */
@@ -41,8 +42,8 @@ typedef struct BSIncludeSource {
 /* The bundled include library registry, in name order */
 extern BSIncludeSource bsIncludeSources[BS_INCLUDE_COUNT];
 
-/* A bundled include library stub accessor - returns its include's decoded JSON script model */
-typedef const char *(*BSIncludeSourceFn)(void);
+/* A bundled include library stub accessor - returns its include's inflated binary script model and its size */
+typedef const unsigned char *(*BSIncludeSourceFn)(size_t *size);
 
 /* The bundled include library stub accessors, in registry order */
 extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];
@@ -52,101 +53,101 @@ extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];
  * The bundled include library stub accessors
  */
 
-/* args.bare - the decoded JSON script model */
-const char *bsIncludeSourceArgs(void);
+/* args.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceArgs(size_t *size);
 
-/* baredoc.bare - the decoded JSON script model */
-const char *bsIncludeSourceBaredoc(void);
+/* baredoc.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceBaredoc(size_t *size);
 
-/* baredocCLI.bare - the decoded JSON script model */
-const char *bsIncludeSourceBaredocCLI(void);
+/* baredocCLI.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceBaredocCLI(size_t *size);
 
-/* barescriptLint.bare - the decoded JSON script model */
-const char *bsIncludeSourceBarescriptLint(void);
+/* barescriptLint.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceBarescriptLint(size_t *size);
 
-/* barescriptModel.bare - the decoded JSON script model */
-const char *bsIncludeSourceBarescriptModel(void);
+/* barescriptModel.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceBarescriptModel(size_t *size);
 
-/* barescriptParser.bare - the decoded JSON script model */
-const char *bsIncludeSourceBarescriptParser(void);
+/* barescriptParser.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceBarescriptParser(size_t *size);
 
-/* base64.bare - the decoded JSON script model */
-const char *bsIncludeSourceBase64(void);
+/* base64.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceBase64(size_t *size);
 
-/* data.bare - the decoded JSON script model */
-const char *bsIncludeSourceData(void);
+/* data.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceData(size_t *size);
 
-/* dataLineChart.bare - the decoded JSON script model */
-const char *bsIncludeSourceDataLineChart(void);
+/* dataLineChart.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceDataLineChart(size_t *size);
 
-/* dataTable.bare - the decoded JSON script model */
-const char *bsIncludeSourceDataTable(void);
+/* dataTable.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceDataTable(size_t *size);
 
-/* dataUtil.bare - the decoded JSON script model */
-const char *bsIncludeSourceDataUtil(void);
+/* dataUtil.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceDataUtil(size_t *size);
 
-/* diff.bare - the decoded JSON script model */
-const char *bsIncludeSourceDiff(void);
+/* diff.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceDiff(size_t *size);
 
-/* draw.bare - the decoded JSON script model */
-const char *bsIncludeSourceDraw(void);
+/* draw.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceDraw(size_t *size);
 
-/* elementModel.bare - the decoded JSON script model */
-const char *bsIncludeSourceElementModel(void);
+/* elementModel.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceElementModel(size_t *size);
 
-/* forms.bare - the decoded JSON script model */
-const char *bsIncludeSourceForms(void);
+/* forms.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceForms(size_t *size);
 
-/* gzip.bare - the decoded JSON script model */
-const char *bsIncludeSourceGzip(void);
+/* gzip.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceGzip(size_t *size);
 
-/* markdown.bare - the decoded JSON script model */
-const char *bsIncludeSourceMarkdown(void);
+/* markdown.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceMarkdown(size_t *size);
 
-/* markdownElements.bare - the decoded JSON script model */
-const char *bsIncludeSourceMarkdownElements(void);
+/* markdownElements.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceMarkdownElements(size_t *size);
 
-/* markdownHighlight.bare - the decoded JSON script model */
-const char *bsIncludeSourceMarkdownHighlight(void);
+/* markdownHighlight.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceMarkdownHighlight(size_t *size);
 
-/* markdownParser.bare - the decoded JSON script model */
-const char *bsIncludeSourceMarkdownParser(void);
+/* markdownParser.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceMarkdownParser(size_t *size);
 
-/* markdownString.bare - the decoded JSON script model */
-const char *bsIncludeSourceMarkdownString(void);
+/* markdownString.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceMarkdownString(size_t *size);
 
-/* markdownUp.bare - the decoded JSON script model */
-const char *bsIncludeSourceMarkdownUp(void);
+/* markdownUp.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceMarkdownUp(size_t *size);
 
-/* pager.bare - the decoded JSON script model */
-const char *bsIncludeSourcePager(void);
+/* pager.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourcePager(size_t *size);
 
-/* qrcode.bare - the decoded JSON script model */
-const char *bsIncludeSourceQrcode(void);
+/* qrcode.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceQrcode(size_t *size);
 
-/* schema.bare - the decoded JSON script model */
-const char *bsIncludeSourceSchema(void);
+/* schema.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceSchema(size_t *size);
 
-/* schemaDoc.bare - the decoded JSON script model */
-const char *bsIncludeSourceSchemaDoc(void);
+/* schemaDoc.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceSchemaDoc(size_t *size);
 
-/* schemaParser.bare - the decoded JSON script model */
-const char *bsIncludeSourceSchemaParser(void);
+/* schemaParser.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceSchemaParser(size_t *size);
 
-/* schemaTypeModel.bare - the decoded JSON script model */
-const char *bsIncludeSourceSchemaTypeModel(void);
+/* schemaTypeModel.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceSchemaTypeModel(size_t *size);
 
-/* schemaUtil.bare - the decoded JSON script model */
-const char *bsIncludeSourceSchemaUtil(void);
+/* schemaUtil.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceSchemaUtil(size_t *size);
 
-/* unittest.bare - the decoded JSON script model */
-const char *bsIncludeSourceUnittest(void);
+/* unittest.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceUnittest(size_t *size);
 
-/* unittestMock.bare - the decoded JSON script model */
-const char *bsIncludeSourceUnittestMock(void);
+/* unittestMock.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceUnittestMock(size_t *size);
 
-/* url.bare - the decoded JSON script model */
-const char *bsIncludeSourceUrl(void);
+/* url.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceUrl(size_t *size);
 
 
 BS_VISIBILITY_END

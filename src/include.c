@@ -4,8 +4,8 @@
 /*
  * The bundled BareScript include library
  *
- * Each include library script is embedded in the library as its parser-compiled JSON script model,
- * gzip-compressed (see bin/includeSource.bare). A model is decoded on first use and cached.
+ * Each include library script is embedded in the library as its parser-compiled binary script
+ * model, gzip-compressed (see bin/includeSource.bare). A model is inflated on first use and cached.
  */
 
 #include <stdlib.h>
@@ -19,9 +19,10 @@
 #include "internal.h"
 
 
-/* The thread's compiled include scripts and decoded model texts - the registry itself is never written */
+/* The thread's compiled include scripts and inflated models - the registry itself is never written */
 static _Thread_local BSScript *bsIncludeScripts[BS_INCLUDE_COUNT];
-static _Thread_local char *bsIncludeDecoded[BS_INCLUDE_COUNT];
+static _Thread_local unsigned char *bsIncludeDecoded[BS_INCLUDE_COUNT];
+static _Thread_local size_t bsIncludeDecodedSize[BS_INCLUDE_COUNT];
 
 
 /*
@@ -207,10 +208,12 @@ static uint32_t bsReadU32LE(const unsigned char *data)
  * The bundled models are written by gzip.bare's compressor (see bin/includeSource.bare), whose
  * output has one shape: the ten-byte header with no optional fields, a single final block of fixed
  * Huffman codes, and the CRC and size trailer. Only that shape is decoded. The data is compiled in,
- * so the inflated size is the one integrity check it needs; the CRC is not verified.
+ * so the inflated size is the one integrity check it needs; the CRC is not verified. The output is
+ * NUL-terminated past its size.
  */
-char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
+unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t *size)
 {
+    *size = 0;
     if (srcSize < 18 || src[0] != 0x1f || src[1] != 0x8b || src[2] != 8 || src[3] != 0) {
         return NULL;
     }
@@ -222,17 +225,18 @@ char *bsGzipUncompress(const unsigned char *src, size_t srcSize)
         return NULL;
     }
     out[isize] = '\0';
-    return (char *) out;
+    *size = isize;
+    return out;
 }
 
 
-const char *bsIncludeSourceDecode(size_t index)
+const unsigned char *bsIncludeSourceDecode(size_t index, size_t *size)
 {
-    if (bsIncludeDecoded[index] != NULL) {
-        return bsIncludeDecoded[index];
+    if (bsIncludeDecoded[index] == NULL) {
+        const BSIncludeSource *source = &bsIncludeSources[index];
+        bsIncludeDecoded[index] = bsGzipUncompress(source->gzip, source->gzipSize, &bsIncludeDecodedSize[index]);
     }
-    const BSIncludeSource *source = &bsIncludeSources[index];
-    bsIncludeDecoded[index] = bsGzipUncompress(source->gzip, source->gzipSize);
+    *size = bsIncludeDecodedSize[index];
     return bsIncludeDecoded[index];
 }
 
@@ -260,10 +264,14 @@ static size_t bsIncludeFind(const char *name)
 }
 
 
-const char *bsIncludeSource(const char *name)
+const unsigned char *bsIncludeSource(const char *name, size_t *size)
 {
     size_t ix = bsIncludeFind(name);
-    return ix < BS_INCLUDE_COUNT ? bsIncludeSourceDecode(ix) : NULL;
+    if (ix == BS_INCLUDE_COUNT) {
+        *size = 0;
+        return NULL;
+    }
+    return bsIncludeSourceDecode(ix, size);
 }
 
 
@@ -276,11 +284,12 @@ BSScript *bsIncludeScript(const char *name)
     if (bsIncludeScripts[ix] != NULL) {
         return bsScriptRetain(bsIncludeScripts[ix]);
     }
-    const char *text = bsIncludeSourceDecode(ix);
-    if (text == NULL) {
+    size_t size;
+    const unsigned char *model = bsIncludeSourceDecode(ix, &size);
+    if (model == NULL) {
         return NULL; /* the include is compiled out */
     }
-    BSScript *script = bsScriptFromModelJSON(text, strlen(text), name, NULL);
+    BSScript *script = bsScriptFromModelBinary(model, size, name);
     free(bsIncludeDecoded[ix]);
     bsIncludeDecoded[ix] = NULL;
     if (script == NULL) {

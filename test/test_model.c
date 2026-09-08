@@ -377,6 +377,7 @@ TEST(model_script_from_json_shapes)
         "{\"statements\": [{\"return\": {\"expr\": {\"string\": 5}}}]}",
         "{\"statements\": [{\"return\": {\"expr\": {\"variable\": 5}}}]}",
         "{\"statements\": [{\"return\": {\"expr\": {\"group\": {\"bogus\": 1}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"group\": {\"group\": 5}}}}]}",
         "{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"args\": []}}}}]}",
         "{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": 5}}}}]}",
         "{\"statements\": [{\"return\": {\"expr\": {\"function\": 5}}}]}",
@@ -401,6 +402,9 @@ TEST(model_script_from_json_shapes)
     for (size_t ix = 0; ix < sizeof(invalid) / sizeof(invalid[0]); ix++) {
         bsTestInvalidModelJSON(invalid[ix], "Invalid BareScript model");
     }
+
+    /* A group, nested */
+    bsTestModelJSONResult("{\"statements\": [{\"return\": {\"expr\": {\"group\": {\"group\": {\"number\": 5}}}}}]}", "5");
 
     /* Nesting past the decoder's depth - at an expression, at a node's members, at an argument array */
     static const struct {

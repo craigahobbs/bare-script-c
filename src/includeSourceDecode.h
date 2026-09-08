@@ -11,8 +11,8 @@
 #include "barescript/includeSource.h"
 
 
-/* Decode a bundled include's compressed model by registry index, caching the text for the thread */
-const char *bsIncludeSourceDecode(size_t index);
+/* Inflate a bundled include's compressed binary model by registry index, caching the bytes for the thread */
+const unsigned char *bsIncludeSourceDecode(size_t index, size_t *size);
 
 
 #endif

@@ -192,11 +192,11 @@ error message are therefore shared with the reference implementations rather tha
 
 That is a bootstrap problem: the parser is a BareScript script, so parsing it would need a parser.
 It is solved the way the reference implementations solve it - the bundled parser is stored as its
-own parser-compiled JSON model, which loads with a JSON decode and no parser at all.
+own parser-compiled model, in a binary encoding that loads with no parser at all.
 
 ```
-barescriptParser.bare (bundled JSON model)      your script's model (the parser's objects)
-        |  bsJSONDecodeScript                            |  bsAstStatement
+barescriptParser.bare (bundled binary model)    your script's model (the parser's objects)
+        |  bsScriptFromModelBinary                       |  bsAstStatement
         v                                                v
              the syntax tree (BSAst) - one statement at a time
                                 |  the emitter
@@ -206,8 +206,8 @@ barescriptParser.bare (bundled JSON model)      your script's model (the parser'
 
 `model.c` compiles a transient syntax tree - an arena of nodes holding one statement, reset for the
 next - to bytecode. A parsed script's model objects are loaded into the tree a statement at a time;
-a bundled include's model JSON is read straight into it, with the model's keys recognized by their
-bytes, so no model object is built for it. The loaders reject a malformed model, and the emitter
+a bundled include's binary model is read straight into it, so no model object is built for it. The
+loaders reject a malformed model, and the emitter
 assumes a well-formed tree. Jump labels become instruction indexes and function-local names become
 slot indexes during emit - there is no executable expression tree. A slot holding the internal unset marker
 falls through to the globals object, matching the reference behavior where an unassigned local
@@ -258,16 +258,22 @@ a script that merely includes the library holds bytecode and source lines alone.
 ## The Bundled Include Library
 
 The thirty-two scripts of the BareScript include library - `args.bare`, `markdown.bare`,
-`schema.bare`, `unittest.bare`, `gzip.bare`, and the rest - are compiled to JSON
-script models and embedded in the library. Including one costs a JSON read rather than a run of
-the parser: `bsScriptFromModelJSON` reads the model a statement at a time into the emitter's
-syntax tree and compiles it before the next, building no model objects, so a model - about seven
-times the size of its JSON as objects - is never in memory at all, and the tree holds one
-statement.
+`schema.bare`, `unittest.bare`, `gzip.bare`, and the rest - are compiled to script models,
+encoded in a binary form, and embedded in the library. Including one costs a read of the bytes
+rather than a run of the parser: `bsScriptFromModelBinary` reads the model a statement at a time
+into the emitter's syntax tree and compiles it before the next, building no model objects, so a
+model - about seven times the size of its encoding as objects - is never in memory at all, and
+the tree holds one statement.
 
-The models are gzip-compressed at level 9 by `gzip.bare` (`gzipCompress` / `gzipUncompress`, byte
-arrays in and out) and embedded as `unsigned char` arrays. That compresses about 601 KB of include
-library source to about 204 KB of gzip.
+The encoding, written by `bin/includeSource.bare` and read by `bsScriptFromModelBinary` in
+`model.c`: a version byte; a string table - every name, literal, operator, and label once, so the
+reader interns each once and a use costs one reference; then the statements. Counts, lengths,
+indexes, and line numbers are LEB128 varints, a string a table index, a statement a kind byte and
+its members, an expression a tag byte and its members, with an integer a zigzag varint and any
+other number its shortest text. The models are gzip-compressed at level 9 by `gzip.bare`
+(`gzipCompress` / `gzipUncompress`, byte arrays in and out) and embedded as `unsigned char` arrays.
+That compresses about 601 KB of include library source to about 159 KB of gzip - against 204 KB
+for the same models as JSON.
 
 `src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
 fresh clone builds with no bootstrap. `make includes` regenerates them by running
@@ -275,11 +281,12 @@ fresh clone builds with no bootstrap. `make includes` regenerates them by runnin
 generated source, with `BARESCRIPT_INCLUDE_PATH` pointing at `lib/include` so `gzip.bare` is
 available before it is bundled.
 
-The generated header exports a stub accessor per include, returning its decoded JSON model:
+The generated header exports a stub accessor per include, returning its inflated binary model and
+its size:
 
 ```c
-const char *bsIncludeSourceUnittest(void);      /* unittest.bare */
-const char *bsIncludeSourceMarkdownUp(void);    /* markdownUp.bare */
+const unsigned char *bsIncludeSourceUnittest(size_t *size);      /* unittest.bare */
+const unsigned char *bsIncludeSourceMarkdownUp(size_t *size);    /* markdownUp.bare */
 /* ... one per bundled script ... */
 
 extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];   /* all of them, in order */

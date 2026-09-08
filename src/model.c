@@ -1836,6 +1836,325 @@ BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scrip
 }
 
 
+/*
+ * The binary model
+ *
+ * The bundled include library's encoding, which bin/includeSource.bare writes: a version byte, 1;
+ * the string table - a count, then each string as a length and its UTF-8 bytes; the statements -
+ * a count, then each. Counts, lengths, indexes, and line numbers are unsigned LEB128 varints; a
+ * string is referred to by its table index plus one, zero meaning none. A statement is a kind byte
+ * (1 expr, 2 jump, 3 return, 4 label, 5 function, 6 include), its line number, then its members:
+ * expr - the name assigned or none, the expression; jump - the label, the condition or none;
+ * return - the expression or none; label - the name; function - the name, a flags byte (1: the
+ * last argument takes the rest), the argument count and names, the statement count and
+ * statements; include - the count, then each include's url and a system flag byte. An expression
+ * is a tag byte - 0 none, 1 an integer as a zigzag varint, 2 a number as its text, 3 a string,
+ * 4 a variable, 5 a call (the name, the argument count, the arguments), 6 a binary operator (the
+ * operator, left, right), 7 a unary operator (the operator, the operand), 8 a group (the
+ * expression). The table's strings are interned once, so a name costs one reference per use.
+ * A read past the end, an unknown byte, or a reference past the table fails the whole model.
+ */
+
+#define BS_MODEL_DEPTH_MAX 1000
+
+typedef struct BSModelReader {
+    const unsigned char *data;
+    size_t size;
+    size_t offset;
+    BSAst *ast;
+    BSValue *strings;
+    size_t stringCount;
+    bool failed;
+} BSModelReader;
+
+
+static unsigned bsModelByte(BSModelReader *reader)
+{
+    if (reader->offset >= reader->size) {
+        reader->failed = true;
+        return 0;
+    }
+    return reader->data[reader->offset++];
+}
+
+
+static uint64_t bsModelVarint(BSModelReader *reader)
+{
+    uint64_t value = 0;
+    for (unsigned shift = 0; shift < 64; shift += 7) {
+        unsigned byte = bsModelByte(reader);
+        value |= (uint64_t) (byte & 0x7f) << shift;
+        if ((byte & 0x80) == 0) {
+            return value;
+        }
+    }
+    reader->failed = true;
+    return 0;
+}
+
+
+/* A string reference's string, borrowed - a null value for none; failed for a reference past the table */
+static BSValue bsModelString(BSModelReader *reader)
+{
+    uint64_t index = bsModelVarint(reader);
+    if (index == 0) {
+        return bsNull();
+    }
+    if (index > reader->stringCount) {
+        reader->failed = true;
+        return bsNull();
+    }
+    return reader->strings[index - 1];
+}
+
+
+/* A required string's arena index, or zero */
+static uint32_t bsModelText(BSModelReader *reader)
+{
+    BSValue string = bsModelString(reader);
+    if (string.type != BS_STRING) {
+        reader->failed = true;
+        return 0;
+    }
+    return bsAstString(reader->ast, bsRetain(string));
+}
+
+
+/* An expression, or zero - for none where one is not required, or on failure */
+static uint32_t bsModelExpr(BSModelReader *reader, int depth, bool required)
+{
+    BSAst *ast = reader->ast;
+    if (depth >= BS_MODEL_DEPTH_MAX) {
+        reader->failed = true;
+        return 0;
+    }
+    unsigned tag = bsModelByte(reader);
+    uint32_t node;
+    switch (tag) {
+    case 0:
+        if (required) {
+            reader->failed = true;
+        }
+        return 0;
+    case 1: {
+        uint64_t zigzag = bsModelVarint(reader);
+        double number = (double) (zigzag >> 1);
+        node = bsAstNode(ast, BS_NODE_NUMBER);
+        ast->nodes[node].number = (zigzag & 1) != 0 ? -number - 1 : number;
+        return node;
+    }
+    case 2: {
+        BSValue text = bsModelString(reader);
+        double number;
+        if (text.type != BS_STRING || !bsNumberParse(bsStringData(text), bsStringSize(text), &number)) {
+            reader->failed = true;
+            return 0;
+        }
+        node = bsAstNode(ast, BS_NODE_NUMBER);
+        ast->nodes[node].number = number;
+        return node;
+    }
+    case 3:
+    case 4: {
+        node = bsAstNode(ast, tag == 3 ? BS_NODE_STRING : BS_NODE_VARIABLE);
+        uint32_t text = bsModelText(reader);
+        ast->nodes[node].text = text;
+        return node;
+    }
+    case 5: {
+        node = bsAstNode(ast, BS_NODE_CALL);
+        uint32_t text = bsModelText(reader);
+        ast->nodes[node].text = text;
+        uint64_t count = bsModelVarint(reader);
+        ast->nodes[node].b = (uint32_t) count;
+        uint32_t tail = 0;
+        for (uint64_t ix = 0; ix < count && !reader->failed; ix++) {
+            uint32_t arg = bsModelExpr(reader, depth + 1, true);
+            bsAstAppend(ast, &ast->nodes[node].a, &tail, arg);
+        }
+        return node;
+    }
+    case 6:
+    case 7: {
+        BSValue op = bsModelString(reader);
+        uint16_t nodeOp = 0;
+        if (op.type == BS_STRING) {
+            nodeOp = tag == 6 ? bsBinaryNodeOp(bsStringData(op)) : bsUnaryOpcode(bsStringData(op));
+        }
+        if (nodeOp == 0) {
+            reader->failed = true;
+            return 0;
+        }
+        node = bsAstNode(ast, tag == 6 ? BS_NODE_BINARY : BS_NODE_UNARY);
+        ast->nodes[node].op = nodeOp;
+        uint32_t left = bsModelExpr(reader, depth + 1, true);
+        ast->nodes[node].a = left;
+        if (tag == 6) {
+            uint32_t right = bsModelExpr(reader, depth + 1, true);
+            ast->nodes[node].b = right;
+        }
+        return node;
+    }
+    case 8: {
+        node = bsAstNode(ast, BS_NODE_GROUP);
+        uint32_t sub = bsModelExpr(reader, depth + 1, true);
+        ast->nodes[node].a = sub;
+        return node;
+    }
+    default:
+        reader->failed = true;
+        return 0;
+    }
+}
+
+
+/* A statement, or zero on failure */
+static uint32_t bsModelStatement(BSModelReader *reader, int depth)
+{
+    BSAst *ast = reader->ast;
+    if (depth >= BS_MODEL_DEPTH_MAX) {
+        reader->failed = true;
+        return 0;
+    }
+    unsigned kind = bsModelByte(reader);
+    uint64_t line = bsModelVarint(reader);
+    uint32_t node;
+    uint32_t tail = 0;
+    switch (kind) {
+    case 1: {
+        node = bsAstNode(ast, BS_NODE_EXPR);
+        BSValue name = bsModelString(reader);
+        if (name.type == BS_STRING) {
+            ast->nodes[node].text = bsAstString(ast, bsRetain(name));
+        }
+        uint32_t expr = bsModelExpr(reader, depth + 1, true);
+        ast->nodes[node].a = expr;
+        break;
+    }
+    case 2: {
+        node = bsAstNode(ast, BS_NODE_JUMP);
+        uint32_t text = bsModelText(reader);
+        ast->nodes[node].text = text;
+        uint32_t cond = bsModelExpr(reader, depth + 1, false);
+        ast->nodes[node].a = cond;
+        break;
+    }
+    case 3: {
+        node = bsAstNode(ast, BS_NODE_RETURN);
+        uint32_t expr = bsModelExpr(reader, depth + 1, false);
+        ast->nodes[node].a = expr;
+        break;
+    }
+    case 4: {
+        node = bsAstNode(ast, BS_NODE_LABEL);
+        uint32_t text = bsModelText(reader);
+        ast->nodes[node].text = text;
+        break;
+    }
+    case 5: {
+        node = bsAstNode(ast, BS_NODE_FUNCTION);
+        uint32_t text = bsModelText(reader);
+        ast->nodes[node].text = text;
+        ast->nodes[node].flag = (uint8_t) (bsModelByte(reader) & 1);
+        uint64_t argCount = bsModelVarint(reader);
+        for (uint64_t ix = 0; ix < argCount && !reader->failed; ix++) {
+            uint32_t arg = bsAstNode(ast, BS_NODE_ARG);
+            uint32_t argText = bsModelText(reader);
+            ast->nodes[arg].text = argText;
+            bsAstAppend(ast, &ast->nodes[node].b, &tail, arg);
+        }
+        tail = 0;
+        uint64_t count = bsModelVarint(reader);
+        for (uint64_t ix = 0; ix < count && !reader->failed; ix++) {
+            uint32_t statement = bsModelStatement(reader, depth + 1);
+            bsAstAppend(ast, &ast->nodes[node].a, &tail, statement);
+        }
+        break;
+    }
+    case 6: {
+        node = bsAstNode(ast, BS_NODE_INCLUDE);
+        uint64_t count = bsModelVarint(reader);
+        if (count == 0) {
+            reader->failed = true;
+        }
+        for (uint64_t ix = 0; ix < count && !reader->failed; ix++) {
+            uint32_t item = bsAstNode(ast, BS_NODE_INCLUDE_ITEM);
+            uint32_t url = bsModelText(reader);
+            ast->nodes[item].text = url;
+            ast->nodes[item].flag = (uint8_t) (bsModelByte(reader) & 1);
+            bsAstAppend(ast, &ast->nodes[node].a, &tail, item);
+        }
+        break;
+    }
+    default:
+        reader->failed = true;
+        return 0;
+    }
+    if (reader->failed || line > INT32_MAX) {
+        return 0;
+    }
+    ast->nodes[node].line = (int32_t) line;
+    return node;
+}
+
+
+BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const char *scriptName)
+{
+    bsModelKeysInit();
+    BSModelReader reader = {data, size, 0, NULL, NULL, 0, false};
+    bool decoded = bsModelByte(&reader) == 1;
+
+    /* The string table, interned - each string takes at least a byte, which bounds the count */
+    uint64_t stringCount = bsModelVarint(&reader);
+    if (stringCount > size) {
+        reader.failed = true;
+    }
+    if (!reader.failed) {
+        reader.strings = bsAlloc((size_t) (stringCount + 1) * sizeof(BSValue));
+        for (uint64_t ix = 0; ix < stringCount && !reader.failed; ix++) {
+            uint64_t length = bsModelVarint(&reader);
+            if (length > size - reader.offset) {
+                reader.failed = true;
+                break;
+            }
+            reader.strings[reader.stringCount++] = bsStringIntern((const char *) data + reader.offset, (size_t) length);
+            reader.offset += (size_t) length;
+        }
+    }
+    decoded = decoded && !reader.failed;
+
+    /* Each statement is read, emitted, and dropped from the arena before the next */
+    BSScript *script = bsScriptNew();
+    size_t functionCap = 0;
+    BSEmit e;
+    bsEmitInit(&e, script, &functionCap);
+    BSAst ast;
+    bsAstInit(&ast);
+    reader.ast = &ast;
+    uint64_t statementCount = bsModelVarint(&reader);
+    for (uint64_t ix = 0; ix < statementCount && decoded; ix++) {
+        bsAstReset(&ast);
+        uint32_t node = bsModelStatement(&reader, 1);
+        decoded = node != 0;
+        if (decoded) {
+            bsEmitStatement(&e, &ast, node);
+        }
+    }
+    decoded = decoded && reader.offset == size;
+    bsAstFree(&ast);
+    for (size_t ix = 0; ix < reader.stringCount; ix++) {
+        bsRelease(reader.strings[ix]);
+    }
+    free(reader.strings);
+    if (!bsEmitEnd(&e, decoded, &script->code, e.nullConst)) {
+        bsScriptRelease(script);
+        return NULL;
+    }
+    bsAssign(&script->scriptName, bsStringNew(scriptName));
+    return script;
+}
+
+
 BSValue bsExprToModel(const BSExpr *expr)
 {
     return bsRetain(expr->model);

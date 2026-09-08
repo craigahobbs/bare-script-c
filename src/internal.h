@@ -45,7 +45,7 @@ char *bsStrdup(const char *text);
     } while (0)
 
 /* Inflate a bundled include model. Returns a NUL-terminated, malloc-allocated buffer, or NULL. */
-char *bsGzipUncompress(const unsigned char *src, size_t srcSize);
+unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t *size);
 
 /* Compiled bundled include, cached after the first load. Returns an owned script reference. */
 BSScript *bsIncludeScript(const char *name);
@@ -203,6 +203,13 @@ uint8_t bsUnaryOpcode(const char *op);
 /* Load a statement or expression model object into the arena. Returns the node, or zero for a malformed model. */
 uint32_t bsAstStatement(BSAst *ast, BSValue model);
 uint32_t bsAstExpr(BSAst *ast, BSValue model);
+
+/*
+ * Compile a script from its binary model - the bundled include library's encoding, which
+ * bin/includeSource.bare describes and writes - a statement at a time. Returns NULL for a malformed
+ * model.
+ */
+BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const char *scriptName);
 
 /*
  * Decode a script model's JSON - {"statements": [...], ...} - a statement at a time: each element

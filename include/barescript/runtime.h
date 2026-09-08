@@ -205,8 +205,11 @@ size_t bsIncludeCount(void);
 /* A bundled include library script's name, by index; NULL if the index is out of range */
 const char *bsIncludeName(size_t index);
 
-/* A bundled include library script's JSON script model, by name; NULL if there is no such script */
-const char *bsIncludeSource(const char *name);
+/*
+ * A bundled include library script's binary script model - the encoding bin/includeSource.bare
+ * describes - and its size, by name; NULL with a size of zero if there is no such script
+ */
+const unsigned char *bsIncludeSource(const char *name, size_t *size);
 
 /* Release the calling thread's compiled and decoded bundled include library models */
 void bsIncludeCleanup(void);
