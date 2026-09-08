@@ -1242,11 +1242,10 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
 /* A jump on a comparison - the target is in the data word that follows, stepped over when not taken */
 #define BS_JUMP_TEST(test) \
     if (test) { \
-        BS_JUMP_COVER(insts[pc].w); \
-        pc = insts[pc].w; \
-    } else { \
-        pc++; \
-    }
+        BS_JUMP_COVER(inst[1].w); \
+        BS_GOTO(inst[1].w); \
+    } \
+    inst++;
 
 #define BS_JUMP_COMPARE(name, test) \
     BS_CASE(name) { \
@@ -1290,7 +1289,7 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
         BSValue value = BS_READ(inst->a); \
         if (cond) { \
             BS_JUMP_COVER(inst->w); \
-            pc = inst->w; \
+            BS_GOTO(inst->w); \
         } \
     } \
     BS_NEXT()
@@ -1349,8 +1348,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         options->maxStatements > 0 ? options->maxStatements : INT64_MAX;
 
     const BSInst *insts = code->inst;
-    const BSInst *inst;
-    size_t pc = 0;
+    const BSInst *inst = insts;
     BSValue result;
 
 #ifdef BS_THREADED_DISPATCH
@@ -1365,18 +1363,29 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         &&op_CALL_OBJECT_HAS, &&op_CALL_OBJECT_SET, &&op_CALL_STRING_LENGTH, &&op_CALL_STRING_SLICE, &&op_JUMP_EQ,
         &&op_JUMP_NE, &&op_JUMP_LT, &&op_JUMP_LE, &&op_JUMP_GT, &&op_JUMP_GE
     };
+    /* "inst" is the instruction being run; BS_NEXT runs the one after it, BS_GOTO the one at an index */
 #define BS_CASE(name) op_##name:
 #define BS_NEXT() \
     do { \
-        inst = &insts[pc++]; \
+        inst++; \
         goto *dispatch[inst->op]; \
     } while (0)
-    BS_NEXT();
+#define BS_GOTO(target) \
+    do { \
+        inst = &insts[(target)]; \
+        goto *dispatch[inst->op]; \
+    } while (0)
+    goto *dispatch[inst->op];
 #else
 #define BS_CASE(name) case BS_OP_##name:
-#define BS_NEXT() break
+#define BS_NEXT() goto next
+#define BS_GOTO(target) \
+    do { \
+        inst = &insts[(target)]; \
+        goto run; \
+    } while (0)
     for (;;) {
-        inst = &insts[pc++];
+    run:
         switch (inst->op) {
 #endif
         BS_CASE(MOVE)
@@ -1420,15 +1429,14 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 
         BS_CASE(JUMP)
             BS_JUMP_COVER(inst->w);
-            pc = inst->w;
-            BS_NEXT();
+            BS_GOTO(inst->w);
 
         BS_JUMP_IF(JUMP_FALSE, !bsValueBoolean(value));
         BS_JUMP_IF(JUMP_TRUE, bsValueBoolean(value));
 
         BS_CASE(JUMP_UNDEF) {
             /* The trap past the chunk's return carries the jump statement's line in the data word that follows */
-            bsErrorSetStatement(options, script, (int) insts[pc].w, "Unknown jump label \"%s\"",
+            bsErrorSetStatement(options, script, (int) inst[1].w, "Unknown jump label \"%s\"",
                                 bsStringData(code->names[inst->a]));
             goto fail;
         }
@@ -1442,7 +1450,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             if (!function(code, inst, regs, intrinGlobals, options)) { \
                 goto call_general; \
             } \
-            pc++; \
+            inst++; \
             BS_NEXT();
 
         BS_CALL_INTRIN(CALL_ARRAY_GET, bsIntrinArrayGet)
@@ -1463,7 +1471,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             size_t argCount = inst->c;
             BSValue argsInline[16];
             BSValue *args = argCount <= 16 ? argsInline : bsAlloc(argCount * sizeof(BSValue));
-            const BSInst *data = &insts[pc];
+            const BSInst *data = inst + 1;
             size_t ix = 0;
             for (; ix + BS_OPERANDS_PER_DATA <= argCount; ix += BS_OPERANDS_PER_DATA, data++) {
                 args[ix] = BS_READ(data->a);
@@ -1477,7 +1485,6 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
                 }
                 data++;
             }
-            pc = (size_t) (data - insts);
             BSValue value = bsCall(code, inst, args, argCount, script, options, regs, locals, builtins);
             if (args != argsInline) {
                 free(args);
@@ -1490,6 +1497,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             if (options->error.type == BS_STRING) {
                 goto fail;
             }
+            inst = data - 1;
         }
         BS_NEXT();
 
@@ -1576,7 +1584,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_NEXT();
 
         BS_CASE(INCLUDE)
-            if (!bsExecuteIncludes(script, &code->includes[inst->a], inst->b, bsCodeLine(code, pc - 1), options)) {
+            if (!bsExecuteIncludes(script, &code->includes[inst->a], inst->b, bsCodeLine(code, (size_t) (inst - insts)), options)) {
                 goto fail;
             }
             BS_NEXT();
@@ -1600,10 +1608,13 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         default: /* GCOV_EXCL_LINE - emit never produces an unknown opcode */
             break; /* GCOV_EXCL_LINE */
         }
+    next:
+        inst++;
     }
 #endif
 #undef BS_CASE
 #undef BS_NEXT
+#undef BS_GOTO
 #undef BS_READ
 
 fail:
