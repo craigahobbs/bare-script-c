@@ -505,16 +505,27 @@ coverage reads it. Memory figures are from `/usr/bin/time -l`.
 
 ## Compatibility
 
-This runtime matches the JavaScript and Python implementations' observable behavior, including
-error messages and their column numbers. Where the two reference implementations disagree with
-each other, it follows the one shown in bold.
+This runtime defines BareScript's behavior. Its regular expressions and its Unicode whitespace
+and case behavior are standard JavaScript's; the other ports - the JavaScript and Python
+implementations - are the same as this one, within reason. The three match, including error
+messages and their column numbers, except as recorded here: where the two ports disagree with each
+other, this implementation's behavior is the one shown in bold.
 
 | Behavior                               | JavaScript        | Python          | This implementation |
 | -------------------------------------- | ----------------- | --------------- | ------------------- |
 | String length and indexing             | UTF-16 code units | code points     | **code points**     |
 | `stringDecode` of a non-number element | a NUL character   | `null`          | **`null`**          |
-| An unmatched capture group in a match  | omitted           | `null`          | **`null`**          |
-| Zero-width `regexSplit` matches        | collapsed         | split at each   | **split at each**   |
+| An unmatched capture group in a match  | omitted           | `null`          | **omitted**         |
+| Zero-width `regexSplit` matches        | never split at the last split's end | split at each | **never split at the last split's end** |
+| `$&`, `` $` ``, `$'` in a `regexReplace` replacement | the match, the text before it, the text after it | literal text | **the match, the text before it, the text after it** |
+| A repeated group's captures, `(a*)*` on `a` | unset each iteration, an empty iteration past the minimum rejected | the last iteration's | **as JavaScript** |
+| A lookbehind body                      | matched right to left, so `(?<=(\w+) )x` captures the word | left to right at each length | **right to left** |
+| A group name reused within one alternative, `(?<n>a)(?<n>b)` | `redefinition`  | `redefinition`  | **`redefinition`** |
+| A group name reused across an alternation's branches, `(?<n>a)\|(?<n>b)` | the branch that matched | `redefinition` | **the branch that matched** |
+| A named backreference before its group, `\k<n>(?<n>a)` | matches empty, then the group | `unknown group name` | **matches empty, then the group** |
+| A group name beginning with a digit, or with a non-ASCII letter | a digit rejected, a letter accepted | the same | **both rejected - a name is a BareScript identifier** |
+| A quantified lookahead, `(?=a)*`       | accepted          | accepted        | **`nothing to repeat`** |
+| A repeated flag, `regexNew('a', 'ii')` | `null`            | accepted        | **`null`**          |
 | `String(1e-7)`                         | `1e-7`            | `1e-07`         | **`1e-7`**          |
 | `String(-0)`                           | `0`               | `-0`            | **`0`**             |
 | `-7 % 3`                               | `-1` (truncated)  | `2` (floored)   | **`-1`**            |
@@ -538,8 +549,16 @@ each other, it follows the one shown in bold.
 JavaScript additionally hoists integer-like keys to the front in ascending numeric order; this
 implementation does not, matching Python.
 
-BareScript's Unicode whitespace and case behavior is defined as standard JavaScript's, within
-reason. Whitespace - the regex `\s` class, `stringTrim`, and the space around a parsed number - is
+BareScript's regular expressions are standard JavaScript's - their syntax, and the matching
+semantics of every construct: the rows above record where the Python port differs. Where
+JavaScript accepts a legacy form that can only be a mistake, correctness wins over its behavior:
+a backreference to a group the pattern never defines (`(a)\2`, an octal escape in JavaScript), an
+incomplete `\x4` or `\u12`, `\8` and `\9`, and `\k<n>` in a pattern with no named groups are
+errors here - as they are in JavaScript's unicode mode - and a quantified lookaround is an error
+whichever way it looks. The `regexNew` messages section below lists these with Python's messages.
+
+BareScript's Unicode whitespace and case behavior is standard JavaScript's. Whitespace - the
+regex `\s` class, `stringTrim`, and the space around a parsed number - is
 JavaScript's WhiteSpace and LineTerminator sets: the ASCII spaces, U+00A0, U+1680, U+2000-U+200A,
 U+2028, U+2029, U+202F, U+205F, U+3000, and U+FEFF. The regex `\w`, `\d`, and `\b` are ASCII; `.`
 and the multi-line anchors know every line terminator - LF, CR, U+2028, U+2029 - and `$` alone is
@@ -549,8 +568,8 @@ lower-cases to the final sigma. The `i` flag folds as JavaScript does: a code po
 ones sharing its simple upper case, but never across the ASCII boundary, and never through an
 expanding upper case. JavaScript has all of this natively. The Python implementation keeps
 Python's own definitions where they differ - the rows above - which is within reason: in
-practice the differences are a leading byte-order mark, whitespace to JavaScript and this
-implementation but not to Python, and `$` before a trailing newline, which Python's `$` matches.
+practice the differences are a leading byte-order mark, whitespace here and in JavaScript but not
+in Python, and `$` before a trailing newline, which Python's `$` matches.
 
 One capability of the reference implementations is out of scope here:
 
@@ -588,15 +607,21 @@ JavaScript regular expressions and `re` is not one:
 | `\1(a)`         | a forward reference, matches empty | `invalid group reference`       |
 | `(?<=a*)b`      | a variable-width lookbehind        | `look-behind requires fixed-width pattern` |
 
-Three cases go the other way, each a pattern JavaScript accepts that can only be a mistake. A
+Some cases go the other way, each a pattern JavaScript accepts that can only be a mistake. A
 numbered backreference to a group the pattern never defines - `(a)\2` - is a legacy octal escape in
 JavaScript, matching the control character U+0002; this implementation reports `re`'s `invalid group
 reference`. (A reference to a group defined later in the pattern is still a forward reference, as the
-table says.) A character class range with a class escape as either bound - `[\d-z]` - is a literal
-`-` in JavaScript and `bad character range` here; a named backreference to a name the pattern never
-defines - `\k<n>` - is the literal text in JavaScript and `unknown group name` here; a three-digit
-octal escape past `\377` - `\477`, which JavaScript reads as `\47` then `7` - is `octal escape value
-\477 outside of range` here. This implementation also limits a pattern to 127 capture groups,
+table says, and so is a named one - `\k<n>(?<n>a)` - which `re` rejects.) A character class range
+with a class escape as either bound - `[\d-z]` - is a literal `-` in JavaScript and `bad character
+range` here; a named backreference to a name the pattern never defines - `\k<n>` - is the literal
+text in JavaScript and `unknown group name` here; an incomplete hexadecimal escape - `\x4`, `\u12` -
+is the literal text in JavaScript and `incomplete escape` here; `\8` and `\9` are the digits in
+JavaScript and `invalid group reference` here; a three-digit octal escape past `\377` - `\477`,
+which JavaScript reads as `\47` then `7` - is `octal escape value \477 outside of range` here; and a
+quantified lookahead - `(?=a)*` - is `nothing to repeat` here, as a quantified lookbehind is in
+JavaScript, where both `re` and the unicode-mode JavaScript syntax also reject the lookahead. A group
+name shared by two groups of one alternative - `(?<n>a)(?<n>b)` - is `re`'s `redefinition of group
+name`, as in JavaScript. This implementation also limits a pattern to 127 capture groups,
 reporting `sorry, but this version only supports 127 groups`; both references allow more.
 
 Where a pattern is invalid in both, the message and position match, except for a pattern that is

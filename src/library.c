@@ -1067,12 +1067,13 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexMat
         bsMatchKeyGroupGrow(match->groupCount);
     }
     for (size_t ix = 0; ix < match->groupCount; ix++) {
-        BSValue text = bsNull();
-        if (match->matched[ix]) {
-            const BSRegexSpan *span = &match->groups[ix];
-            text = span->end == span->begin ? bsRetain(bsMatchKeys.empty) :
-                bsStringSlice(string, span->begin, span->end);
+        /* An unmatched group is left out of the model, as JavaScript leaves it undefined */
+        if (!match->matched[ix]) {
+            continue;
         }
+        const BSRegexSpan *span = &match->groups[ix];
+        BSValue text = span->end == span->begin ? bsRetain(bsMatchKeys.empty) :
+            bsStringSlice(string, span->begin, span->end);
         bsObjectAppend(groups, bsMatchKeys.group[ix], text);
 
         /* A named group is keyed by both its number and its name - an interned string already. A
@@ -1081,7 +1082,7 @@ static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexMat
         if (name.type == BS_STRING) {
             if (uniqueNames) {
                 bsObjectAppend(groups, name, bsRetain(text));
-            } else if (text.type != BS_NULL || !bsObjectHasString(groups, name)) {
+            } else {
                 bsObjectSetString(groups, name, bsRetain(text));
             }
         }
@@ -1146,15 +1147,13 @@ static BSValue bsFnRegexNew(const BSValue *args, size_t argCount, BSOptions *opt
     if (values[1].type == BS_STRING) {
         const char *flagText = bsStringData(values[1]);
         for (size_t ix = 0; ix < bsStringSize(values[1]); ix++) {
-            if (flagText[ix] == 'i') {
-                flags |= BS_REGEX_IGNORECASE;
-            } else if (flagText[ix] == 'm') {
-                flags |= BS_REGEX_MULTILINE;
-            } else if (flagText[ix] == 's') {
-                flags |= BS_REGEX_DOTALL;
-            } else {
+            unsigned flag = flagText[ix] == 'i' ? BS_REGEX_IGNORECASE : flagText[ix] == 'm' ? BS_REGEX_MULTILINE :
+                flagText[ix] == 's' ? BS_REGEX_DOTALL : 0;
+            /* An unknown flag, or one given twice */
+            if (flag == 0 || (flags & flag) != 0) {
                 return bsNull();
             }
+            flags |= flag;
         }
     }
     char error[BS_REGEX_ERROR_MAX];
@@ -1188,6 +1187,15 @@ static void bsRegexExpand(BSStringBuilder *sb, BSValue regex, BSValue string, co
         char next = substr[ix + 1];
         if (next == '$') {
             bsSBAppendChar(sb, '$');
+            ix++;
+            continue;
+        }
+
+        /* The match, the text before it, or the text after it */
+        if (next == '&' || next == '`' || next == '\'') {
+            size_t begin = next == '&' ? match->begin : next == '`' ? 0 : match->end;
+            size_t end = next == '&' ? match->end : next == '`' ? match->begin : bsStringLength(string);
+            bsSBAppendSlice(sb, string, begin, end);
             ix++;
             continue;
         }
@@ -1279,10 +1287,29 @@ static BSValue bsFnRegexSplit(const BSValue *args, size_t argCount, BSOptions *o
     bsRegexSubjectInit(&subject, values[1]);
 
     BSValue result = bsArrayNew();
+    BSRegexMatch match;
+    size_t length = subject.length;
+
+    /* An empty string splits to nothing when the pattern matches it, and to itself otherwise */
+    if (length == 0) {
+        if (!bsRegexSearch(values[0], &subject, 0, &match)) {
+            bsArrayPush(result, bsRetain(values[1]));
+        }
+        bsRegexSubjectFree(&subject);
+        return result;
+    }
+
+    /*
+     * JavaScript's split: a match splits the string only where it ends past the last split, so an
+     * empty match at the last split's end is stepped over, and no match is tried at the string's end
+     */
     size_t position = 0;
     size_t start = 0;
-    BSRegexMatch match;
-    while (start <= subject.length && bsRegexSearch(values[0], &subject, start, &match)) {
+    while (start < length && bsRegexSearch(values[0], &subject, start, &match) && match.begin < length) {
+        if (match.end == position) {
+            start = match.begin + 1;
+            continue;
+        }
         bsArrayPush(result, bsStringSlice(values[1], position, match.begin));
 
         /* The capture groups are part of the split result */
@@ -1294,9 +1321,9 @@ static BSValue bsFnRegexSplit(const BSValue *args, size_t argCount, BSOptions *o
             }
         }
         position = match.end;
-        start = (match.end > match.begin) ? match.end : match.begin + 1;
+        start = position;
     }
-    bsArrayPush(result, bsStringSlice(values[1], position, subject.length));
+    bsArrayPush(result, bsStringSlice(values[1], position, length));
     bsRegexSubjectFree(&subject);
     return result;
 }

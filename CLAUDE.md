@@ -64,10 +64,11 @@ perf` merges their results when present.
   changes here empirically against CPython rather than by inspection.
 - README's **Compatibility** section records every deliberate behavioral choice where the two
   references disagree with each other. Update it when behavior changes.
-- Agreement between the two references is evidence, not authority: this implementation is the
-  truth, and a behavior change is the user's decision. Unicode whitespace and case behavior is
-  defined as standard JavaScript's, within reason; README's **Compatibility** paragraph and table
-  record the definition and the Python implementation's deviations from it.
+- This implementation defines BareScript's behavior; agreement between the two references is
+  evidence, not authority, and a behavior change is the user's decision. Regular expressions and
+  Unicode whitespace and case behavior are defined as standard JavaScript's. The other ports are
+  defined as the same as this implementation, within reason; README's **Compatibility** section
+  records the definitions and the ports' deviations.
 
 ## Architecture
 

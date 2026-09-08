@@ -236,6 +236,39 @@ TEST(regex_alternation_and_groups)
     ASSERT_VALUE_STRING(bsTestMatch("(a)(b)", "ab", 0), "ab");
     ASSERT_VALUE(bsTestGroups("(a)(b)", "ab", 0), "[\"ab\",\"a\",\"b\"]");
     ASSERT_VALUE(bsTestGroups("(a)|(b)", "b", 0), "[\"b\",null,\"b\"]");
+
+    /* A failed attempt leaves no capture behind for the next start position - a stale flag and span once
+       made a backreference read past the subject */
+    ASSERT_VALUE(bsTestGroups("(?:(a)|b)\\1", "ab", 0), "[\"b\",null]");
+    ASSERT_VALUE(bsTestGroups("(a\\1)", "xaa", 0), "[\"a\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(a)??c", "abc", 0), "[\"c\",null]");
+
+    /* Every iteration of a repeated group begins with its captures unset, and an iteration past the
+       required ones that matches nothing fails, leaving the repetition as it was - JavaScript's rules */
+    ASSERT_VALUE(bsTestGroups("((a)|b)*", "ab", 0), "[\"ab\",\"b\",null]");
+    ASSERT_VALUE(bsTestGroups("((a)|b)*", "ba", 0), "[\"ba\",\"a\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(a*)*", "a", 0), "[\"a\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(a*)*", "b", 0), "[\"\",null]");
+    ASSERT_VALUE(bsTestGroups("(a*){2,}", "", 0), "[\"\",\"\"]");
+    ASSERT_VALUE(bsTestGroups("(?:(a)|(b))+", "ab", 0), "[\"ab\",null,\"b\"]");
+    ASSERT_VALUE(bsTestGroups("((a)|b)*?c", "abc", 0), "[\"abc\",\"b\",null]");
+    ASSERT_VALUE(bsTestGroups("((a)|b)*?c", "bac", 0), "[\"bac\",\"a\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(a*)*?b", "aab", 0), "[\"aab\",\"aa\"]");
+    ASSERT_VALUE(bsTestGroups("(a|(b))*?x", "abx", 0), "[\"abx\",\"b\",\"b\"]");
+    ASSERT_VALUE(bsTestGroups("(a?)*", "aa", 0), "[\"aa\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(a?){2,3}", "a", 0), "[\"a\",\"\"]");
+    ASSERT_VALUE(bsTestGroups("(?:(a)|(b)|c){3}", "abc", 0), "[\"abc\",null,null]");
+    ASSERT_VALUE(bsTestGroups("(?:(x)?y)*", "xyy", 0), "[\"xyy\",null]");
+    ASSERT_VALUE(bsTestGroups("(\\1a)*", "aa", 0), "[\"aa\",\"a\"]");
+
+    /* A named backreference may precede its group, and one to a name shared across an alternation's
+       branches means the group that took part */
+    ASSERT_VALUE(bsTestGroups("\\k<n>(?<n>a)", "a", 0), "[\"a\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(?:(?<n>a)|(?<n>b))\\k<n>", "bb", 0), "[\"bb\",null,\"b\"]");
+    ASSERT_VALUE(bsTestGroups("(?:(?<n>a)|(?<n>b))\\k<n>", "aa", 0), "[\"aa\",\"a\",null]");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:(?<n>a)|(?<n>b))\\k<n>", "ab", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:(?<n>a)|(?<n>b))\\k<n>", "xba", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("((?:(?!\\1c)){2}\xcf\x83{0}),", "\xcf\x82\xce\xa3", 0), "null");
     ASSERT_VALUE(bsTestGroups("(?:a)(b)", "ab", 0), "[\"ab\",\"b\"]");
     ASSERT_VALUE(bsTestGroups("(?<name>a)(b)", "ab", 0), "[\"ab\",\"a\",\"b\"]");
     ASSERT_VALUE(bsTestGroups("((a)(b))", "ab", 0), "[\"ab\",\"ab\",\"a\",\"b\"]");
@@ -282,6 +315,42 @@ TEST(regex_lookaround)
     ASSERT_VALUE(bsTestGroups("(?:(?=(a))ab|(?=(a))ac)", "ac", 0), "[\"ac\",null,\"a\"]");
     ASSERT_VALUE(bsTestGroups("(?:(?<=(a))b|(?<=(a))c)", "ac", 0), "[\"c\",null,\"a\"]");
     ASSERT_VALUE_STRING(bsTestMatch("(?!(a))b", "b", 0), "b");
+
+    /* A lookbehind body matches right to left, as JavaScript's does: a greedy repeat takes from the right,
+       a backreference can name a group to its right, and a lazy repeat gives one more to the left */
+    ASSERT_VALUE(bsTestGroups("(?<=(a+))b", "aab", 0), "[\"b\",\"aa\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a*)(a*))b", "aab", 0), "[\"b\",\"\",\"aa\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(\\w+) )x", "ab cd x", 0), "[\"x\",\"cd\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(\\d+)(\\d+))x", "123x", 0), "[\"x\",\"1\",\"23\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=\\1(a))b", "aab", 0), "[\"b\",\"a\"]");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<=\\1(a))b", "ab", 0), "null");
+    ASSERT_VALUE(bsTestGroups("(?<=(a)\\1)b", "aab", 0), "[\"b\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a)\\1)b", "aAb", BS_REGEX_IGNORECASE), "[\"b\",\"A\"]");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<!(a+))b", "aab", 0), "null");
+    ASSERT_VALUE(bsTestGroups("(?<=a(b+?))c", "abbc", 0), "[\"c\",\"bb\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a+)a)b", "aaab", 0), "[\"b\",\"aa\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a{1,2}))b", "aaab", 0), "[\"b\",\"aa\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a+?))b", "aab", 0), "[\"b\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a*?)b)c", "aabc", 0), "[\"c\",\"\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(ab|b))c", "abc", 0), "[\"c\",\"ab\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(b|ab))c", "abc", 0), "[\"c\",\"b\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a){2})b", "aab", 0), "[\"b\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(?:a|b){2})c", "abc", 0), "[\"c\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=a(?=b))b", "ab", 0), "[\"b\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(?<=(a))b)c", "abc", 0), "[\"c\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=a.)b", "axb", 0), "[\"b\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=[a-z]{2})1", "ab1", 0), "[\"1\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=^a)b", "ab", 0), "[\"b\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=\\bab)c", "abc", 0), "[\"c\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a)?b)c", "bc", 0), "[\"c\",null]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a)?b)c", "abc", 0), "[\"c\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=(a)|b)c", "bc", 0), "[\"c\",null]");
+    ASSERT_VALUE(bsTestGroups("x(?<=x)y", "xy", 0), "[\"xy\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=\xc3\xa9+)b", "\xc3\xa9\xc3\xa9" "b", 0), "[\"b\"]");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<=a{2,}?)b", "ab", 0), "null");
+    ASSERT_VALUE(bsTestGroups("(?<=(a+)aa)b", "aaab", 0), "[\"b\",\"a\"]");
+    ASSERT_VALUE(bsTestGroups("(?<=a(a+))c", "aac", 0), "[\"c\",\"a\"]");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<=x(b+?))c", "abbc", 0), "null");
 }
 
 
@@ -435,6 +504,18 @@ TEST(regex_compile_errors)
     /* The error argument is optional */
     bsRelease(bsRegexNew("(", 1, 0, NULL, 0));
     bsRelease(bsRegexNew("a", 1, 0, NULL, 0));
+
+    /* A group name is shared only across the branches of one alternation, as in JavaScript; a name is a
+       BareScript identifier; an assertion cannot be repeated */
+    bsTestRegexError("(?<n>a)(?<n>b)", "redefinition of group name 'n' as group 2; was group 1 at position 12");
+    bsTestRegexError("((?<n>a)|c)(?<n>b)", "redefinition of group name 'n' as group 3; was group 2 at position 16");
+    bsTestRegexError("(?:(?<n>a))(?:(?<n>b))", "redefinition of group name 'n' as group 2; was group 1 at position 19");
+    bsTestRegexError("(?:(?<n>a)|x)|(?<n>b)", "");
+    bsTestRegexError("(?<1a>x)", "bad character in group name '1a' at position 4");
+    bsTestRegexError("(?<a-b>x)", "unknown extension ?<a at position 1");
+    bsTestRegexError("(?=a)*", "nothing to repeat at position 5");
+    bsTestRegexError("(?<!a)?", "nothing to repeat at position 6");
+    bsTestRegexError("\\k<n>", "unknown group name 'n' at position 4");
 }
 
 

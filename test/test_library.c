@@ -452,6 +452,8 @@ TEST(library_regex)
     bsTestExpr("regexReplace(regexNew('(\\\\w+) (\\\\w+)'), 'John Smith', '$2, $1')", "\"Smith, John\"");
     bsTestExpr("regexReplace(regexNew('(?<a>x)'), 'axb', '[$<a>]')", "\"a[x]b\"");
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$$')", "\"a$b\"");
+    bsTestExpr("regexReplace(regexNew('x'), 'axb', '[$&|$`|$\\']')", "\"a[x|a|b]b\"");
+    bsTestExpr("regexReplace(regexNew('b'), 'abc', '$`$\\'')", "\"aacc\"");
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$')", "\"a$b\"");
     bsTestExpr("regexReplace(regexNew('x'), 'axb', '$9')", "\"a$9b\"");
     bsTestExpr("regexReplace(regexNew('(a)?x'), 'x', '[$1]')", "\"[]\"");
@@ -461,7 +463,13 @@ TEST(library_regex)
     bsTestExpr("regexSplit(regexNew(','), 'a,b')", "[\"a\",\"b\"]");
     bsTestExpr("regexSplit(regexNew('(-)'), 'a-b')", "[\"a\",\"-\",\"b\"]");
     bsTestExpr("regexSplit(regexNew('(z)?-'), 'a-b')", "[\"a\",null,\"b\"]");
-    bsTestExpr("regexSplit(regexNew(''), 'ab')", "[\"\",\"a\",\"b\",\"\"]");
+    bsTestExpr("regexSplit(regexNew(''), 'ab')", "[\"a\",\"b\"]");
+    bsTestExpr("regexNew('a', 'ii')", "null");
+    bsTestExpr("regexSplit(regexNew('x*'), '')", "[]");
+    bsTestExpr("regexSplit(regexNew('a'), '')", "[\"\"]");
+    bsTestExpr("regexSplit(regexNew('$'), 'ab')", "[\"ab\"]");
+    bsTestExpr("regexSplit(regexNew('a*?'), 'aab')", "[\"a\",\"a\",\"b\"]");
+    bsTestExpr("regexSplit(regexNew('b'), 'ab')", "[\"a\",\"\"]");
     bsTestExpr("regexSplit('x', 'a')", "null");
 }
 
@@ -913,9 +921,9 @@ TEST(library_regex_duplicate_names)
 {
     /* A name reused across alternatives keys the alternative that matched */
     bsTestExpr("objectGet(regexMatch(regexNew('(?<a>x)|(?<a>y)'), 'y'), 'groups')",
-               "{\"0\":\"y\",\"1\":null,\"2\":\"y\",\"a\":\"y\"}");
+               "{\"0\":\"y\",\"2\":\"y\",\"a\":\"y\"}");
     bsTestExpr("objectGet(regexMatch(regexNew('(?<a>x)|(?<a>y)'), 'x'), 'groups')",
-               "{\"0\":\"x\",\"1\":\"x\",\"2\":null,\"a\":\"x\"}");
+               "{\"0\":\"x\",\"1\":\"x\",\"a\":\"x\"}");
     bsTestExpr("regexReplace(regexNew('(?<a>x)|(?<a>y)'), 'xy', '[$<a>]')", "\"[x][y]\"");
 }
 

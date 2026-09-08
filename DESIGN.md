@@ -306,14 +306,21 @@ unpaired surrogate in a `\uXXXX` escape becomes U+FFFD so every decoded string i
 
 ## Regular Expressions
 
-The engine parses a pattern to a node tree, computes first sets and lookbehind bounds from it,
-compiles it to a linear program, and frees the tree. One loop runs the program with an explicit
-backtrack stack: an alternation's remaining alternatives, a repeat's remaining iterations, and a
-simple repeat's give-back are backtrack entries, and every capture and repeat-counter write is on
-an undo trail that a backtrack unwinds to the entry's mark. Matching costs no C recursion beyond
-one call per lookaround body, and a program is about a quarter the size of the tree it replaces.
-The engine implements the subset of JavaScript regular expression syntax that BareScript's regex
-functions expose:
+The engine parses a pattern to a node tree, computes first sets from it, compiles it to a linear
+program, and frees the tree. One loop runs the program with an explicit backtrack stack: an
+alternation's remaining alternatives, a repeat's remaining iterations, and a simple repeat's
+give-back are backtrack entries, and every capture and repeat-counter write is on an undo trail
+that a backtrack unwinds to the entry's mark - a failed run unwinds to its own mark, so no
+capture leaks into the next attempt. Matching costs no C recursion beyond one call per lookaround
+body, and a program is about a quarter the size of the tree it replaces. A lookbehind's body is
+emitted last node first, with backward forms of the instructions that consume the subject, so it
+matches right to left as JavaScript's does: a greedy repeat takes from the right, and a
+backreference can name a group to its right. A repeated group's captures start each iteration
+unset, and an iteration past the required ones that matches nothing fails, as JavaScript's rules
+say; a named backreference resolves after the parse, so it may precede its group, and one to a
+name shared across an alternation's branches means the group that took part.
+BareScript's regular expressions are standard JavaScript's: the engine implements the subset of
+JavaScript's syntax that the regex functions expose, with JavaScript's matching semantics:
 
 | Category   | Syntax                                                                    |
 | ---------- | ------------------------------------------------------------------------- |
