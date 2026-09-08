@@ -81,14 +81,17 @@ inherited rather than reimplemented, so **parser bugs are usually runtime, regex
 bugs**.
 
 The bootstrap: the bundled parser is stored as its own parser-compiled JSON model, so loading it
-needs only a JSON decode - a streaming one, `bsScriptFromModelJSON`, which compiles each statement
-as it is decoded so the model is never whole in memory (DESIGN.md's **The Parser and Linter** draws
-it).
+needs no parser: `bsScriptFromModelJSON` reads the JSON straight into the emitter's transient
+syntax tree a statement at a time and builds no model objects at all (DESIGN.md's **The Parser and
+Linter** draws it).
 
-`src/model.c` compiles the model to bytecode. A script keeps its model only where something will
-read it - the CLI under static analysis, an include while coverage is recording; otherwise
-`bsScriptForgetModel` drops it and `bsScriptToModel` re-parses the retained source lines on
-demand. Instructions are eight-byte register instructions - a destination register and two
+`src/model.c` compiles a statement from a transient syntax tree (`BSAst`, an arena of nodes) to
+bytecode. A parsed script's model objects are loaded into the tree a statement at a time by
+`bsAstStatement`; a bundled include's model JSON is read into it by `bsJSONDecodeScript`. The
+loaders reject a malformed model; the emitter assumes a well-formed tree. A script keeps its model
+only where something will read it - the CLI under static analysis, an include while coverage is
+recording; otherwise `bsScriptForgetModel` drops it and `bsScriptToModel` re-parses the retained
+source lines on demand. Instructions are eight-byte register instructions - a destination register and two
 operands, each a register or a constant. A chunk's registers are its slots (a function's arguments
 and assigned names) followed by the temporaries the emitter allocates stack-fashion while
 compiling an expression, so a local or a literal feeds an operator or a call with no instruction
@@ -106,7 +109,9 @@ that might be); a call's argument operands sit in the `DATA` words that follow i
 into a borrowed argument array; `CALL_NAME`, `LOAD_NAME`, and `STORE_NAME` operands index the
 chunk's per-site caches (`caches[]`), which hold a pointer to the globals
 object's value slot validated by the object's *structural* `generation` (bumped only when a key is
-added or removed - an in-place update does not move slots). Runtime errors are checked after each
+added or removed - an in-place update does not move slots); an `objectGet` or `objectSet` site's
+cache also remembers the entry index its key was last found at, checked against the entry's key
+before the object is scanned. Runtime errors are checked after each
 call, not per statement; line numbers come from `coverPcs` on demand. Bundled (system) includes
 have their `STMT` instructions stripped by `bsScriptDropModel`, so never assume a `STMT` precedes
 every statement in a cached include's code.
@@ -160,8 +165,10 @@ The library's functions open with the `BS_ARGS(model, failValue)` macro. Functio
 through to the function itself. The seven single-shape intrinsics (`arrayGet`, `arrayLength`,
 `arraySet`, `objectGet`, `objectSet`, `stringLength`, `stringSlice`) compile to call opcodes of their own
 (`bsCallOpcode` in `src/model.c`, the `bsIntrin*` functions in `src/runtime.c`), guarded by the
-site's cached global carrying that intrinsic id and by the absence of a shadowing locals object;
-they have no case in `bsIntrinsicCall`, which serves the rest through the general call path.
+site's *warm* cache - valid for the activation's globals object, its global carrying that intrinsic
+id - with a cold site, or one an expression's locals object could shadow, taking the general call,
+which resolves the cache; they have no case in `bsIntrinsicCall`, which serves the rest through the
+general call path.
 
 ### Regular expressions
 
@@ -169,7 +176,8 @@ they have no case in `bsIntrinsicCall`, which serves the rest through the genera
 matches by running the program in one loop with an explicit backtrack stack, over Unicode code
 points. It is **on the parser's hot path**, so its performance properties are load-bearing, not
 decoration: anchored-pattern optimization, first sets per alternative (indexed by code point for
-wide alternations), single-code-point quantifiers that scan in one loop and give back through one
+wide alternations; a predefined class contributes its ASCII members), the start-position scan by
+memchr or a byte table over an ASCII subject, single-code-point quantifiers that scan in one loop and give back through one
 backtrack entry, a capture and counter undo trail, and a step budget. Syntax is the JavaScript
 subset BareScript exposes - see DESIGN.md's **Regular Expressions** table.
 

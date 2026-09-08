@@ -54,7 +54,8 @@ buffer has no high bit. Non-ASCII indexing keeps, in an index block allocated on
 cursor and, for a string of thirty-two code points or more, a sparse stride-16 offset table.
 String library functions index by Unicode code point. `stringUpper` and `stringLower` apply
 Unicode's full case mapping (`unicode.c`): the simple mappings are runs of code points sharing one
-delta - stepping by two through the alternating upper/lower blocks - found by binary search, the
+delta - stepping by two through the alternating upper/lower blocks - found by binary search, in
+16-bit form for the Basic Multilingual Plane and 32-bit form past it, the
 few expanding mappings (ß to `SS`, the ligatures) a sorted special table, and a capital sigma that
 ends a word - a cased code point before it and none after, case-ignorable code points aside -
 lowers to the final sigma. An ASCII string maps byte for byte. The header also caches the
@@ -80,7 +81,9 @@ a merge sort above that.
 
 A lookup compares a stored key to the key sought by pointer first: C-string keys and compiled
 names of at most 64 bytes are interned, so a name from compiled code or the library hits without
-a `memcmp`, and two distinct interned strings are known to differ without one. Only when the two
+a `memcmp`, and two distinct interned strings are known to differ without one. An `objectGet` or
+`objectSet` call site remembers the entry index its key was last found at, and a record built the
+same way as the last one is found at that one compare before any scan. Only when the two
 are not both interned are the bytes compared - after the hash and size agree, in an indexed
 object. JSON keys reuse an interned name when it is already in the table and otherwise stay
 ordinary strings, so untrusted unique keys cannot grow the table, which is also capped. The
@@ -135,9 +138,10 @@ this prologue, sizing the model with `sizeof`. A few of the most-called function
 their happy-path argument shapes itself, without validation, and any other shape falls through
 to the function: the seven with one shape - `arrayGet`, `arrayLength`, `arraySet`, `objectGet`,
 `objectSet`, `stringLength`, `stringSlice` - as call opcodes of their own, which the emitter chooses by a call's
-name and argument count and whose handler first checks that the site's cached global is that
-library function (the one function value carrying the id) and that no locals object shadows the
-name; the rest in the call path's intrinsic switch. An opcode takes about fifteen instructions
+name and argument count and whose handler first checks that the site's cache is warm for the
+activation's globals object and holds that library function (the one function value carrying the
+id) - a cold site, or one an expression's locals object could shadow, takes the general call,
+which resolves the cache; the rest in the call path's intrinsic switch. An opcode takes about fifteen instructions
 off a global `arrayGet` call of ninety-five, which is a tenth of an object-heavy program such as
 the `nbody` port.
 
@@ -191,17 +195,21 @@ It is solved the way the reference implementations solve it - the bundled parser
 own parser-compiled JSON model, which loads with a JSON decode and no parser at all.
 
 ```
-barescriptParser.bare (bundled JSON model)
-        |  JSON decode
-        v
-  BareScript model  --.
-        |             |  bsScriptFromModel
-        v             v
+barescriptParser.bare (bundled JSON model)      your script's model (the parser's objects)
+        |  bsJSONDecodeScript                            |  bsAstStatement
+        v                                                v
+             the syntax tree (BSAst) - one statement at a time
+                                |  the emitter
+                                v
    bytecode chunk  -> executed by the runtime, which is what parses your script
 ```
 
-`model.c` compiles the model to bytecode. Jump labels become instruction indexes and
-function-local names become slot indexes during emit - there is no executable expression tree. A slot holding the internal unset marker
+`model.c` compiles a transient syntax tree - an arena of nodes holding one statement, reset for the
+next - to bytecode. A parsed script's model objects are loaded into the tree a statement at a time;
+a bundled include's model JSON is read straight into it, with the model's keys recognized by their
+bytes, so no model object is built for it. The loaders reject a malformed model, and the emitter
+assumes a well-formed tree. Jump labels become instruction indexes and function-local names become
+slot indexes during emit - there is no executable expression tree. A slot holding the internal unset marker
 falls through to the globals object, matching the reference behavior where an unassigned local
 simply is not a key of the locals dictionary. Group nodes stay in the model (the parser and linter
 observe them) and flatten only in the code stream.
@@ -247,11 +255,11 @@ a script that merely includes the library holds bytecode and source lines alone.
 
 The thirty-two scripts of the BareScript include library - `args.bare`, `markdown.bare`,
 `schema.bare`, `unittest.bare`, `gzip.bare`, and the rest - are compiled to JSON
-script models and embedded in the library. Including one costs a JSON decode rather than a run of
-the parser - and a streaming one: `bsScriptFromModelJSON` decodes the model a statement at a
-time, compiling and releasing each before the next, so the model - about seven times the size of
-its JSON, most of it 104-byte objects - is never whole in memory. Loading the parser peaks at a
-few hundred kilobytes rather than a megabyte and a half.
+script models and embedded in the library. Including one costs a JSON read rather than a run of
+the parser: `bsScriptFromModelJSON` reads the model a statement at a time into the emitter's
+syntax tree and compiles it before the next, building no model objects, so a model - about seven
+times the size of its JSON as objects - is never in memory at all, and the tree holds one
+statement.
 
 The models are gzip-compressed at level 9 by `gzip.bare` (`gzipCompress` / `gzipUncompress`, byte
 arrays in and out) and embedded as `unsigned char` arrays. That compresses about 601 KB of include
@@ -349,8 +357,10 @@ because the parser is itself regex-driven:
 - A pattern whose every alternative begins with `^` only tries the search start position. Every
   pattern the parser uses is anchored this way, so this is the difference between a linear and a
   quadratic scan of each line it parses.
-- An unanchored pattern computes the set of code points a match can begin with, and the search
-  skips every position whose code point is not in it. Each alternative of an alternation carries
+- An unanchored pattern computes the set of code points a match can begin with - a character
+  class contributes its finished membership, predefined classes included - and the search skips
+  every position whose code point is not in it: over an ASCII subject with `memchr` for a set of
+  one byte and a byte table otherwise. Each alternative of an alternation carries
   its own first set, and a wide alternation indexes its alternatives by first code point, so an
   alternation tries only the alternatives that can begin at a position - the markdown span
   alternation has sixteen, and a position usually admits one or two.
