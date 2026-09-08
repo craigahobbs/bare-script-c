@@ -222,6 +222,9 @@ TEST(library_string)
     bsTestExpr("stringLower('\xc3\x89\xc4\xb0\xe1\xba\x9e X\xd0\x94\xc4\x80\xc4\x81')",
                "\"\xc3\xa9i\xcc\x87\xc3\x9f x\xd0\xb4\xc4\x81\xc4\x81\"");
     bsTestExpr("stringUpper(stringFromCharCode(0x10428, 0x1E900))", "\"\xf0\x90\x90\x80\xf0\x9e\xa4\x80\"");
+    /* Past the Basic Multilingual Plane: a code point below the first run, and a cased letter before a final sigma */
+    bsTestExpr("stringUpper(stringFromCharCode(0x10000))", "\"\xf0\x90\x80\x80\"");
+    bsTestExpr("stringLower(stringFromCharCode(0x10400, 0x3A3))", "\"\xf0\x90\x90\xa8\xcf\x82\"");
 
     /* A capital sigma lowers to the final sigma only where it ends a word */
     bsTestExpr("stringLower('\xce\xa3')", "\"\xcf\x83\"");
