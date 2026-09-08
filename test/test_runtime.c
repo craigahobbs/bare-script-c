@@ -1138,13 +1138,15 @@ TEST(runtime_intrinsic_opcodes)
         "a = [1, 2]\no = {'k': 3}\n"
         "arrayPush(a, 4)\narraySet(a, 0, 9)\nobjectSet(o, 'j', 5)\n"
         "return [arrayGet(a, 2), arrayLength(a), arrayPush(a, 7), arraySet(a, 1, 8), objectGet(o, 'k'), "
-        "objectGet(o, 'z', 6), objectGet(o, 'z'), objectSet(o, 'k', 1), stringLength('abc'), o]"),
-        "[4,3,[9,8,4,7],8,3,6,null,1,3,{\"j\":5,\"k\":1}]");
+        "objectGet(o, 'z', 6), objectGet(o, 'z'), objectSet(o, 'k', 1), stringLength('abc'), o, "
+        "objectHas(o, 'k'), objectHas(o, 'z')]"),
+        "[4,3,[9,8,4,7],8,3,6,null,1,3,{\"j\":5,\"k\":1},true,false]");
 
     /* Argument shapes the intrinsic does not take fall to the library function, which reports them */
     ASSERT_VALUE(bsTestExecute("return [arrayGet([1], 1), arrayGet('x', 0), arrayLength(1), objectGet(1, 'k'), "
-                               "objectGet({}, 1), stringLength(1), arraySet([], 0, 1), objectSet(1, 'k', 1), arrayPush(1, 2)]"),
-                 "[null,null,0,null,null,0,null,null,null]");
+                               "objectGet({}, 1), stringLength(1), arraySet([], 0, 1), objectSet(1, 'k', 1), arrayPush(1, 2), "
+                               "objectHas(1, 'k'), objectHas({}, 1)]"),
+                 "[null,null,0,null,null,0,null,null,null,false,false]");
     ASSERT_VALUE(bsTestExecute("return arrayGet([1], 0.5)"), "null");
 
     /* A cold site takes the general call, which resolves it; a warm site's handler sees the shapes
@@ -1153,14 +1155,14 @@ TEST(runtime_intrinsic_opcodes)
         "function f(a, i, o, k, s, e):\n"
         "    stringSlice(s, i, e)\n"
         "    return [arrayGet(a, i), arrayLength(a), arrayPush(a, 2), arraySet(a, i, 1), objectGet(o, k), "
-        "objectSet(o, k, 1), stringLength(s), stringSlice(s, i, e), stringSlice(s, i)]\n"
+        "objectSet(o, k, 1), stringLength(s), stringSlice(s, i, e), stringSlice(s, i), objectHas(o, k)]\n"
         "endfunction\n"
         "f([1], 0, {'k': 3}, 'k', 'abc', 1)\n"
         "return [f([1], 1, {}, 'k', 'ab', 0), f('x', 'y', 1, 'k', 1, 'z'), f([1], 0.5, {}, 'k', 'abc', 'x'), "
         "f([1], 0, {}, 'k', 'abc', 4), f([1], 0, {}, 'k', 'abc', 'x'), f([1], 'y', {}, 'k', 'abc', 1)]"),
-        "[[null,1,[1,1],1,null,1,2,\"\",\"b\"],[null,0,null,null,null,null,0,null,null],"
-        "[null,1,[1,2],null,null,1,3,null,null],[1,1,[1,2],1,null,1,3,null,\"abc\"],"
-        "[1,1,[1,2],1,null,1,3,null,\"abc\"],[null,1,[1,2],null,null,1,3,null,null]]");
+        "[[null,1,[1,1],1,null,1,2,\"\",\"b\",true],[null,0,null,null,null,null,0,null,null,false],"
+        "[null,1,[1,2],null,null,1,3,null,null,true],[1,1,[1,2],1,null,1,3,null,\"abc\",true],"
+        "[1,1,[1,2],1,null,1,3,null,\"abc\",true],[null,1,[1,2],null,null,1,3,null,null,true]]");
 
     /* A script function of the same name shadows the intrinsic - the site's global is not the library's */
     ASSERT_VALUE(bsTestExecute(
@@ -1171,8 +1173,9 @@ TEST(runtime_intrinsic_opcodes)
         "function objectGet(o, k):\n    return -4\nendfunction\n"
         "function objectSet(o, k, v):\n    return -5\nendfunction\n"
         "function stringLength(s):\n    return -6\nendfunction\n"
+        "function objectHas(o, k):\n    return -7\nendfunction\n"
         "return [arrayGet([1], 0), arrayLength([]), arrayPush([], 1), arraySet([1], 0, 2), objectGet({}, 'k'), "
-        "objectSet({}, 'k', 1), stringLength('abc')]"), "[\"mine\",-1,-2,-3,-4,-5,-6]");
+        "objectSet({}, 'k', 1), stringLength('abc'), objectHas({}, 'k')]"), "[\"mine\",-1,-2,-3,-4,-5,-6,-7]");
 
     /* A locals object shadows too - an expression evaluated with locals takes the general call */
     ASSERT_VALUE(bsTestExecute(

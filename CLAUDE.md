@@ -163,8 +163,8 @@ interpreter's borrowed reads of the call's operands, the return is owned. Two di
 
 The library's functions open with the `BS_ARGS(model, failValue)` macro. Functions with an
 `intrinsic` id are handled by the interpreter on their happy-path argument shapes; a miss falls
-through to the function itself. The seven single-shape intrinsics (`arrayGet`, `arrayLength`,
-`arraySet`, `objectGet`, `objectSet`, `stringLength`, `stringSlice`) compile to call opcodes of their own
+through to the function itself. The single-shape intrinsics (`arrayGet`, `arrayLength`, `arrayPush`,
+`arraySet`, `objectGet`, `objectHas`, `objectSet`, `stringLength`, `stringSlice`) compile to call opcodes of their own
 (`bsCallOpcode` in `src/model.c`, the `bsIntrin*` functions in `src/runtime.c`), guarded by the
 site's *warm* cache - valid for the activation's globals object, its global carrying that intrinsic
 id - with a cold site, or one an expression's locals object could shadow, taking the general call,

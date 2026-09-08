@@ -136,8 +136,8 @@ The library's own functions open with a `BS_ARGS(model, failValue)` macro that e
 this prologue, sizing the model with `sizeof`. A few of the most-called functions - `arrayGet`,
 `objectGet`, `mathAbs`, and their kin - also carry an *intrinsic* id. The interpreter handles
 their happy-path argument shapes itself, without validation, and any other shape falls through
-to the function: the seven with one shape - `arrayGet`, `arrayLength`, `arraySet`, `objectGet`,
-`objectSet`, `stringLength`, `stringSlice` - as call opcodes of their own, which the emitter chooses by a call's
+to the function: the nine with one shape - `arrayGet`, `arrayLength`, `arrayPush`, `arraySet`, `objectGet`,
+`objectHas`, `objectSet`, `stringLength`, `stringSlice` - as call opcodes of their own, which the emitter chooses by a call's
 name and argument count and whose handler first checks that the site's cache is warm for the
 activation's globals object and holds that library function (the one function value carrying the
 id) - a cold site, or one an expression's locals object could shadow, takes the general call,

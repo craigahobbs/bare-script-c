@@ -552,8 +552,6 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
             return true;
         }
         return false;
-    BS_INTRIN(OBJECT_HAS, argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING,
-              bsBoolean(bsObjectHasString(args[0], args[1])))
     BS_INTRIN(OBJECT_KEYS, argCount == 1 && args[0].type == BS_OBJECT, bsObjectKeys(args[0]))
     case BS_INTRIN_OBJECT_NEW: {
         for (size_t ix = 0; ix < argCount; ix += 2) {
@@ -1087,6 +1085,23 @@ static inline bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst, BSV
     return true;
 }
 
+static inline bool bsIntrinObjectHas(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
+                                          BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_OBJECT_HAS);
+    if (args == NULL) {
+        return false;
+    }
+    BSValue object = bsOperandRead(regs, args->a);
+    BSValue key = bsOperandRead(regs, args->b);
+    if (object.type != BS_OBJECT || key.type != BS_STRING) {
+        return false;
+    }
+    BSObjectEntry *entry = bsObjectEntryMemo(object.u.object, key.u.string, &code->caches[inst->b].memo);
+    bsIntrinResult(inst, regs, bsBoolean(entry != NULL));
+    return true;
+}
+
 static inline bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
@@ -1347,7 +1362,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG, &&op_NOT, &&op_BNOT,
         &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT, &&op_CALL_ARRAY_GET,
         &&op_CALL_ARRAY_LENGTH, &&op_CALL_ARRAY_PUSH, &&op_CALL_ARRAY_SET, &&op_CALL_OBJECT_GET,
-        &&op_CALL_OBJECT_SET, &&op_CALL_STRING_LENGTH, &&op_CALL_STRING_SLICE, &&op_JUMP_EQ,
+        &&op_CALL_OBJECT_HAS, &&op_CALL_OBJECT_SET, &&op_CALL_STRING_LENGTH, &&op_CALL_STRING_SLICE, &&op_JUMP_EQ,
         &&op_JUMP_NE, &&op_JUMP_LT, &&op_JUMP_LE, &&op_JUMP_GT, &&op_JUMP_GE
     };
 #define BS_CASE(name) op_##name:
@@ -1435,6 +1450,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CALL_INTRIN(CALL_ARRAY_PUSH, bsIntrinArrayPush)
         BS_CALL_INTRIN(CALL_ARRAY_SET, bsIntrinArraySet)
         BS_CALL_INTRIN(CALL_OBJECT_GET, bsIntrinObjectGet)
+        BS_CALL_INTRIN(CALL_OBJECT_HAS, bsIntrinObjectHas)
         BS_CALL_INTRIN(CALL_OBJECT_SET, bsIntrinObjectSet)
         BS_CALL_INTRIN(CALL_STRING_LENGTH, bsIntrinStringLength)
         BS_CALL_INTRIN(CALL_STRING_SLICE, bsIntrinStringSlice)
