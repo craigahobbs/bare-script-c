@@ -1033,6 +1033,9 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
 /* Entries scanned in place before an object builds its hash index */
 #define BS_OBJECT_LINEAR 16
 
+/* generation's high bit: a non-interned key has been stored, so an interned miss must scan by content */
+#define BS_OBJECT_ORDINARY 0x80000000u
+
 /* Recycled entry buffers, in the two capacities an object outgrows its inline entries into first */
 #define BS_ENTRY_POOL_CAPACITY 8
 #define BS_ENTRY_POOL_MAX 1024
@@ -1388,7 +1391,8 @@ static BS_NOINLINE void bsObjectIndexBuild(BSObject *object, size_t capacity)
  * the keys compiled code and the library look up are interned, as are the keys they store, so the
  * pointer pass finds them without touching a stored key's header. A sought key that is interned
  * can then only match a stored key that is not - two distinct interned strings never compare
- * equal - so the content pass skips the interned ones.
+ * equal - so the content pass skips the interned ones, and is skipped entirely until a
+ * non-interned key has been stored (generation's BS_OBJECT_ORDINARY bit).
  */
 static inline BSObjectEntry *bsObjectFind(const BSObject *object, BSString *key, const char *data, size_t size)
 {
@@ -1403,6 +1407,9 @@ static inline BSObjectEntry *bsObjectFind(const BSObject *object, BSString *key,
                 }
             }
             if ((key->flags & BS_STR_INTERNED) != 0) {
+                if ((object->generation & BS_OBJECT_ORDINARY) == 0) {
+                    return NULL;
+                }
                 for (size_t ix = 0; ix < count; ix++) {
                     const BSString *stored = entries[ix].key;
                     if ((stored->flags & BS_STR_INTERNED) == 0 && stored->size == size &&
@@ -1462,6 +1469,9 @@ static void bsObjectEntryAdd(BSObject *object, BSValue key, BSValue item)
     entry->key = bsRetainInline(key).u.string;
     entry->value = item;
     object->generation++;
+    if ((entry->key->flags & BS_STR_INTERNED) == 0) {
+        object->generation |= BS_OBJECT_ORDINARY;
+    }
     if (object->index != NULL) {
         bsObjectIndexPut(object->index, bsStringHash(entry->key), ix);
     } else if (object->count > BS_OBJECT_LINEAR) {
