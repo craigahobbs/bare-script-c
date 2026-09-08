@@ -185,6 +185,21 @@ static inline unsigned rxLowestBit(uint32_t mask)
 }
 
 
+static inline unsigned rxLowestBit64(uint64_t mask)
+{
+#if defined(__GNUC__)
+    return (unsigned) __builtin_ctzll(mask);
+#else
+    unsigned bit = 0;
+    while ((mask & 1u) == 0) {
+        mask >>= 1;
+        bit++;
+    }
+    return bit;
+#endif
+}
+
+
 typedef struct RxInst RxInst;
 struct BSRegex;
 typedef struct RxCompiler RxCompiler;
@@ -195,6 +210,8 @@ struct BSRegex {
     int32_t refcount;
     bool anchored; /* every alternative begins with "^", so only the start position can match */
     RxFirstSet first;
+    int firstByte;           /* the one byte a match can begin with, or -1 - the ASCII search scans with memchr */
+    uint8_t firstBytes[256]; /* the first set's membership by byte, for the ASCII search scan */
     size_t groupCount;
     BSValue *groupNames;  /* groupCount entries, or NULL if no group is named */
     bool uniqueNames;     /* no two groups share a name, so a match model can append each */
@@ -1063,24 +1080,27 @@ static bool rxFirstSet(const RxNode *node, unsigned flags, RxFirstSet *set)
             rxFirstAddCode(set, flags, node->u.ch);
             return false;
 
-        case RX_CLASS:
-            /* A negated or predefined class can match code points a table cannot enumerate */
-            if (node->u.cls.negate || node->u.cls.classes != 0) {
-                set->any = true;
-                return false;
+        case RX_CLASS: {
+            /*
+             * The class's ASCII members from its finished membership table - negation and folding
+             * applied - and, for a class that can match past ASCII, every code point above: a
+             * negated or folded class, a predefined class with such members, or a range reaching them
+             */
+            const RxClass *cls = &node->u.cls;
+            for (size_t ix = 0; ix < 16; ix++) {
+                set->bits[ix >> 3] |= (uint64_t) cls->ascii[ix] << (8 * (ix & 7));
             }
-            for (size_t ix = 0; ix < node->u.cls.rangeCount; ix++) {
-                uint32_t low = node->u.cls.ranges[ix * 2];
-                uint32_t high = node->u.cls.ranges[ix * 2 + 1];
-                if (high >= 256) {
-                    set->high = true;
-                    high = 255;
-                }
-                for (uint32_t code = low; code <= high; code++) {
-                    rxFirstAddCode(set, flags, code);
-                }
+            bool wide = cls->negate || cls->fold ||
+                (cls->classes & (RX_CLASS_NOTDIGIT | RX_CLASS_NOTWORD | RX_CLASS_SPACE | RX_CLASS_NOTSPACE)) != 0;
+            for (size_t ix = 0; !wide && ix < cls->rangeCount; ix++) {
+                wide = cls->ranges[ix * 2 + 1] >= 128;
+            }
+            if (wide) {
+                set->bits[2] = set->bits[3] = ~(uint64_t) 0;
+                set->high = true;
             }
             return false;
+        }
 
         case RX_ALT: {
             bool nullable = false;
@@ -1263,8 +1283,19 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         }
     }
 
-    /* The set of code points a match can begin with, for the search scan */
+    /* The set of code points a match can begin with, for the search scan - by byte for an ASCII subject */
     rxFirstCompute(compiler.root, flags, &regex->first);
+    regex->firstByte = -1;
+    if (!regex->first.any) {
+        int firstCount = 0;
+        for (unsigned word = 0; word < 4; word++) {
+            for (uint64_t bits = regex->first.bits[word]; bits != 0; bits &= bits - 1) {
+                unsigned code = word * 64 + rxLowestBit64(bits);
+                regex->firstBytes[code] = 1;
+                regex->firstByte = firstCount++ == 0 ? (int) code : -1;
+            }
+        }
+    }
 
     rxEmitProgram(&compiler);
     rxCompilerFree(&compiler);
@@ -1732,9 +1763,9 @@ static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
         if (first->high) {
             index->high |= bit;
         }
-        for (uint32_t code = 0; code < 256; code++) {
-            if (rxFirstHas(first, code)) {
-                index->codes[code] |= bit;
+        for (unsigned word = 0; word < 4; word++) {
+            for (uint64_t bits = first->bits[word]; bits != 0; bits &= bits - 1) {
+                index->codes[word * 64 + rxLowestBit64(bits)] |= bit;
             }
         }
     }
@@ -2700,10 +2731,24 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     for (size_t pos = start; pos <= last && !found; pos++) {
         /* Skip positions whose code point cannot begin a match */
         if (!compiled->first.any) {
-            while (pos < subject->length && !rxFirstHas(&compiled->first, rxCode(&state, pos))) {
-                pos++;
+            size_t length = subject->length;
+            if (subject->codes != NULL) {
+                const uint32_t *codes = subject->codes;
+                while (pos < length && !rxFirstHas(&compiled->first, codes[pos])) {
+                    pos++;
+                }
+            } else if (compiled->firstByte >= 0) {
+                const unsigned char *at = pos < length ?
+                    memchr(subject->bytes + pos, compiled->firstByte, length - pos) : NULL;
+                pos = at != NULL ? (size_t) (at - subject->bytes) : length;
+            } else {
+                const unsigned char *bytes = subject->bytes;
+                const uint8_t *firstBytes = compiled->firstBytes;
+                while (pos < length && !firstBytes[bytes[pos]]) {
+                    pos++;
+                }
             }
-            if (pos >= subject->length) {
+            if (pos >= length) {
                 break;
             }
         }
