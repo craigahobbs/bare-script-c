@@ -723,11 +723,16 @@ static BSOptions *bsTestCoverageOptions(BSValue *coverage, bool enabled)
 }
 
 
+/* A script's covered-lines object (borrowed) */
+static BSValue bsTestCovered(BSValue coverage, const char *script)
+{
+    return bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), script), "covered");
+}
+
 /* A covered line's hit count */
 static double bsTestCoveredCount(BSValue coverage, const char *script, const char *line)
 {
-    BSValue covered = bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), script), "covered");
-    return bsObjectGet(bsObjectGet(covered, line), "count").u.number;
+    return bsObjectGet(bsObjectGet(bsTestCovered(coverage, script), line), "count").u.number;
 }
 
 
@@ -787,7 +792,7 @@ TEST(runtime_coverage_forgotten_model)
     ASSERT_VALUE(bsExecuteScript(script, options), "3");
     ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "forget.bare", "1"), 1);
     ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "forget.bare", "3"), 1);
-    BSValue covered = bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), "forget.bare"), "covered");
+    BSValue covered = bsTestCovered(coverage, "forget.bare");
     BSValue statement = bsObjectGet(bsObjectGet(covered, "3"), "statement");
     ASSERT_INT_EQ(statement.type, BS_OBJECT);
     ASSERT_TRUE(bsObjectHas(statement, "return"));
@@ -860,9 +865,8 @@ TEST(runtime_coverage_jump)
     BSValue coverage;
     BSOptions *options = bsTestCoverageOptions(&coverage, true);
     ASSERT_VALUE(bsTestExecuteOptions("i = 0\nwhile i < 3:\n    i = i + 1\nendwhile\nreturn i", options), "3");
-    BSValue covered = bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), "test.bare"), "covered");
-    ASSERT_TRUE(bsObjectCount(covered) >= 4);
-    ASSERT_TRUE(bsObjectGet(bsObjectGet(covered, "3"), "count").u.number >= 3);
+    ASSERT_TRUE(bsObjectCount(bsTestCovered(coverage, "test.bare")) >= 4);
+    ASSERT_TRUE(bsTestCoveredCount(coverage, "test.bare", "3") >= 3);
     bsOptionsFree(options);
 
     /* An expression jump (if/&&) is not a label; coverage still records the statement */
@@ -1226,8 +1230,7 @@ TEST(runtime_compare_jumps)
     BSValue coverage;
     BSOptions *options = bsTestCoverageOptions(&coverage, true);
     ASSERT_VALUE(bsTestExecuteOptions("i = 0\nloop:\ni = i + 1\njumpif (i < 3) loop\nreturn i", options), "3");
-    BSValue covered = bsObjectGet(bsObjectGet(bsObjectGet(coverage, "scripts"), "test.bare"), "covered");
-    ASSERT_TRUE(bsObjectGet(bsObjectGet(covered, "2"), "count").u.number >= 3);
+    ASSERT_TRUE(bsTestCoveredCount(coverage, "test.bare", "2") >= 3);
     bsOptionsFree(options);
 }
 

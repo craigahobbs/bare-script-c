@@ -192,6 +192,9 @@ TEST(library_string)
     bsTestExpr("stringIndexOf('abc', 'z')", "-1");
     bsTestExpr("stringIndexOf('abc', 'a', 9)", "-1");
     bsTestExpr("stringIndexOf(1, 'a')", "-1");
+    bsTestExpr("stringIndexOf('abc', '')", "0");
+    bsTestExpr("stringIndexOf('abc', '', 3)", "3");
+    bsTestExpr("stringIndexOf('a', 'abc')", "-1");
     bsTestExpr("stringLastIndexOf('abcabc', 'b')", "4");
     bsTestExpr("stringLastIndexOf('abcabc', 'b', 2)", "1");
     bsTestExpr("stringLastIndexOf('abc', 'z')", "-1");
@@ -734,11 +737,6 @@ TEST(library_too_many_arguments)
     bsTestExpr("mathPi(1) == mathPi()", "true");
     bsTestExpr("mathE(1) == mathE()", "true");
     bsTestExpr("systemType(mathRandom(1))", "\"number\"");
-
-    /* An empty search string, and a search longer than the string */
-    bsTestExpr("stringIndexOf('abc', '')", "0");
-    bsTestExpr("stringIndexOf('abc', '', 3)", "3");
-    bsTestExpr("stringIndexOf('a', 'abc')", "-1");
 }
 
 

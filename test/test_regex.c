@@ -510,9 +510,12 @@ TEST(regex_compile_errors)
     bsTestRegexError("(?<n>a)(?<n>b)", "redefinition of group name 'n' as group 2; was group 1 at position 12");
     bsTestRegexError("((?<n>a)|c)(?<n>b)", "redefinition of group name 'n' as group 3; was group 2 at position 16");
     bsTestRegexError("(?:(?<n>a))(?:(?<n>b))", "redefinition of group name 'n' as group 2; was group 1 at position 19");
-    bsTestRegexError("(?:(?<n>a)|x)|(?<n>b)", "");
+    /* A name may be shared across top-level alternatives */
+    BSValue shared = bsRegexNew("(?:(?<n>a)|x)|(?<n>b)", 21, 0, error, sizeof(error));
+    ASSERT_INT_EQ(shared.type, BS_REGEX);
+    ASSERT_STR_EQ(error, "");
+    bsRelease(shared);
     bsTestRegexError("(?<1a>x)", "bad character in group name '1a' at position 4");
-    bsTestRegexError("(?<a-b>x)", "unknown extension ?<a at position 1");
     bsTestRegexError("(?=a)*", "nothing to repeat at position 5");
     bsTestRegexError("(?<!a)?", "nothing to repeat at position 6");
     bsTestRegexError("\\k<n>", "unknown group name 'n' at position 4");

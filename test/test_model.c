@@ -314,12 +314,9 @@ TEST(model_valid_shapes)
     BSOptions *options = bsTestOptions();
     ASSERT_VALUE(bsExecuteScript(script, options), "[2]");
     bsOptionsFree(options);
-
-    /* An include statement's system flag round-trips */
-    BSValue model = bsScriptToModel(script);
-    bsRelease(model);
     bsScriptRelease(script);
 
+    /* An include statement's system flag round-trips */
     script = bsTestScriptFromJSON(
         "{\"statements\":[{\"include\":{\"includes\":["
         "{\"url\":\"a.bare\"},{\"url\":\"b.bare\",\"system\":true}]}}]}");
@@ -327,7 +324,7 @@ TEST(model_valid_shapes)
     ASSERT_INT_EQ((int) script->code.includeCount, 2);
     ASSERT_FALSE(script->code.includes[0].system);
     ASSERT_TRUE(script->code.includes[1].system);
-    model = bsScriptToModel(script);
+    BSValue model = bsScriptToModel(script);
     BSValue includes = bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(model, "statements"), 0),
                                                "include"), "includes");
     ASSERT_FALSE(bsObjectHas(bsArrayGet(includes, 0), "system"));
