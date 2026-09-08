@@ -1262,9 +1262,9 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
  * "code". Returns false - the chunk released - for a malformed statement or an overflowed operand
  * space.
  */
-static bool bsEmitEnd(BSEmit *e, bool emitted, BSCode *code)
+static bool bsEmitEnd(BSEmit *e, bool emitted, BSCode *code, BSOperand ret)
 {
-    bsEmitInst(e, BS_OP_RETURN, e->nullConst, 0, 0);
+    bsEmitInst(e, BS_OP_RETURN, ret, 0, 0);
     bool finished = bsEmitFinish(e, code);
     if (!emitted || !finished) {
         bsCodeFree(code);
@@ -1313,7 +1313,7 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
         }
     }
     bsAssignedAnalyze(&body, statements, def->argCount);
-    bool emitted = bsEmitEnd(&body, bsEmitStatements(&body, statements), &def->code);
+    bool emitted = bsEmitEnd(&body, bsEmitStatements(&body, statements), &def->code, body.nullConst);
     if (!emitted) {
         return false;
     }
@@ -1332,11 +1332,9 @@ BSExpr *bsExprFromModel(BSValue model)
     bsEmitInit(&e, NULL, NULL);
     BSOperand operand = e.nullConst;
     bool emitted = bsEmitExprOperand(&e, model, &operand);
-    bsEmitInst(&e, BS_OP_RETURN, operand, 0, 0);
     BSExpr *expr = bsAlloc(sizeof(BSExpr));
     memset(expr, 0, sizeof(*expr));
-    bool finished = bsEmitFinish(&e, &expr->code);
-    if (!emitted || !finished) {
+    if (!bsEmitEnd(&e, emitted, &expr->code, operand)) {
         bsExprFree(expr);
         return NULL;
     }
@@ -1352,8 +1350,6 @@ static BSScript *bsScriptNew(void)
     memset(script, 0, sizeof(*script));
     script->refcount = 1;
     script->startLineNumber = 1;
-    script->model = bsNull();
-    script->scriptName = bsNull();
     script->scriptLines = bsArrayNew();
     return script;
 }
@@ -1394,7 +1390,7 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
     size_t functionCap = 0;
     BSEmit e;
     bsEmitInit(&e, script, &functionCap);
-    if (!bsEmitEnd(&e, bsEmitStatements(&e, statements), &script->code)) {
+    if (!bsEmitEnd(&e, bsEmitStatements(&e, statements), &script->code, e.nullConst)) {
         bsScriptRelease(script);
         return NULL;
     }
@@ -1419,7 +1415,7 @@ BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scrip
     bsEmitInit(&e, script, &functionCap);
     BSValue rest;
     bool decoded = bsJSONDecodeStatements(text, size, bsEmitStreamedStatement, &e, &rest, error);
-    if (!bsEmitEnd(&e, decoded, &script->code)) {
+    if (!bsEmitEnd(&e, decoded, &script->code, e.nullConst)) {
         bsRelease(rest);
         if (error != NULL && *error == NULL) {
             *error = "Invalid BareScript model";

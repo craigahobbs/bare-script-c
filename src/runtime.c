@@ -233,6 +233,17 @@ void bsSystemIncludeClear(void)
 #define BS_REGS_INLINE 48
 
 
+static void bsRegsRelease(BSValue *regs, size_t count, const BSValue *inlineBuf)
+{
+    for (size_t ix = 0; ix < count; ix++) {
+        bsReleaseInline(regs[ix]);
+    }
+    if (regs != inlineBuf) {
+        free(regs);
+    }
+}
+
+
 /* A JavaScript ToInt32 of a value bsIsInteger has passed */
 static int32_t bsToInt32(double value)
 {
@@ -262,15 +273,15 @@ static BSValue bsAddSlow(BSValue left, BSValue right)
     if (left.type == BS_STRING || right.type == BS_STRING) {
         return bsStringConcat(left, right);
     }
+    double value;
     if (left.type == BS_DATETIME && right.type == BS_NUMBER) {
-        double value = (double) left.u.datetime + right.u.number;
-        return (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
+        value = (double) left.u.datetime + right.u.number;
+    } else if (left.type == BS_NUMBER && right.type == BS_DATETIME) {
+        value = left.u.number + (double) right.u.datetime;
+    } else {
+        return bsNull();
     }
-    if (left.type == BS_NUMBER && right.type == BS_DATETIME) {
-        double value = left.u.number + (double) right.u.datetime;
-        return (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
-    }
-    return bsNull();
+    return (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
 }
 
 
@@ -413,8 +424,7 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
 
     for (size_t ix = 0; ix < def->argCount; ix++) {
         if (def->lastArgArray && ix + 1 == def->argCount) {
-            size_t restCount = argCount > ix ? argCount - ix : 0;
-            regs[ix] = restCount != 0 ? bsArrayFromArgs(args + ix, restCount) : bsArrayNew();
+            regs[ix] = bsArrayFromArgs(args + ix, argCount > ix ? argCount - ix : 0);
         } else {
             regs[ix] = ix < argCount ? bsRetain(args[ix]) : bsNull();
         }
@@ -427,12 +437,7 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     }
 
     BSValue result = bsRunCode(&def->code, scriptFunction->script, options, &scope, false);
-    for (size_t ix = 0; ix < regCount; ix++) {
-        bsReleaseInline(regs[ix]);
-    }
-    if (regs != regsInline) {
-        free(regs);
-    }
+    bsRegsRelease(regs, regCount, regsInline);
     return result;
 }
 
@@ -674,6 +679,13 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
  * Parse and execute one include - a fetched include's text or a system include's registered text,
  * a string value, or given any other value a system include's bundled compiled script - then lint it
  */
+static bool bsIncludeFailed(BSScript *script, const char *url, int lineNumber, BSOptions *options)
+{
+    bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed", url);
+    return false;
+}
+
+
 static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSValue text, int lineNumber,
                              BSOptions *options)
 {
@@ -682,8 +694,7 @@ static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSV
         /* The bundled include library's compiled script, cached for the thread */
         includeScript = system ? bsIncludeScript(url) : NULL;
         if (includeScript == NULL) {
-            bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed", url);
-            return false;
+            return bsIncludeFailed(script, url, lineNumber, options);
         }
         bsRelease(bsRunCode(&includeScript->code, includeScript, options, NULL, false));
         bsScriptRelease(includeScript);
@@ -696,8 +707,7 @@ static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSV
         includeScript = bsScriptFromModel(model, url);
         bsRelease(model);
         if (includeScript == NULL) {
-            bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed", url);
-            return false;
+            return bsIncludeFailed(script, url, lineNumber, options);
         }
     } else {
         BSParserError parserError = {0};
@@ -1525,12 +1535,7 @@ fail:
     result = bsNull();
 done:
     if (ownRegs) {
-        for (size_t ix = 0; ix < regCount; ix++) {
-            bsReleaseInline(regs[ix]);
-        }
-        if (regs != regsInline) {
-            free(regs);
-        }
+        bsRegsRelease(regs, regCount, regsInline);
     }
     return result;
 }

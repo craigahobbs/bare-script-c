@@ -308,13 +308,18 @@ static const BSArgModel arrayExtendArgs[] = {
     {"array2", BS_ARG_ARRAY, 0, 0, 0, 0, 0}
 };
 
+static void bsArrayPushRange(BSValue dest, BSValue src, size_t start, size_t end)
+{
+    for (size_t ix = start; ix < end; ix++) {
+        bsArrayPush(dest, bsRetain(bsArrayGet(src, ix)));
+    }
+}
+
+
 static BSValue bsFnArrayExtend(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(arrayExtendArgs, bsNull());
-    size_t count = bsArrayCount(values[1]);
-    for (size_t ix = 0; ix < count; ix++) {
-        bsArrayPush(values[0], bsRetain(bsArrayGet(values[1], ix)));
-    }
+    bsArrayPushRange(values[0], values[1], 0, bsArrayCount(values[1]));
     return bsRetain(values[0]);
 }
 
@@ -475,10 +480,7 @@ static const BSArgModel arrayPushArgs[] = {
 static BSValue bsFnArrayPush(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(arrayPushArgs, bsNull());
-    size_t count = bsArrayCount(values[1]);
-    for (size_t ix = 0; ix < count; ix++) {
-        bsArrayPush(values[0], bsRetain(bsArrayGet(values[1], ix)));
-    }
+    bsArrayPushRange(values[0], values[1], 0, bsArrayCount(values[1]));
     bsArgsFree(arrayPushArgs, 2, values);
     return bsRetain(values[0]);
 }
@@ -530,9 +532,7 @@ static BSValue bsFnArraySlice(const BSValue *args, size_t argCount, BSOptions *o
         return bsNull();
     }
     BSValue result = bsArrayNewCapacity(end - start);
-    for (size_t ix = start; ix < end; ix++) {
-        bsArrayPush(result, bsRetain(bsArrayGet(values[0], ix)));
-    }
+    bsArrayPushRange(result, values[0], start, end);
     return result;
 }
 
@@ -721,8 +721,8 @@ BS_MATH_FN(bsFnMathTan, tan(BS_MATH_X))
 /* The inverse sine and cosine are defined on -1 to 1 */
 static const BSArgModel mathUnitArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GTE, 0, -1, 1, BS_ARG_LTE}};
 
-BS_LIBRARY_FN(bsFnMathAcos, mathUnitArgs, bsNull(), bsNumber(acos(values[0].u.number)))
-BS_LIBRARY_FN(bsFnMathAsin, mathUnitArgs, bsNull(), bsNumber(asin(values[0].u.number)))
+BS_LIBRARY_FN(bsFnMathAcos, mathUnitArgs, bsNull(), bsNumber(acos(BS_MATH_X)))
+BS_LIBRARY_FN(bsFnMathAsin, mathUnitArgs, bsNull(), bsNumber(asin(BS_MATH_X)))
 
 
 static const BSArgModel mathAtan2Args[] = {
@@ -1708,6 +1708,12 @@ static const BSArgModel systemCompareArgs[] = {
 BS_LIBRARY_FN(bsFnSystemCompare, systemCompareArgs, bsNull(), bsNumber(bsValueCompare(values[0], values[1])))
 
 
+static bool bsFetchHeaderString(BSValue key, BSValue item, void *data)
+{
+    return item.type == BS_STRING;
+}
+
+
 /* A fetch argument is a URL string or a request model: a url string, an optional body string, and
    optional headers - an object of string values */
 static bool bsFetchValid(BSValue request)
@@ -1722,15 +1728,7 @@ static bool bsFetchValid(BSValue request)
         (headers.type != BS_NULL && headers.type != BS_OBJECT)) {
         return false;
     }
-    bool valid = true;
-    if (headers.type == BS_OBJECT) {
-        BSValue keys = bsObjectKeys(headers);
-        for (size_t ix = 0; ix < bsArrayCount(keys) && valid; ix++) {
-            valid = bsObjectGetString(headers, bsArrayGet(keys, ix)).type == BS_STRING;
-        }
-        bsRelease(keys);
-    }
-    return valid;
+    return headers.type != BS_OBJECT || bsObjectIter(headers, bsFetchHeaderString, NULL);
 }
 
 
