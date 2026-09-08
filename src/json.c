@@ -281,19 +281,32 @@ static const char bsJSONUnescape[256] = {
 };
 
 
-/* Decode the string at the offset, which holds its opening quote */
-static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey)
-{
-    size_t begin = parser->offset++;
+/* How a decoded string is made: a plain string, a key (an interned name when there is one), or an interned string */
+enum {
+    BS_JSON_STRING_PLAIN,
+    BS_JSON_STRING_KEY,
+    BS_JSON_STRING_INTERN
+};
 
-    /* Unescaped strings copy once from the input; escapes fall through to the builder */
-    size_t ix = parser->offset;
+static BSValue bsJSONString(const char *data, size_t size, int mode)
+{
+    return mode == BS_JSON_STRING_PLAIN ? bsStringNewSize(data, size) :
+        mode == BS_JSON_STRING_KEY ? bsStringInternExisting(data, size) : bsStringIntern(data, size);
+}
+
+/*
+ * Decode the string at the offset, which holds its opening quote, when it holds no escape - the
+ * common case, copied once from the input. False for a string with an escape or an error, which
+ * bsJSONDecodeString then decodes through a builder.
+ */
+static inline bool bsJSONDecodePlainString(BSJSONParser *parser, BSValue *result, int mode)
+{
+    size_t begin = parser->offset + 1;
+    size_t ix = begin;
     while (ix < parser->size) {
         unsigned char ch = (unsigned char) parser->text[ix];
         if (ch == '"') {
-            const char *data = parser->text + parser->offset;
-            size_t size = ix - parser->offset;
-            *result = asKey ? bsStringInternExisting(data, size) : bsStringNewSize(data, size);
+            *result = bsJSONString(parser->text + begin, ix - begin, mode);
             parser->offset = ix + 1;
             return true;
         }
@@ -302,7 +315,17 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey
         }
         ix++;
     }
+    return false;
+}
 
+
+/* Decode the string at the offset, which holds its opening quote */
+static BS_NOINLINE bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, int mode)
+{
+    if (bsJSONDecodePlainString(parser, result, mode)) {
+        return true;
+    }
+    size_t begin = parser->offset++;
     BSStringBuilder sb;
     bsSBInit(&sb);
     char utf8[4];
@@ -361,7 +384,7 @@ static bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool asKey
         }
     }
 
-    *result = asKey ? bsStringInternExisting(sb.data, sb.size) : bsStringNewSize(sb.data, sb.size);
+    *result = bsJSONString(sb.data, sb.size, mode);
     bsSBFree(&sb);
     return true;
 }
@@ -429,7 +452,7 @@ static bool bsJSONDecodeKey(BSJSONParser *parser, BSValue *key)
     if (parser->offset >= parser->size || parser->text[parser->offset] != '"') {
         return bsJSONError(parser, "Expecting property name enclosed in double quotes", parser->offset);
     }
-    if (!bsJSONDecodeString(parser, key, true)) {
+    if (!bsJSONDecodePlainString(parser, key, BS_JSON_STRING_KEY) && !bsJSONDecodeString(parser, key, BS_JSON_STRING_KEY)) {
         return false;
     }
     if (!bsJSONSkipTake(parser, ':')) {
@@ -554,7 +577,8 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
         return bsJSONDecodeArray(parser, depth, result);
     }
     if (ch == '"') {
-        return bsJSONDecodeString(parser, result, false);
+        return bsJSONDecodePlainString(parser, result, BS_JSON_STRING_PLAIN) ||
+            bsJSONDecodeString(parser, result, BS_JSON_STRING_PLAIN);
     }
     if (ch == 't' && bsJSONLiteral(parser, "true")) {
         *result = bsBoolean(true);
@@ -609,20 +633,718 @@ BSValue bsJSONDecode(const char *text, size_t size, const char **error)
 }
 
 
-static bool bsJSONDecodeStatementArray(BSJSONParser *parser, bool (*emit)(BSValue, void *), void *data)
+/*
+ * The model reader
+ *
+ * A script model's JSON is read straight into the emitter's syntax tree, a statement at a time,
+ * with a node's kind and members recognized by their key bytes, so no model object is built. The
+ * grammar is the decoder's own: a value whose shape the model does not allow is decoded again as
+ * a plain value, so a syntax error inside it reports as one and a well-formed one as an invalid
+ * model, just as it would were the whole statement decoded first.
+ */
+
+
+/* The model keys the reader knows, by their bytes */
+typedef enum {
+    BS_MKEY_OTHER,
+    BS_MKEY_ARGS, BS_MKEY_BINARY, BS_MKEY_EXPR, BS_MKEY_FUNCTION, BS_MKEY_GROUP, BS_MKEY_INCLUDE,
+    BS_MKEY_INCLUDES, BS_MKEY_JUMP, BS_MKEY_LABEL, BS_MKEY_LAST_ARG_ARRAY, BS_MKEY_LEFT,
+    BS_MKEY_LINE_NUMBER, BS_MKEY_NAME, BS_MKEY_NUMBER, BS_MKEY_OP, BS_MKEY_RETURN, BS_MKEY_RIGHT,
+    BS_MKEY_STATEMENTS, BS_MKEY_STRING, BS_MKEY_SYSTEM, BS_MKEY_UNARY, BS_MKEY_URL, BS_MKEY_VARIABLE
+} BSModelKey;
+
+
+static BSModelKey bsModelKeyOf(const char *data, size_t size)
+{
+    static const struct {
+        const char *text;
+        uint8_t size;
+        uint8_t key;
+    } keys[] = {
+        {"args", 4, BS_MKEY_ARGS}, {"binary", 6, BS_MKEY_BINARY}, {"expr", 4, BS_MKEY_EXPR},
+        {"function", 8, BS_MKEY_FUNCTION}, {"group", 5, BS_MKEY_GROUP}, {"include", 7, BS_MKEY_INCLUDE},
+        {"includes", 8, BS_MKEY_INCLUDES}, {"jump", 4, BS_MKEY_JUMP}, {"label", 5, BS_MKEY_LABEL},
+        {"lastArgArray", 12, BS_MKEY_LAST_ARG_ARRAY}, {"left", 4, BS_MKEY_LEFT},
+        {"lineNumber", 10, BS_MKEY_LINE_NUMBER}, {"name", 4, BS_MKEY_NAME}, {"number", 6, BS_MKEY_NUMBER},
+        {"op", 2, BS_MKEY_OP}, {"return", 6, BS_MKEY_RETURN}, {"right", 5, BS_MKEY_RIGHT},
+        {"statements", 10, BS_MKEY_STATEMENTS}, {"string", 6, BS_MKEY_STRING}, {"system", 6, BS_MKEY_SYSTEM},
+        {"unary", 5, BS_MKEY_UNARY}, {"url", 3, BS_MKEY_URL}, {"variable", 8, BS_MKEY_VARIABLE}
+    };
+    for (size_t ix = 0; ix < sizeof(keys) / sizeof(keys[0]); ix++) {
+        if (keys[ix].size == size && memcmp(keys[ix].text, data, size) == 0) {
+            return keys[ix].key;
+        }
+    }
+    return BS_MKEY_OTHER;
+}
+
+
+/*
+ * Read an object member's key and the colon after it. The key's bytes are in the text when it
+ * has no escape, and decoded into "*decoded" - which the caller releases - otherwise.
+ */
+static BS_NOINLINE bool bsJSONReadKey(BSJSONParser *parser, const char **data, size_t *size, BSValue *decoded)
+{
+    bsJSONSkipSpace(parser);
+    if (parser->offset >= parser->size || parser->text[parser->offset] != '"') {
+        return bsJSONError(parser, "Expecting property name enclosed in double quotes", parser->offset);
+    }
+    size_t begin = parser->offset + 1;
+    size_t ix = begin;
+    while (ix < parser->size && parser->text[ix] != '"' && parser->text[ix] != '\\' &&
+           (unsigned char) parser->text[ix] >= 0x20) {
+        ix++;
+    }
+    *decoded = bsNull();
+    if (ix < parser->size && parser->text[ix] == '"') {
+        *data = parser->text + begin;
+        *size = ix - begin;
+        parser->offset = ix + 1;
+    } else {
+        if (!bsJSONDecodeString(parser, decoded, BS_JSON_STRING_KEY)) {
+            return false;
+        }
+        *data = bsStringData(*decoded);
+        *size = bsStringSize(*decoded);
+    }
+    if (!bsJSONSkipTake(parser, ':')) {
+        bsRelease(*decoded);
+        *decoded = bsNull();
+        return bsJSONError(parser, "Expecting ':' delimiter", parser->offset);
+    }
+    return true;
+}
+
+
+/* Decode the value at the offset as any value, for its syntax alone, keeping only its truth */
+static BS_NOINLINE bool bsJSONSkipValue(BSJSONParser *parser, int depth, bool *truth)
+{
+    BSValue value;
+    if (!bsJSONDecodeValue(parser, depth, &value)) {
+        return false;
+    }
+    if (truth != NULL) {
+        *truth = bsValueBoolean(value);
+    }
+    bsRelease(value);
+    return true;
+}
+
+
+/* Whether the next character - past any space - is "ch" */
+static bool bsJSONPeek(BSJSONParser *parser, char ch)
+{
+    bsJSONSkipSpace(parser);
+    return parser->offset < parser->size && parser->text[parser->offset] == ch;
+}
+
+
+/*
+ * Read a member's string value as an interned string in the arena, into "*text"; false for a
+ * value of another shape, or a syntax error, which sets the parser's error
+ */
+static bool bsJSONReadText(BSJSONParser *parser, BSAst *ast, uint32_t *text)
+{
+    BSValue string;
+    if (!bsJSONPeek(parser, '"') || !bsJSONDecodeString(parser, &string, BS_JSON_STRING_INTERN)) {
+        return false;
+    }
+    *text = bsAstString(ast, string);
+    return true;
+}
+
+
+/* Read a member's line number value, into "*line" - zero for a value of another shape */
+static bool bsJSONReadLine(BSJSONParser *parser, int depth, int32_t *line)
+{
+    BSValue value;
+    if (!bsJSONDecodeValue(parser, depth, &value)) {
+        return false;
+    }
+    *line = value.type == BS_NUMBER ? (int) value.u.number : 0;
+    bsRelease(value);
+    return true;
+}
+
+
+/*
+ * The members of the object at the offset, each handed to "member" with the parser at its value.
+ * False on a syntax error - the parser's error is set - or when "member" returns false.
+ */
+typedef bool (*BSJSONMemberFn)(BSJSONParser *parser, BSModelKey key, int depth, void *context);
+
+static BS_NOINLINE bool bsJSONReadMembers(BSJSONParser *parser, int depth, BSJSONMemberFn member, void *context)
+{
+    if (depth >= BS_JSON_DEPTH_MAX) {
+        return bsJSONError(parser, "Maximum nesting depth exceeded", parser->offset);
+    }
+    if (!bsJSONSkipTake(parser, '{')) {
+        return false;
+    }
+    if (bsJSONSkipTake(parser, '}')) {
+        return true;
+    }
+    while (true) {
+        const char *data;
+        size_t size;
+        BSValue decoded;
+        if (!bsJSONReadKey(parser, &data, &size, &decoded)) {
+            return false;
+        }
+        BSModelKey key = bsModelKeyOf(data, size);
+        bsRelease(decoded);
+        if (!member(parser, key, depth + 1, context)) {
+            return false;
+        }
+        int separator = bsJSONSeparator(parser, '}');
+        if (separator < 0) {
+            return false;
+        }
+        if (separator > 0) {
+            return true;
+        }
+    }
+}
+
+
+static uint32_t bsJSONReadExpr(BSJSONParser *parser, BSAst *ast, int depth);
+static uint32_t bsJSONReadStatement(BSJSONParser *parser, BSAst *ast, int depth);
+
+
+/* A node under construction: the arena, the node, and the tail of the list it is collecting */
+typedef struct BSJSONNode {
+    BSAst *ast;
+    uint32_t node;
+    uint32_t tail;
+    uint32_t count;    /* the elements read, the malformed ones included */
+    uint32_t failedAt; /* the index of the first malformed element, when "failed" */
+    bool failed;
+} BSJSONNode;
+
+
+/* Append a node to the list of "context" - the node's "a" list */
+static void bsJSONNodeAppend(BSJSONNode *context, uint32_t node)
+{
+    BSAst *ast = context->ast;
+    if (context->tail == 0) {
+        ast->nodes[context->node].a = node;
+    } else {
+        ast->nodes[context->tail].next = node;
+    }
+    context->tail = node;
+    context->count++;
+}
+
+
+/*
+ * The elements of the array at the offset, each read by "element" - which returns false for a
+ * syntax error, or for an element of another shape, which then decodes as any value with the
+ * shape noted - into the list of "context"
+ */
+static BS_NOINLINE bool bsJSONReadElements(BSJSONParser *parser, int depth,
+                                           bool (*element)(BSJSONParser *, int, BSJSONNode *), BSJSONNode *context)
+{
+    if (depth >= BS_JSON_DEPTH_MAX) {
+        return bsJSONError(parser, "Maximum nesting depth exceeded", parser->offset);
+    }
+    parser->offset++;
+    context->tail = 0;
+    context->count = 0;
+    context->ast->nodes[context->node].a = 0;
+    if (bsJSONSkipTake(parser, ']')) {
+        return true;
+    }
+    while (true) {
+        bsJSONSkipSpace(parser);
+        size_t begin = parser->offset;
+        if (!element(parser, depth + 1, context)) {
+            if (parser->error != NULL) {
+                return false;
+            }
+            parser->offset = begin;
+            if (!bsJSONSkipValue(parser, depth + 1, NULL)) {
+                return false;
+            }
+            if (!context->failed) {
+                context->failed = true;
+                context->failedAt = context->count;
+            }
+            context->count++;
+        }
+        int separator = bsJSONSeparator(parser, ']');
+        if (separator < 0) {
+            return false;
+        }
+        if (separator > 0) {
+            return true;
+        }
+    }
+}
+
+
+static bool bsJSONReadArgElement(BSJSONParser *parser, int depth, BSJSONNode *context)
+{
+    uint32_t arg = bsJSONReadExpr(parser, context->ast, depth);
+    if (arg == 0) {
+        return false;
+    }
+    /* The conditional reads its first three arguments and no more, so a fourth of any shape stands */
+    if (context->failed) {
+        context->count++;
+    } else {
+        bsJSONNodeAppend(context, arg);
+    }
+    return true;
+}
+
+
+static bool bsJSONCallMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+{
+    BSJSONNode *context = data;
+    BSAst *ast = context->ast;
+    switch (key) {
+    case BS_MKEY_ARGS:
+        if (bsJSONPeek(parser, '[')) {
+            return bsJSONReadElements(parser, depth, bsJSONReadArgElement, context);
+        }
+        return bsJSONSkipValue(parser, depth, NULL);
+    case BS_MKEY_NAME:
+        return bsJSONReadText(parser, ast, &ast->nodes[context->node].text);
+    default:
+        return bsJSONSkipValue(parser, depth, NULL);
+    }
+}
+
+
+static bool bsJSONBinaryMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+{
+    BSJSONNode *context = data;
+    BSAst *ast = context->ast;
+    uint32_t operand;
+    switch (key) {
+    case BS_MKEY_LEFT:
+    case BS_MKEY_RIGHT:
+        operand = bsJSONReadExpr(parser, ast, depth);
+        if (operand == 0) {
+            return false;
+        }
+        if (key == BS_MKEY_LEFT) {
+            ast->nodes[context->node].a = operand;
+        } else {
+            ast->nodes[context->node].b = operand;
+        }
+        return true;
+    case BS_MKEY_OP: {
+        BSValue op;
+        if (!bsJSONPeek(parser, '"') || !bsJSONDecodeString(parser, &op, BS_JSON_STRING_PLAIN)) {
+            return false;
+        }
+        uint16_t nodeOp = bsBinaryNodeOp(bsStringData(op));
+        bsRelease(op);
+        ast->nodes[context->node].op = nodeOp;
+        return nodeOp != 0;
+    }
+    default:
+        return bsJSONSkipValue(parser, depth, NULL);
+    }
+}
+
+
+static bool bsJSONUnaryMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+{
+    BSJSONNode *context = data;
+    BSAst *ast = context->ast;
+    switch (key) {
+    case BS_MKEY_EXPR: {
+        uint32_t operand = bsJSONReadExpr(parser, ast, depth);
+        if (operand == 0) {
+            return false;
+        }
+        ast->nodes[context->node].a = operand;
+        return true;
+    }
+    case BS_MKEY_OP: {
+        BSValue op;
+        if (!bsJSONPeek(parser, '"') || !bsJSONDecodeString(parser, &op, BS_JSON_STRING_PLAIN)) {
+            return false;
+        }
+        uint8_t opcode = bsUnaryOpcode(bsStringData(op));
+        bsRelease(op);
+        ast->nodes[context->node].op = opcode;
+        return opcode != 0;
+    }
+    default:
+        return bsJSONSkipValue(parser, depth, NULL);
+    }
+}
+
+
+/*
+ * Read an expression - an object of one member whose key is its kind - into the arena. Returns
+ * the node, or zero: with the parser's error set for a syntax error, and without one for a value
+ * of another shape, which the caller then decodes as any value.
+ */
+static uint32_t bsJSONReadExpr(BSJSONParser *parser, BSAst *ast, int depth)
+{
+    if (depth >= BS_JSON_DEPTH_MAX) {
+        bsJSONError(parser, "Maximum nesting depth exceeded", parser->offset);
+        return 0;
+    }
+    if (!bsJSONSkipTake(parser, '{')) {
+        return 0;
+    }
+    const char *data;
+    size_t size;
+    BSValue decoded;
+    if (!bsJSONReadKey(parser, &data, &size, &decoded)) {
+        return 0;
+    }
+    BSModelKey key = bsModelKeyOf(data, size);
+    bsRelease(decoded);
+
+    uint32_t node = 0;
+    BSJSONNode context = {ast, 0, 0, 0, 0, false};
+    switch (key) {
+    case BS_MKEY_NUMBER: {
+        BSValue number;
+        if (!bsJSONDecodeValue(parser, depth + 1, &number)) {
+            return 0;
+        }
+        if (number.type != BS_NUMBER) {
+            bsRelease(number);
+            return 0;
+        }
+        node = bsAstNode(ast, BS_NODE_NUMBER);
+        ast->nodes[node].number = number.u.number;
+        break;
+    }
+    case BS_MKEY_STRING:
+    case BS_MKEY_VARIABLE: {
+        uint32_t text;
+        if (!bsJSONReadText(parser, ast, &text)) {
+            return 0;
+        }
+        node = bsAstNode(ast, key == BS_MKEY_STRING ? BS_NODE_STRING : BS_NODE_VARIABLE);
+        ast->nodes[node].text = text;
+        break;
+    }
+    case BS_MKEY_GROUP: {
+        uint32_t sub = bsJSONReadExpr(parser, ast, depth + 1);
+        if (sub == 0) {
+            return 0;
+        }
+        node = bsAstNode(ast, BS_NODE_GROUP);
+        ast->nodes[node].a = sub;
+        break;
+    }
+    case BS_MKEY_FUNCTION: {
+        node = bsAstNode(ast, BS_NODE_CALL);
+        context.node = node;
+        if (!bsJSONReadMembers(parser, depth + 1, bsJSONCallMember, &context) || ast->nodes[node].text == 0) {
+            return 0;
+        }
+        /* A malformed argument past the three the conditional reads is not one it can see */
+        bool isIf = strcmp(bsStringData(ast->strings[ast->nodes[node].text - 1]), "if") == 0;
+        if (context.failed && !(isIf && context.failedAt >= 3)) {
+            return 0;
+        }
+        ast->nodes[node].b = isIf && context.count > 3 ? 3 : context.count;
+        break;
+    }
+    case BS_MKEY_BINARY:
+        node = bsAstNode(ast, BS_NODE_BINARY);
+        context.node = node;
+        if (!bsJSONReadMembers(parser, depth + 1, bsJSONBinaryMember, &context) || ast->nodes[node].op == 0 ||
+            ast->nodes[node].a == 0 || ast->nodes[node].b == 0) {
+            return 0;
+        }
+        break;
+    case BS_MKEY_UNARY:
+        node = bsAstNode(ast, BS_NODE_UNARY);
+        context.node = node;
+        if (!bsJSONReadMembers(parser, depth + 1, bsJSONUnaryMember, &context) || ast->nodes[node].op == 0 ||
+            ast->nodes[node].a == 0) {
+            return 0;
+        }
+        break;
+    default:
+        return 0;
+    }
+    return bsJSONSkipTake(parser, '}') ? node : 0;
+}
+
+
+/* The context of a statement under construction - its node, and the argument and statement lists */
+typedef struct BSJSONStatement {
+    BSJSONNode node;   /* the statement, collecting its "a" list */
+    BSJSONNode args;   /* a function's argument names - the "b" list, so a node of its own */
+} BSJSONStatement;
+
+
+static bool bsJSONReadArgNameElement(BSJSONParser *parser, int depth, BSJSONNode *context)
+{
+    uint32_t text;
+    if (!bsJSONReadText(parser, context->ast, &text)) {
+        return false;
+    }
+    uint32_t arg = bsAstNode(context->ast, BS_NODE_ARG);
+    context->ast->nodes[arg].text = text;
+    bsJSONNodeAppend(context, arg);
+    return true;
+}
+
+
+static bool bsJSONReadStatementElement(BSJSONParser *parser, int depth, BSJSONNode *context)
+{
+    uint32_t statement = bsJSONReadStatement(parser, context->ast, depth);
+    if (statement == 0) {
+        return false;
+    }
+    bsJSONNodeAppend(context, statement);
+    return true;
+}
+
+
+static bool bsJSONIncludeMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+{
+    BSJSONNode *context = data;
+    BSAst *ast = context->ast;
+    bool truth;
+    switch (key) {
+    case BS_MKEY_URL:
+        return bsJSONReadText(parser, ast, &ast->nodes[context->node].text);
+    case BS_MKEY_SYSTEM:
+        if (!bsJSONSkipValue(parser, depth, &truth)) {
+            return false;
+        }
+        ast->nodes[context->node].flag = truth;
+        return true;
+    default:
+        return bsJSONSkipValue(parser, depth, NULL);
+    }
+}
+
+
+static bool bsJSONReadIncludeElement(BSJSONParser *parser, int depth, BSJSONNode *context)
+{
+    uint32_t item = bsAstNode(context->ast, BS_NODE_INCLUDE_ITEM);
+    BSJSONNode itemContext = {context->ast, item, 0, 0, 0, false};
+    if (!bsJSONReadMembers(parser, depth, bsJSONIncludeMember, &itemContext) || context->ast->nodes[item].text == 0) {
+        return false;
+    }
+    bsJSONNodeAppend(context, item);
+    return true;
+}
+
+
+static bool bsJSONStatementMember(BSJSONParser *parser, BSModelKey key, int depth, void *data)
+{
+    BSJSONStatement *context = data;
+    BSAst *ast = context->node.ast;
+    BSNode *node = &ast->nodes[context->node.node];
+    bool truth;
+    switch (node->kind) {
+    case BS_NODE_EXPR:
+        if (key == BS_MKEY_EXPR) {
+            uint32_t expr = bsJSONReadExpr(parser, ast, depth);
+            if (expr == 0) {
+                return false;
+            }
+            ast->nodes[context->node.node].a = expr;
+            return true;
+        }
+        if (key == BS_MKEY_NAME) {
+            /* A name that is not a string is no name */
+            if (bsJSONPeek(parser, '"')) {
+                return bsJSONReadText(parser, ast, &node->text);
+            }
+            return bsJSONSkipValue(parser, depth, NULL);
+        }
+        break;
+    case BS_NODE_JUMP:
+        if (key == BS_MKEY_LABEL) {
+            return bsJSONReadText(parser, ast, &node->text);
+        }
+        if (key == BS_MKEY_EXPR) {
+            uint32_t expr = bsJSONReadExpr(parser, ast, depth);
+            if (expr == 0) {
+                return false;
+            }
+            ast->nodes[context->node.node].a = expr;
+            return true;
+        }
+        break;
+    case BS_NODE_RETURN:
+        if (key == BS_MKEY_EXPR) {
+            uint32_t expr = bsJSONReadExpr(parser, ast, depth);
+            if (expr == 0) {
+                return false;
+            }
+            ast->nodes[context->node.node].a = expr;
+            return true;
+        }
+        break;
+    case BS_NODE_LABEL:
+        if (key == BS_MKEY_NAME) {
+            return bsJSONReadText(parser, ast, &node->text);
+        }
+        break;
+    case BS_NODE_FUNCTION:
+        if (key == BS_MKEY_NAME) {
+            return bsJSONReadText(parser, ast, &node->text);
+        }
+        if (key == BS_MKEY_ARGS) {
+            /* Argument names that are not an array are no arguments */
+            if (!bsJSONPeek(parser, '[')) {
+                return bsJSONSkipValue(parser, depth, NULL);
+            }
+            if (!bsJSONReadElements(parser, depth, bsJSONReadArgNameElement, &context->args)) {
+                return false;
+            }
+            ast->nodes[context->node.node].b = ast->nodes[context->args.node].a;
+            return !context->args.failed;
+        }
+        if (key == BS_MKEY_STATEMENTS) {
+            if (!bsJSONPeek(parser, '[')) {
+                return false;
+            }
+            if (!bsJSONReadElements(parser, depth, bsJSONReadStatementElement, &context->node)) {
+                return false;
+            }
+            node = &ast->nodes[context->node.node];
+            node->flag |= 2; /* the statements were given */
+            return !context->node.failed;
+        }
+        if (key == BS_MKEY_LAST_ARG_ARRAY) {
+            if (!bsJSONSkipValue(parser, depth, &truth)) {
+                return false;
+            }
+            ast->nodes[context->node.node].flag = (uint8_t) ((ast->nodes[context->node.node].flag & 2) | truth);
+            return true;
+        }
+        break;
+    default:
+        /* BS_NODE_INCLUDE */
+        if (key == BS_MKEY_INCLUDES) {
+            if (!bsJSONPeek(parser, '[')) {
+                return false;
+            }
+            return bsJSONReadElements(parser, depth, bsJSONReadIncludeElement, &context->node) && !context->node.failed;
+        }
+        break;
+    }
+    if (key == BS_MKEY_LINE_NUMBER) {
+        return bsJSONReadLine(parser, depth, &ast->nodes[context->node.node].line);
+    }
+    return bsJSONSkipValue(parser, depth, NULL);
+}
+
+
+/*
+ * Read a statement - an object of one member whose key is its kind and whose value is the
+ * statement object - into the arena. Returns the node, or zero as bsJSONReadExpr does. The
+ * depth is checked by the array that holds the statement, which is nearer the limit.
+ */
+static uint32_t bsJSONReadStatement(BSJSONParser *parser, BSAst *ast, int depth)
+{
+    if (!bsJSONSkipTake(parser, '{')) {
+        return 0;
+    }
+    const char *data;
+    size_t size;
+    BSValue decoded;
+    if (!bsJSONReadKey(parser, &data, &size, &decoded)) {
+        return 0;
+    }
+    BSModelKey key = bsModelKeyOf(data, size);
+    bsRelease(decoded);
+
+    uint8_t kind;
+    switch (key) {
+    case BS_MKEY_EXPR:
+        kind = BS_NODE_EXPR;
+        break;
+    case BS_MKEY_JUMP:
+        kind = BS_NODE_JUMP;
+        break;
+    case BS_MKEY_RETURN:
+        kind = BS_NODE_RETURN;
+        break;
+    case BS_MKEY_LABEL:
+        kind = BS_NODE_LABEL;
+        break;
+    case BS_MKEY_FUNCTION:
+        kind = BS_NODE_FUNCTION;
+        break;
+    case BS_MKEY_INCLUDE:
+        kind = BS_NODE_INCLUDE;
+        break;
+    default:
+        return 0;
+    }
+    uint32_t node = bsAstNode(ast, kind);
+    uint32_t args = kind == BS_NODE_FUNCTION ? bsAstNode(ast, BS_NODE_ARG) : 0;
+    BSJSONStatement context = {{ast, node, 0, 0, 0, false}, {ast, args, 0, 0, 0, false}};
+    if (!bsJSONReadMembers(parser, depth + 1, bsJSONStatementMember, &context)) {
+        return 0;
+    }
+
+    /* The members a statement must have */
+    const BSNode *built = &ast->nodes[node];
+    bool complete;
+    switch (kind) {
+    case BS_NODE_EXPR:
+        complete = built->a != 0;
+        break;
+    case BS_NODE_JUMP:
+    case BS_NODE_LABEL:
+        complete = built->text != 0;
+        break;
+    case BS_NODE_RETURN:
+        complete = true;
+        break;
+    case BS_NODE_FUNCTION:
+        complete = built->text != 0 && (built->flag & 2) != 0;
+        ast->nodes[node].flag &= 1;
+        break;
+    default:
+        complete = built->a != 0;
+        break;
+    }
+    if (!complete) {
+        return 0;
+    }
+    return bsJSONSkipTake(parser, '}') ? node : 0;
+}
+
+
+/* The statements array at the offset - each statement read, emitted, and dropped from the arena */
+static bool bsJSONReadStatements(BSJSONParser *parser, BSAst *ast, bool (*emit)(BSAst *, uint32_t, void *),
+                                 void *data)
 {
     parser->offset++;
     if (bsJSONSkipTake(parser, ']')) {
         return true;
     }
     while (true) {
-        BSValue statement;
-        if (!bsJSONDecodeValue(parser, 2, &statement)) {
-            return false;
+        bsAstReset(ast);
+        bsJSONSkipSpace(parser);
+        size_t begin = parser->offset;
+        uint32_t statement = bsJSONReadStatement(parser, ast, 2);
+        if (statement == 0) {
+            if (parser->error != NULL) {
+                return false;
+            }
+            /* Not a statement's shape: as any value, a syntax error inside reports as one */
+            parser->offset = begin;
+            BSValue value;
+            if (!bsJSONDecodeValue(parser, 2, &value)) {
+                return false;
+            }
+            bsRelease(value);
+            return bsJSONError(parser, "Invalid BareScript model", parser->offset);
         }
-        bool emitted = emit(statement, data);
-        bsRelease(statement);
-        if (!emitted) {
+        if (!emit(ast, statement, data)) {
             return bsJSONError(parser, "Invalid BareScript model", parser->offset);
         }
         int separator = bsJSONSeparator(parser, ']');
@@ -636,7 +1358,8 @@ static bool bsJSONDecodeStatementArray(BSJSONParser *parser, bool (*emit)(BSValu
 }
 
 
-static bool bsJSONDecodeModel(BSJSONParser *parser, bool (*emit)(BSValue, void *), void *data, BSValue rest)
+static bool bsJSONReadScript(BSJSONParser *parser, BSAst *ast, bool (*emit)(BSAst *, uint32_t, void *), void *data,
+                             BSValue rest)
 {
     if (!bsJSONSkipTake(parser, '{')) {
         return bsJSONError(parser, "Expecting value", parser->offset);
@@ -644,19 +1367,22 @@ static bool bsJSONDecodeModel(BSJSONParser *parser, bool (*emit)(BSValue, void *
     bool statements = false;
     if (!bsJSONSkipTake(parser, '}')) {
         while (true) {
-            BSValue key;
-            if (!bsJSONDecodeKey(parser, &key)) {
+            const char *keyData;
+            size_t keySize;
+            BSValue keyDecoded;
+            if (!bsJSONReadKey(parser, &keyData, &keySize, &keyDecoded)) {
                 return false;
             }
             bsJSONSkipSpace(parser);
-            bool isStatements = bsStringSize(key) == 10 && memcmp(bsStringData(key), "statements", 10) == 0;
+            bool isStatements = keySize == 10 && memcmp(keyData, "statements", 10) == 0;
             if (isStatements && parser->offset < parser->size && parser->text[parser->offset] == '[') {
-                bsRelease(key);
-                if (!bsJSONDecodeStatementArray(parser, emit, data)) {
+                bsRelease(keyDecoded);
+                if (!bsJSONReadStatements(parser, ast, emit, data)) {
                     return false;
                 }
                 statements = true;
             } else {
+                BSValue key = keyDecoded.type == BS_STRING ? keyDecoded : bsStringInternExisting(keyData, keySize);
                 BSValue item;
                 if (!bsJSONDecodeValue(parser, 1, &item)) {
                     bsRelease(key);
@@ -685,13 +1411,14 @@ static bool bsJSONDecodeModel(BSJSONParser *parser, bool (*emit)(BSValue, void *
 }
 
 
-bool bsJSONDecodeStatements(const char *text, size_t size, bool (*emit)(BSValue statement, void *data),
-                            void *data, BSValue *rest, const char **error)
+bool bsJSONDecodeScript(const char *text, size_t size, BSAst *ast,
+                        bool (*emit)(BSAst *ast, uint32_t statement, void *data), void *data,
+                        BSValue *rest, const char **error)
 {
     bsModelKeysInit();
     BSJSONParser parser = {text, size, 0, NULL, 0};
     *rest = bsObjectNew();
-    bool decoded = bsJSONDecodeModel(&parser, emit, data, *rest);
+    bool decoded = bsJSONReadScript(&parser, ast, emit, data, *rest);
     if (!decoded) {
         bsRelease(*rest);
         *rest = bsNull();

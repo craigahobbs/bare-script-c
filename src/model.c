@@ -250,6 +250,394 @@ static BSValue bsInternName(BSValue name)
 }
 
 
+/*
+ * The syntax tree
+ */
+
+
+#define BS_AST_INITIAL 64
+
+
+void bsAstInit(BSAst *ast)
+{
+    memset(ast, 0, sizeof(*ast));
+    ast->count = 1;
+}
+
+
+void bsAstReset(BSAst *ast)
+{
+    for (uint32_t ix = 0; ix < ast->stringCount; ix++) {
+        bsRelease(ast->strings[ix]);
+    }
+    ast->stringCount = 0;
+    ast->count = 1;
+}
+
+
+void bsAstFree(BSAst *ast)
+{
+    bsAstReset(ast);
+    free(ast->nodes);
+    free(ast->strings);
+    memset(ast, 0, sizeof(*ast));
+}
+
+
+uint32_t bsAstNode(BSAst *ast, uint8_t kind)
+{
+    if (ast->count >= ast->capacity) {
+        ast->capacity = ast->capacity != 0 ? ast->capacity * 2 : BS_AST_INITIAL;
+        ast->nodes = bsRealloc(ast->nodes, ast->capacity * sizeof(BSNode));
+    }
+    BSNode *node = &ast->nodes[ast->count];
+    memset(node, 0, sizeof(*node));
+    node->kind = kind;
+    return ast->count++;
+}
+
+
+uint32_t bsAstString(BSAst *ast, BSValue string)
+{
+    BS_GROW(ast->strings, ast->stringCount, ast->stringCapacity, 16);
+    ast->strings[ast->stringCount] = string;
+    return ++ast->stringCount;
+}
+
+
+/* A node's string, borrowed */
+static inline BSValue bsNodeText(const BSAst *ast, const BSNode *node)
+{
+    return ast->strings[node->text - 1];
+}
+
+
+/* Append a node to the list whose first node is "*head" and last node "*tail" */
+static void bsAstAppend(BSAst *ast, uint32_t *head, uint32_t *tail, uint32_t node)
+{
+    if (*head == 0) {
+        *head = node;
+    } else {
+        ast->nodes[*tail].next = node;
+    }
+    *tail = node;
+}
+
+
+/*
+ * A model node - an expression or a statement - is an object with one member whose name is its
+ * kind. The kind key, with the member in "*member", or NULL for a value of any other shape.
+ */
+static BSString *bsModelKind(BSValue node, BSValue *member)
+{
+    BSString *kind;
+    if (!bsObjectSole(node, &kind, member)) {
+        *member = bsNull();
+        return NULL;
+    }
+    return kind;
+}
+
+/* Whether a node's kind key is the model key "field" */
+#define BS_KIND(kind, field) ((kind) != NULL && bsObjectKeyIs((kind), bsKeys.field))
+
+
+/* A binary operator's opcode, or zero if the text is no operator */
+static uint8_t bsBinaryOpcode(const char *op)
+{
+    char first = op[0];
+    char second = first != '\0' ? op[1] : '\0';
+    if (second == '\0') {
+        switch (first) {
+        case '*':
+            return BS_OP_MUL;
+        case '/':
+            return BS_OP_DIV;
+        case '%':
+            return BS_OP_MOD;
+        case '+':
+            return BS_OP_ADD;
+        case '-':
+            return BS_OP_SUB;
+        case '<':
+            return BS_OP_LT;
+        case '>':
+            return BS_OP_GT;
+        case '&':
+            return BS_OP_BAND;
+        case '^':
+            return BS_OP_BXOR;
+        case '|':
+            return BS_OP_BOR;
+        default:
+            return 0;
+        }
+    }
+    if (op[2] != '\0') {
+        return 0;
+    }
+    if (second == '=') {
+        return first == '<' ? BS_OP_LE : first == '>' ? BS_OP_GE : first == '=' ? BS_OP_EQ : first == '!' ? BS_OP_NE : 0;
+    }
+    if (first == second) {
+        return first == '*' ? BS_OP_POW : first == '<' ? BS_OP_SHL : first == '>' ? BS_OP_SHR : 0;
+    }
+    return 0;
+}
+
+
+/* A binary node's op: the operator's opcode, or the short-circuit operators' own codes; zero if unknown */
+uint16_t bsBinaryNodeOp(const char *op)
+{
+    if (op[0] != '\0' && op[0] == op[1] && op[2] == '\0') {
+        if (op[0] == '&') {
+            return BS_NODE_AND;
+        }
+        if (op[0] == '|') {
+            return BS_NODE_OR;
+        }
+    }
+    return bsBinaryOpcode(op);
+}
+
+
+uint8_t bsUnaryOpcode(const char *op)
+{
+    if (op[0] != '\0' && op[1] == '\0') {
+        if (op[0] == '-') {
+            return BS_OP_NEG;
+        }
+        if (op[0] == '!') {
+            return BS_OP_NOT;
+        }
+        if (op[0] == '~') {
+            return BS_OP_BNOT;
+        }
+    }
+    return 0;
+}
+
+
+/* The nodes of the expression models in "args" - the conditional's first three, which are all it reads */
+static bool bsAstArgs(BSAst *ast, uint32_t node, BSValue args, size_t argCount)
+{
+    uint32_t tail = 0;
+    for (size_t ix = 0; ix < argCount; ix++) {
+        uint32_t arg = bsAstExpr(ast, bsArrayGet(args, ix));
+        if (arg == 0) {
+            return false;
+        }
+        bsAstAppend(ast, &ast->nodes[node].a, &tail, arg);
+    }
+    return true;
+}
+
+
+uint32_t bsAstExpr(BSAst *ast, BSValue model)
+{
+    BSValue member;
+    BSString *kind = bsModelKind(model, &member);
+    if (BS_KIND(kind, number)) {
+        if (member.type != BS_NUMBER) {
+            return 0;
+        }
+        uint32_t node = bsAstNode(ast, BS_NODE_NUMBER);
+        ast->nodes[node].number = member.u.number;
+        return node;
+    }
+    if (BS_KIND(kind, string) || BS_KIND(kind, variable)) {
+        if (member.type != BS_STRING) {
+            return 0;
+        }
+        uint32_t node = bsAstNode(ast, BS_KIND(kind, string) ? BS_NODE_STRING : BS_NODE_VARIABLE);
+        ast->nodes[node].text = bsAstString(ast, bsInternName(member));
+        return node;
+    }
+    if (BS_KIND(kind, group)) {
+        uint32_t sub = bsAstExpr(ast, member);
+        if (sub == 0) {
+            return 0;
+        }
+        uint32_t node = bsAstNode(ast, BS_NODE_GROUP);
+        ast->nodes[node].a = sub;
+        return node;
+    }
+    if (member.type != BS_OBJECT) {
+        return 0;
+    }
+    if (BS_KIND(kind, function)) {
+        BSValue name = bsObjectGetString(member, bsKeys.name);
+        if (name.type != BS_STRING) {
+            return 0;
+        }
+        BSValue args = bsObjectGetString(member, bsKeys.args);
+        size_t argCount = bsArrayCount(args);
+        if (argCount > 3 && strcmp(bsStringData(name), "if") == 0) {
+            argCount = 3;
+        }
+        uint32_t node = bsAstNode(ast, BS_NODE_CALL);
+        ast->nodes[node].text = bsAstString(ast, bsInternName(name));
+        ast->nodes[node].b = (uint32_t) argCount;
+        return bsAstArgs(ast, node, args, argCount) ? node : 0;
+    }
+    if (BS_KIND(kind, binary)) {
+        BSValue op = bsObjectGetString(member, bsKeys.op);
+        uint16_t nodeOp = op.type == BS_STRING ? bsBinaryNodeOp(bsStringData(op)) : 0;
+        if (nodeOp == 0) {
+            return 0;
+        }
+        uint32_t left = bsAstExpr(ast, bsObjectGetString(member, bsKeys.left));
+        uint32_t right = left != 0 ? bsAstExpr(ast, bsObjectGetString(member, bsKeys.right)) : 0;
+        if (right == 0) {
+            return 0;
+        }
+        uint32_t node = bsAstNode(ast, BS_NODE_BINARY);
+        ast->nodes[node].op = nodeOp;
+        ast->nodes[node].a = left;
+        ast->nodes[node].b = right;
+        return node;
+    }
+    if (BS_KIND(kind, unary)) {
+        BSValue op = bsObjectGetString(member, bsKeys.op);
+        uint8_t opcode = op.type == BS_STRING ? bsUnaryOpcode(bsStringData(op)) : 0;
+        if (opcode == 0) {
+            return 0;
+        }
+        uint32_t sub = bsAstExpr(ast, bsObjectGetString(member, bsKeys.expr));
+        if (sub == 0) {
+            return 0;
+        }
+        uint32_t node = bsAstNode(ast, BS_NODE_UNARY);
+        ast->nodes[node].op = opcode;
+        ast->nodes[node].a = sub;
+        return node;
+    }
+    return 0;
+}
+
+
+uint32_t bsAstStatement(BSAst *ast, BSValue model)
+{
+    BSValue value;
+    BSString *kind = bsModelKind(model, &value);
+    if (kind == NULL || value.type != BS_OBJECT) {
+        return 0;
+    }
+    uint32_t node;
+    uint32_t tail = 0;
+    if (BS_KIND(kind, expr)) {
+        uint32_t expr = bsAstExpr(ast, bsObjectGetString(value, bsKeys.expr));
+        if (expr == 0) {
+            return 0;
+        }
+        node = bsAstNode(ast, BS_NODE_EXPR);
+        ast->nodes[node].a = expr;
+        BSValue name = bsObjectGetString(value, bsKeys.name);
+        if (name.type == BS_STRING) {
+            ast->nodes[node].text = bsAstString(ast, bsInternName(name));
+        }
+    } else if (BS_KIND(kind, jump)) {
+        BSValue label = bsObjectGetString(value, bsKeys.label);
+        if (label.type != BS_STRING) {
+            return 0;
+        }
+        uint32_t cond = 0;
+        if (bsObjectHasString(value, bsKeys.expr)) {
+            cond = bsAstExpr(ast, bsObjectGetString(value, bsKeys.expr));
+            if (cond == 0) {
+                return 0;
+            }
+        }
+        node = bsAstNode(ast, BS_NODE_JUMP);
+        ast->nodes[node].a = cond;
+        ast->nodes[node].text = bsAstString(ast, bsInternName(label));
+    } else if (BS_KIND(kind, return_)) {
+        uint32_t expr = 0;
+        if (bsObjectHasString(value, bsKeys.expr)) {
+            expr = bsAstExpr(ast, bsObjectGetString(value, bsKeys.expr));
+            if (expr == 0) {
+                return 0;
+            }
+        }
+        node = bsAstNode(ast, BS_NODE_RETURN);
+        ast->nodes[node].a = expr;
+    } else if (BS_KIND(kind, label)) {
+        BSValue name = bsObjectGetString(value, bsKeys.name);
+        if (name.type != BS_STRING) {
+            return 0;
+        }
+        node = bsAstNode(ast, BS_NODE_LABEL);
+        ast->nodes[node].text = bsAstString(ast, bsInternName(name));
+    } else if (BS_KIND(kind, function)) {
+        BSValue name = bsObjectGetString(value, bsKeys.name);
+        BSValue statements = bsObjectGetString(value, bsKeys.statements);
+        if (name.type != BS_STRING || statements.type != BS_ARRAY) {
+            return 0;
+        }
+        BSValue args = bsObjectGetString(value, bsKeys.args);
+        size_t argCount = bsArrayCount(args);
+        for (size_t ix = 0; ix < argCount; ix++) {
+            if (bsArrayGet(args, ix).type != BS_STRING) {
+                return 0;
+            }
+        }
+        node = bsAstNode(ast, BS_NODE_FUNCTION);
+        ast->nodes[node].text = bsAstString(ast, bsInternName(name));
+        ast->nodes[node].flag = bsValueBoolean(bsObjectGetString(value, bsKeys.lastArgArray));
+        for (size_t ix = 0; ix < argCount; ix++) {
+            uint32_t arg = bsAstNode(ast, BS_NODE_ARG);
+            ast->nodes[arg].text = bsAstString(ast, bsInternName(bsArrayGet(args, ix)));
+            bsAstAppend(ast, &ast->nodes[node].b, &tail, arg);
+        }
+        tail = 0;
+        size_t count = bsArrayCount(statements);
+        for (size_t ix = 0; ix < count; ix++) {
+            uint32_t statement = bsAstStatement(ast, bsArrayGet(statements, ix));
+            if (statement == 0) {
+                return 0;
+            }
+            bsAstAppend(ast, &ast->nodes[node].a, &tail, statement);
+        }
+    } else if (BS_KIND(kind, include)) {
+        BSValue includes = bsObjectGetString(value, bsKeys.includes);
+        size_t count = bsArrayCount(includes);
+        if (count == 0) {
+            return 0;
+        }
+        node = bsAstNode(ast, BS_NODE_INCLUDE);
+        for (size_t ix = 0; ix < count; ix++) {
+            BSValue include = bsArrayGet(includes, ix);
+            BSValue url = bsObjectGetString(include, bsKeys.url);
+            if (url.type != BS_STRING) {
+                return 0;
+            }
+            uint32_t item = bsAstNode(ast, BS_NODE_INCLUDE_ITEM);
+            ast->nodes[item].text = bsAstString(ast, bsInternName(url));
+            ast->nodes[item].flag = bsValueBoolean(bsObjectGetString(include, bsKeys.system));
+            bsAstAppend(ast, &ast->nodes[node].a, &tail, item);
+        }
+    } else {
+        return 0;
+    }
+    BSValue line = bsObjectGetString(value, bsKeys.lineNumber);
+    ast->nodes[node].line = line.type == BS_NUMBER ? (int) line.u.number : 0;
+    ast->nodes[node].model = model;
+    return node;
+}
+
+
+/*
+ * Code emission
+ *
+ * A chunk's registers are its named locals - the function's arguments and assigned names, each a
+ * slot - followed by its temporaries, allocated stack-fashion as an expression is compiled: a
+ * subexpression's result lands in the lowest free temporary, and the temporaries a subexpression
+ * used are free again once its result has been consumed. An operand names a register or, with
+ * the high bit set, a constant, so a local or a literal feeds an operator or a call with no
+ * instruction of its own.
+ */
+
+
 typedef struct {
     size_t pc;
     BSValue label;
@@ -298,18 +686,6 @@ typedef struct {
     BSScript *script;
     size_t *functionCap;
 } BSEmit;
-
-
-/*
- * Code emission
- *
- * A chunk's registers are its named locals - the function's arguments and assigned names, each a
- * slot - followed by its temporaries, allocated stack-fashion as an expression is compiled: a
- * subexpression's result lands in the lowest free temporary, and the temporaries a subexpression
- * used are free again once its result has been consumed. An operand names a register or, with
- * the high bit set, a constant, so a local or a literal feeds an operator or a call with no
- * instruction of its own.
- */
 
 
 /* The largest register or constant index an operand can name */
@@ -468,7 +844,7 @@ static void bsEmitJump(BSEmit *e, uint8_t op, BSOperand cond, BSValue label)
 }
 
 
-static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst);
+static void bsEmitExprTo(BSEmit *e, const BSAst *ast, uint32_t id, uint16_t dst);
 
 
 /*
@@ -495,36 +871,16 @@ static inline void bsAssignedSet(BSEmit *e, int slot)
 }
 
 
-/*
- * A model node - an expression or a statement - is an object with one member whose name is its
- * kind. The kind key, with the member in "*member", or NULL for a value of any other shape.
- */
-static BSString *bsModelKind(BSValue node, BSValue *member)
-{
-    BSString *kind;
-    if (!bsObjectSole(node, &kind, member)) {
-        *member = bsNull();
-        return NULL;
-    }
-    return kind;
-}
-
-/* Whether a node's kind key is the model key "field" */
-#define BS_KIND(kind, field) ((kind) != NULL && bsObjectKeyIs((kind), bsKeys.field))
-
-
 /* The name a statement assigns - an expression statement with a name - or a null value */
-static BSValue bsStatementAssignName(BSValue statement)
+static BSValue bsStatementAssignName(const BSAst *ast, uint32_t statement)
 {
-    BSValue expr;
-    BSString *kind = bsModelKind(statement, &expr);
-    return BS_KIND(kind, expr) ? bsObjectGetString(expr, bsKeys.name) : bsNull();
+    const BSNode *node = &ast->nodes[statement];
+    return node->kind == BS_NODE_EXPR && node->text != 0 ? bsNodeText(ast, node) : bsNull();
 }
 
 
-static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
+static void bsAssignedAnalyze(BSEmit *e, const BSAst *ast, const uint32_t *statements, size_t count, size_t argCount)
 {
-    size_t count = bsArrayCount(statements);
     size_t words = (e->slotCount + 31) / 32;
     if (e->slotCount == 0 || count == 0) {
         return;
@@ -536,16 +892,15 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
     size_t blockCount = 0;
     bool starts = true;
     for (size_t ix = 0; ix < count; ix++) {
-        BSValue member;
-        BSString *kind = bsModelKind(bsArrayGet(statements, ix), &member);
-        bool isLabel = BS_KIND(kind, label);
+        const BSNode *node = &ast->nodes[statements[ix]];
+        bool isLabel = node->kind == BS_NODE_LABEL;
         if (starts || isLabel) {
             blockCount++;
         }
         blockOf[ix] = (uint32_t) (blockCount - 1);
-        starts = !isLabel && (BS_KIND(kind, jump) || BS_KIND(kind, return_));
-        BSValue name = isLabel ? bsObjectGetString(member, bsKeys.name) : bsNull();
-        if (name.type == BS_STRING) {
+        starts = !isLabel && (node->kind == BS_NODE_JUMP || node->kind == BS_NODE_RETURN);
+        if (isLabel) {
+            BSValue name = bsNodeText(ast, node);
             BSValue blocks = bsObjectGetString(labelBlocks, name);
             if (blocks.type != BS_ARRAY) {
                 blocks = bsArrayNew();
@@ -565,7 +920,7 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
         in[ix / 32] |= (uint32_t) 1 << (ix % 32);
     }
     for (size_t ix = 0; ix < count; ix++) {
-        BSValue name = bsStatementAssignName(bsArrayGet(statements, ix));
+        BSValue name = bsStatementAssignName(ast, statements[ix]);
         int slot = name.type == BS_STRING ? bsSlotFind(e, name) : -1;
         if (slot >= 0) {
             gen[blockOf[ix] * words + (size_t) slot / 32] |= (uint32_t) 1 << (slot % 32);
@@ -584,12 +939,10 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
             }
             const uint32_t *blockGen = &gen[block * words];
             const uint32_t *blockIn = &in[block * words];
-            BSValue member;
-            BSString *kind = bsModelKind(bsArrayGet(statements, ix), &member);
-            bool isJump = BS_KIND(kind, jump) && member.type == BS_OBJECT;
-            bool fallsThrough = isJump ? bsObjectHasString(member, bsKeys.expr) : !BS_KIND(kind, return_);
-            BSValue targets = isJump ? bsObjectGetString(labelBlocks, bsObjectGetString(member, bsKeys.label)) :
-                bsNull();
+            const BSNode *node = &ast->nodes[statements[ix]];
+            bool isJump = node->kind == BS_NODE_JUMP;
+            bool fallsThrough = isJump ? node->a != 0 : node->kind != BS_NODE_RETURN;
+            BSValue targets = isJump ? bsObjectGetString(labelBlocks, bsNodeText(ast, node)) : bsNull();
             size_t targetCount = targets.type == BS_ARRAY ? bsArrayCount(targets) : 0;
             for (size_t succIx = 0; succIx < targetCount + (fallsThrough ? 1 : 0); succIx++) {
                 uint32_t succ = succIx < targetCount ? (uint32_t) bsArrayGet(targets, succIx).u.number :
@@ -618,89 +971,48 @@ static void bsAssignedAnalyze(BSEmit *e, BSValue statements, size_t argCount)
 }
 
 
-static uint8_t bsBinaryOpcode(const char *op)
-{
-    static const struct {
-        const char *text;
-        uint8_t opcode;
-    } table[] = {
-        {"**", BS_OP_POW}, {"*", BS_OP_MUL}, {"/", BS_OP_DIV}, {"%", BS_OP_MOD},
-        {"+", BS_OP_ADD}, {"-", BS_OP_SUB}, {"<<", BS_OP_SHL}, {">>", BS_OP_SHR},
-        {"<=", BS_OP_LE}, {"<", BS_OP_LT}, {">=", BS_OP_GE}, {">", BS_OP_GT},
-        {"==", BS_OP_EQ}, {"!=", BS_OP_NE}, {"&", BS_OP_BAND}, {"^", BS_OP_BXOR},
-        {"|", BS_OP_BOR}
-    };
-    for (size_t ix = 0; ix < sizeof(table) / sizeof(table[0]); ix++) {
-        if (strcmp(table[ix].text, op) == 0) {
-            return table[ix].opcode;
-        }
-    }
-    return 0;
-}
-
-
-static uint8_t bsUnaryOpcode(const char *op)
-{
-    if (op[0] != '\0' && op[1] == '\0') {
-        if (op[0] == '-') {
-            return BS_OP_NEG;
-        }
-        if (op[0] == '!') {
-            return BS_OP_NOT;
-        }
-        if (op[0] == '~') {
-            return BS_OP_BNOT;
-        }
-    }
-    return 0;
-}
-
-
 /*
  * Compile an expression to an operand: a constant or a local costs no instruction; anything else
  * is computed into the lowest free temporary, which stays allocated for the caller to consume.
  */
-static bool bsEmitExprOperand(BSEmit *e, BSValue model, BSOperand *operand)
+static void bsEmitExprOperand(BSEmit *e, const BSAst *ast, uint32_t id, BSOperand *operand)
 {
-    BSValue member;
-    BSString *kind = bsModelKind(model, &member);
-    if (BS_KIND(kind, number) && member.type == BS_NUMBER) {
-        *operand = bsEmitConst(e, member);
-        return true;
-    }
-    if (BS_KIND(kind, string) && member.type == BS_STRING) {
-        BSValue interned = bsInternName(member);
-        *operand = bsEmitConst(e, interned);
-        bsRelease(interned);
-        return true;
-    }
-    bool variable = BS_KIND(kind, variable) && member.type == BS_STRING;
-    if (variable) {
-        const char *name = bsStringData(member);
-        if (strcmp(name, "null") == 0) {
+    const BSNode *node = &ast->nodes[id];
+    switch (node->kind) {
+    case BS_NODE_NUMBER:
+        *operand = bsEmitConst(e, bsNumber(node->number));
+        return;
+    case BS_NODE_STRING:
+        *operand = bsEmitConst(e, bsNodeText(ast, node));
+        return;
+    case BS_NODE_VARIABLE: {
+        BSValue name = bsNodeText(ast, node);
+        const char *text = bsStringData(name);
+        if (strcmp(text, "null") == 0) {
             *operand = e->nullConst;
-            return true;
+            return;
         }
-        if (strcmp(name, "true") == 0 || strcmp(name, "false") == 0) {
-            *operand = bsEmitBool(e, name[0] == 't');
-            return true;
+        if (strcmp(text, "true") == 0 || strcmp(text, "false") == 0) {
+            *operand = bsEmitBool(e, text[0] == 't');
+            return;
         }
-        int slot = bsSlotFind(e, member);
+        int slot = bsSlotFind(e, name);
         if (slot >= 0 && bsAssignedTest(e, slot)) {
             *operand = (BSOperand) slot;
-            return true;
+            return;
         }
+        break;
     }
-    if (BS_KIND(kind, group)) {
-        return bsEmitExprOperand(e, member, operand);
+    case BS_NODE_GROUP:
+        bsEmitExprOperand(e, ast, node->a, operand);
+        return;
+    default:
+        break;
     }
 
     /* A global or a possibly unset local loads into a temporary; a call or an operator computes into one */
-    if (!variable && !BS_KIND(kind, function) && !BS_KIND(kind, binary) && !BS_KIND(kind, unary)) {
-        return false;
-    }
     *operand = bsTempAlloc(e);
-    return bsEmitExprTo(e, model, *operand);
+    bsEmitExprTo(e, ast, id, *operand);
 }
 
 
@@ -723,43 +1035,38 @@ static void bsEmitAccStore(BSEmit *e, uint16_t dst, uint16_t acc, uint16_t base)
 }
 
 
-/* Compile args[ix] into dst, or move null if that argument is missing */
-static bool bsEmitArgOrNull(BSEmit *e, BSValue args, size_t ix, size_t argCount, uint16_t dst)
+/* Compile the argument node "arg" into dst, or move null if there is no such argument */
+static void bsEmitArgOrNull(BSEmit *e, const BSAst *ast, uint32_t arg, uint16_t dst)
 {
-    if (ix < argCount) {
-        return bsEmitExprTo(e, bsArrayGet(args, ix), dst);
+    if (arg != 0) {
+        bsEmitExprTo(e, ast, arg, dst);
+    } else {
+        bsEmitInst(e, BS_OP_MOVE, dst, e->nullConst, 0);
     }
-    bsEmitInst(e, BS_OP_MOVE, dst, e->nullConst, 0);
-    return true;
 }
 
 
 /*
- * The comparison jump opcode for a jump on "expr" being "jumpIfTrue", when expr is a comparison -
- * its operand models are returned - or zero. A jump on false takes the opposite comparison: EQ
- * and NE, LT and GE, LE and GT are the pairs.
+ * The comparison jump opcode for a jump on the expression "id" being "jumpIfTrue", when it is a
+ * comparison - its operand nodes are returned - or zero. A jump on false takes the opposite
+ * comparison: EQ and NE, LT and GE, LE and GT are the pairs.
  */
-static uint8_t bsCompareJumpOpcode(BSValue expr, bool jumpIfTrue, BSValue *left, BSValue *right)
+static uint8_t bsCompareJumpOpcode(const BSAst *ast, uint32_t id, bool jumpIfTrue, uint32_t *left, uint32_t *right)
 {
     static const uint8_t opposite[] = {BS_OP_NE, BS_OP_EQ, BS_OP_GE, BS_OP_GT, BS_OP_LE, BS_OP_LT};
-    BSValue member;
-    BSString *kind = bsModelKind(expr, &member);
-    while (BS_KIND(kind, group)) {
-        kind = bsModelKind(member, &member);
+    const BSNode *node = &ast->nodes[id];
+    while (node->kind == BS_NODE_GROUP) {
+        node = &ast->nodes[node->a];
     }
-    if (!BS_KIND(kind, binary) || member.type != BS_OBJECT) {
+    if (node->kind != BS_NODE_BINARY || node->op < BS_OP_EQ || node->op > BS_OP_GE) {
         return 0;
     }
-    BSValue op = bsObjectGetString(member, bsKeys.op);
-    uint8_t opcode = op.type == BS_STRING ? bsBinaryOpcode(bsStringData(op)) : 0;
-    if (opcode < BS_OP_EQ || opcode > BS_OP_GE) {
-        return 0;
-    }
+    uint8_t opcode = (uint8_t) node->op;
     if (!jumpIfTrue) {
         opcode = opposite[opcode - BS_OP_EQ];
     }
-    *left = bsObjectGetString(member, bsKeys.left);
-    *right = bsObjectGetString(member, bsKeys.right);
+    *left = node->a;
+    *right = node->b;
     return (uint8_t) (BS_OP_JUMP_EQ + (opcode - BS_OP_EQ));
 }
 
@@ -769,57 +1076,49 @@ static uint8_t bsCompareJumpOpcode(BSValue expr, bool jumpIfTrue, BSValue *left,
  * and the word to follow - which the caller emits with the target - is a DATA word; any other
  * condition computes into an operand, and the word to follow is the jump on it.
  */
-static bool bsEmitCondition(BSEmit *e, BSValue expr, bool jumpIfTrue, uint8_t *jumpOp, BSOperand *cond)
+static void bsEmitCondition(BSEmit *e, const BSAst *ast, uint32_t expr, bool jumpIfTrue, uint8_t *jumpOp,
+                            BSOperand *cond)
 {
     uint16_t base = e->tempTop;
-    BSValue left;
-    BSValue right;
-    uint8_t compareJump = bsCompareJumpOpcode(expr, jumpIfTrue, &left, &right);
+    uint32_t left;
+    uint32_t right;
+    uint8_t compareJump = bsCompareJumpOpcode(ast, expr, jumpIfTrue, &left, &right);
     if (compareJump != 0) {
         BSOperand leftOperand;
         BSOperand rightOperand;
-        if (!bsEmitExprOperand(e, left, &leftOperand) || !bsEmitExprOperand(e, right, &rightOperand)) {
-            return false;
-        }
+        bsEmitExprOperand(e, ast, left, &leftOperand);
+        bsEmitExprOperand(e, ast, right, &rightOperand);
         e->tempTop = base;
         bsEmitInst(e, compareJump, 0, leftOperand, rightOperand);
         *jumpOp = BS_OP_DATA;
         *cond = 0;
-        return true;
+        return;
     }
-    if (!bsEmitExprOperand(e, expr, cond)) {
-        return false;
-    }
+    bsEmitExprOperand(e, ast, expr, cond);
     e->tempTop = base;
     *jumpOp = jumpIfTrue ? BS_OP_JUMP_TRUE : BS_OP_JUMP_FALSE;
-    return true;
 }
 
 
 /* The conditional: if(cond, then, else) - the value of the branch taken, or null */
-static bool bsEmitIfTo(BSEmit *e, BSValue args, uint16_t dst)
+static void bsEmitIfTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t dst)
 {
-    size_t argCount = bsArrayCount(args);
-    if (argCount == 0) {
+    uint32_t cond = ast->nodes[call].a;
+    if (cond == 0) {
         bsEmitInst(e, BS_OP_MOVE, dst, e->nullConst, 0);
-        return true;
+        return;
     }
+    uint32_t then = ast->nodes[cond].next;
+    uint32_t otherwise = then != 0 ? ast->nodes[then].next : 0;
     uint8_t jumpOp;
-    BSOperand cond;
-    if (!bsEmitCondition(e, bsArrayGet(args, 0), false, &jumpOp, &cond)) {
-        return false;
-    }
-    uint32_t jumpElse = bsEmitJumpInst(e, jumpOp, cond, 0);
-    if (!bsEmitArgOrNull(e, args, 1, argCount, dst)) {
-        return false;
-    }
+    BSOperand condOperand;
+    bsEmitCondition(e, ast, cond, false, &jumpOp, &condOperand);
+    uint32_t jumpElse = bsEmitJumpInst(e, jumpOp, condOperand, 0);
+    bsEmitArgOrNull(e, ast, then, dst);
     uint32_t jumpEnd = bsEmitJumpInst(e, BS_OP_JUMP, 0, 0);
     e->inst[jumpElse].w = (uint32_t) e->count;
-    if (!bsEmitArgOrNull(e, args, 2, argCount, dst)) {
-        return false;
-    }
+    bsEmitArgOrNull(e, ast, otherwise, dst);
     e->inst[jumpEnd].w = (uint32_t) e->count;
-    return true;
 }
 
 
@@ -847,56 +1146,55 @@ static uint8_t bsCallOpcode(const char *name, size_t argCount)
 
 
 /* A call: the arguments are operands in the DATA words that follow the call instruction */
-static bool bsEmitCallTo(BSEmit *e, BSValue function, uint16_t dst)
+static void bsEmitCallTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t dst)
 {
-    BSValue name = bsObjectGetString(function, bsKeys.name);
-    BSValue args = bsObjectGetString(function, bsKeys.args);
-    size_t argCount = bsArrayCount(args);
+    const BSNode *node = &ast->nodes[call];
+    BSValue name = bsNodeText(ast, node);
+    size_t argCount = node->b;
     if (argCount > BS_OPERAND_MAX) {
         e->overflow = true;
     }
     uint16_t base = e->tempTop;
     BSOperand argInline[16];
     BSOperand *operands = argCount <= 16 ? argInline : bsAlloc(argCount * sizeof(BSOperand));
-    bool ok = true;
-    for (size_t ix = 0; ok && ix < argCount; ix++) {
-        ok = bsEmitExprOperand(e, bsArrayGet(args, ix), &operands[ix]);
+    size_t ix = 0;
+    for (uint32_t arg = node->a; ix < argCount; arg = ast->nodes[arg].next) {
+        bsEmitExprOperand(e, ast, arg, &operands[ix++]);
     }
-    if (ok) {
-        e->tempTop = base;
-        int slot = bsSlotFind(e, name);
-        if (slot >= 0) {
-            bsEmitInst(e, BS_OP_CALL_SLOT, dst, (uint16_t) slot, (uint16_t) argCount);
-        } else {
-            bsEmitInst(e, bsCallOpcode(bsStringData(name), argCount), dst, bsEmitSite(e, name), (uint16_t) argCount);
-        }
-        for (size_t ix = 0; ix < argCount; ix += BS_OPERANDS_PER_DATA) {
-            bsEmitInst(e, BS_OP_DATA, operands[ix],
-                       ix + 1 < argCount ? operands[ix + 1] : 0,
-                       ix + 2 < argCount ? operands[ix + 2] : 0);
-        }
+    e->tempTop = base;
+    int slot = bsSlotFind(e, name);
+    if (slot >= 0) {
+        bsEmitInst(e, BS_OP_CALL_SLOT, dst, (uint16_t) slot, (uint16_t) argCount);
+    } else {
+        bsEmitInst(e, bsCallOpcode(bsStringData(name), argCount), dst, bsEmitSite(e, name), (uint16_t) argCount);
+    }
+    for (ix = 0; ix < argCount; ix += BS_OPERANDS_PER_DATA) {
+        bsEmitInst(e, BS_OP_DATA, operands[ix],
+                   ix + 1 < argCount ? operands[ix + 1] : 0,
+                   ix + 2 < argCount ? operands[ix + 2] : 0);
     }
     if (operands != argInline) {
         free(operands);
     }
-    return ok;
+}
+
+
+/* Whether a call node is the conditional, if(cond, then, else) */
+static bool bsNodeIsIf(const BSAst *ast, const BSNode *node)
+{
+    return strcmp(bsStringData(bsNodeText(ast, node)), "if") == 0;
 }
 
 
 /* Compile an expression so its value lands in register "dst" */
-static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
+static void bsEmitExprTo(BSEmit *e, const BSAst *ast, uint32_t id, uint16_t dst)
 {
-    BSValue member;
-    BSString *kind = bsModelKind(model, &member);
-
-    if (BS_KIND(kind, function) && member.type == BS_OBJECT) {
-        BSValue function = member;
-        BSValue name = bsObjectGetString(function, bsKeys.name);
-        if (name.type != BS_STRING) {
-            return false;
-        }
-        if (strcmp(bsStringData(name), "if") != 0) {
-            return bsEmitCallTo(e, function, dst);
+    const BSNode *node = &ast->nodes[id];
+    switch (node->kind) {
+    case BS_NODE_CALL: {
+        if (!bsNodeIsIf(ast, node)) {
+            bsEmitCallTo(e, ast, id, dst);
+            return;
         }
         /*
          * A conditional or a short-circuit operator writes dst before its later operands are
@@ -905,38 +1203,21 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
          */
         uint16_t base;
         uint16_t acc = bsEmitAcc(e, dst, &base);
-        if (!bsEmitIfTo(e, bsObjectGetString(function, bsKeys.args), acc)) {
-            return false;
-        }
+        bsEmitIfTo(e, ast, id, acc);
         bsEmitAccStore(e, dst, acc, base);
-        return true;
+        return;
     }
 
-    if (BS_KIND(kind, binary) && member.type == BS_OBJECT) {
-        BSValue binary = member;
-        BSValue op = bsObjectGetString(binary, bsKeys.op);
-        if (op.type != BS_STRING) {
-            return false;
-        }
-        const char *opText = bsStringData(op);
-        bool isAnd = strcmp(opText, "&&") == 0;
-        if (isAnd || strcmp(opText, "||") == 0) {
+    case BS_NODE_BINARY: {
+        if (node->op == BS_NODE_AND || node->op == BS_NODE_OR) {
             uint16_t base;
             uint16_t acc = bsEmitAcc(e, dst, &base);
-            if (!bsEmitExprTo(e, bsObjectGetString(binary, bsKeys.left), acc)) {
-                return false;
-            }
-            uint32_t jump = bsEmitJumpInst(e, isAnd ? BS_OP_JUMP_FALSE : BS_OP_JUMP_TRUE, acc, 0);
-            if (!bsEmitExprTo(e, bsObjectGetString(binary, bsKeys.right), acc)) {
-                return false;
-            }
+            bsEmitExprTo(e, ast, node->a, acc);
+            uint32_t jump = bsEmitJumpInst(e, node->op == BS_NODE_AND ? BS_OP_JUMP_FALSE : BS_OP_JUMP_TRUE, acc, 0);
+            bsEmitExprTo(e, ast, node->b, acc);
             e->inst[jump].w = (uint32_t) e->count;
             bsEmitAccStore(e, dst, acc, base);
-            return true;
-        }
-        uint8_t opcode = bsBinaryOpcode(opText);
-        if (opcode == 0) {
-            return false;
+            return;
         }
         /*
          * When dst is the topmost temporary, a left operand that needs one computes straight into
@@ -951,95 +1232,76 @@ static bool bsEmitExprTo(BSEmit *e, BSValue model, uint16_t dst)
         }
         BSOperand left;
         BSOperand right;
-        if (!bsEmitExprOperand(e, bsObjectGetString(binary, bsKeys.left), &left)) {
-            return false;
-        }
+        bsEmitExprOperand(e, ast, node->a, &left);
         if (dstTop && e->tempTop < base) {
             e->tempTop = base;
         }
-        if (!bsEmitExprOperand(e, bsObjectGetString(binary, bsKeys.right), &right)) {
-            return false;
-        }
+        bsEmitExprOperand(e, ast, node->b, &right);
         e->tempTop = base;
-        bsEmitInst(e, opcode, dst, left, right);
-        return true;
+        bsEmitInst(e, (uint8_t) node->op, dst, left, right);
+        return;
     }
 
-    if (BS_KIND(kind, unary) && member.type == BS_OBJECT) {
-        BSValue unary = member;
-        BSValue op = bsObjectGetString(unary, bsKeys.op);
-        if (op.type != BS_STRING) {
-            return false;
-        }
-        uint8_t opcode = bsUnaryOpcode(bsStringData(op));
-        if (opcode == 0) {
-            return false;
-        }
+    case BS_NODE_UNARY: {
         uint16_t base = e->tempTop;
         BSOperand operand;
-        if (!bsEmitExprOperand(e, bsObjectGetString(unary, bsKeys.expr), &operand)) {
-            return false;
-        }
+        bsEmitExprOperand(e, ast, node->a, &operand);
         e->tempTop = base;
-        bsEmitInst(e, opcode, dst, operand, 0);
-        return true;
+        bsEmitInst(e, (uint8_t) node->op, dst, operand, 0);
+        return;
     }
 
-    if (BS_KIND(kind, group)) {
-        return bsEmitExprTo(e, member, dst);
-    }
+    case BS_NODE_GROUP:
+        bsEmitExprTo(e, ast, node->a, dst);
+        return;
 
-    /* A global variable or an unassigned local loads into dst; a constant or an assigned local moves */
-    if (BS_KIND(kind, variable) && member.type == BS_STRING) {
-        const char *name = bsStringData(member);
-        if (strcmp(name, "null") != 0 && strcmp(name, "true") != 0 && strcmp(name, "false") != 0) {
-            int slot = bsSlotFind(e, member);
+    case BS_NODE_VARIABLE: {
+        /* A global variable or an unassigned local loads into dst; a constant or an assigned local moves */
+        BSValue name = bsNodeText(ast, node);
+        const char *text = bsStringData(name);
+        if (strcmp(text, "null") != 0 && strcmp(text, "true") != 0 && strcmp(text, "false") != 0) {
+            int slot = bsSlotFind(e, name);
             if (slot < 0) {
-                bsEmitInst(e, BS_OP_LOAD_NAME, dst, bsEmitSite(e, member), 0);
-                return true;
+                bsEmitInst(e, BS_OP_LOAD_NAME, dst, bsEmitSite(e, name), 0);
+                return;
             }
             if (!bsAssignedTest(e, slot)) {
                 bsEmitInst(e, BS_OP_LOAD_SLOT, dst, (uint16_t) slot, 0);
-                return true;
+                return;
             }
         }
-    } else if (!BS_KIND(kind, number) && !BS_KIND(kind, string)) {
-        return false; /* a malformed node, or a call or operator whose member is not an object */
+        break;
+    }
+
+    default:
+        /* A number or a string */
+        break;
     }
     BSOperand operand;
-    if (!bsEmitExprOperand(e, model, &operand)) {
-        return false;
-    }
+    bsEmitExprOperand(e, ast, id, &operand);
     if (operand != dst) {
         bsEmitInst(e, BS_OP_MOVE, dst, operand, 0);
     }
-    return true;
 }
 
 
 /* Compile an expression statement - a call drops its result; anything else is computed and left */
-static bool bsEmitExprDiscard(BSEmit *e, BSValue model)
+static void bsEmitExprDiscard(BSEmit *e, const BSAst *ast, uint32_t id)
 {
-    BSValue function;
-    BSString *kind = bsModelKind(model, &function);
-    if (BS_KIND(kind, function) && function.type == BS_OBJECT) {
-        BSValue name = bsObjectGetString(function, bsKeys.name);
-        if (name.type == BS_STRING && strcmp(bsStringData(name), "if") != 0) {
-            return bsEmitCallTo(e, function, BS_REG_DISCARD);
-        }
+    const BSNode *node = &ast->nodes[id];
+    if (node->kind == BS_NODE_CALL && !bsNodeIsIf(ast, node)) {
+        bsEmitCallTo(e, ast, id, BS_REG_DISCARD);
+        return;
     }
     uint16_t base = e->tempTop;
     BSOperand operand;
-    if (!bsEmitExprOperand(e, model, &operand)) {
-        return false;
-    }
+    bsEmitExprOperand(e, ast, id, &operand);
     e->tempTop = base;
-    return true;
 }
 
 
-/* Record a statement's model and line - "member" is the statement's member object, which carries the line */
-static void bsEmitCover(BSEmit *e, BSValue statementModel, BSValue member)
+/* Record a statement's model and line */
+static void bsEmitCover(BSEmit *e, const BSNode *node)
 {
     if (e->coverCount == e->coverCap) {
         e->coverCap = e->coverCap != 0 ? e->coverCap * 2 : 8;
@@ -1047,154 +1309,114 @@ static void bsEmitCover(BSEmit *e, BSValue statementModel, BSValue member)
         e->coverLines = bsRealloc(e->coverLines, e->coverCap * sizeof(int));
         e->coverPcs = bsRealloc(e->coverPcs, e->coverCap * sizeof(uint32_t));
     }
-    e->cover[e->coverCount] = statementModel;
-    BSValue line = bsObjectGetString(member, bsKeys.lineNumber);
-    e->coverLines[e->coverCount] = line.type == BS_NUMBER ? (int) line.u.number : 0;
+    e->cover[e->coverCount] = node->model;
+    e->coverLines[e->coverCount] = node->line;
     e->coverPcs[e->coverCount] = (uint32_t) e->count;
     bsEmitInst(e, BS_OP_STMT, (uint16_t) e->coverCount, 0, 0);
     e->coverCount++;
 }
 
 
-static bool bsEmitFunction(BSEmit *e, BSValue model);
+static void bsEmitFunction(BSEmit *e, const BSAst *ast, uint32_t id);
 
 
-/* Emit one statement model. Returns false for a malformed statement. */
-static bool bsEmitStatement(BSEmit *e, BSValue model)
+/* Emit one statement node */
+static void bsEmitStatement(BSEmit *e, const BSAst *ast, uint32_t id)
 {
-    BSValue value;
-    BSString *kind = bsModelKind(model, &value);
-    if (value.type != BS_OBJECT) {
-        return false;
-    }
-    bsEmitCover(e, model, value);
+    const BSNode *node = &ast->nodes[id];
+    bsEmitCover(e, node);
 
-    if (BS_KIND(kind, expr)) {
-        BSValue expr = bsObjectGetString(value, bsKeys.expr);
-        BSValue name = bsObjectGetString(value, bsKeys.name);
-        if (name.type != BS_STRING) {
-            return bsEmitExprDiscard(e, expr);
+    switch (node->kind) {
+    case BS_NODE_EXPR: {
+        if (node->text == 0) {
+            bsEmitExprDiscard(e, ast, node->a);
+            return;
         }
+        BSValue name = bsNodeText(ast, node);
         int slot = bsSlotFind(e, name);
         if (slot >= 0) {
-            if (!bsEmitExprTo(e, expr, (uint16_t) slot)) {
-                return false;
-            }
+            bsEmitExprTo(e, ast, node->a, (uint16_t) slot);
             bsAssignedSet(e, slot);
-            return true;
+            return;
         }
         uint16_t site = bsEmitSite(e, name);
         uint16_t base = e->tempTop;
         BSOperand operand;
-        if (!bsEmitExprOperand(e, expr, &operand)) {
-            return false;
-        }
+        bsEmitExprOperand(e, ast, node->a, &operand);
         e->tempTop = base;
         bsEmitInst(e, BS_OP_STORE_NAME, site, operand, 0);
-        return true;
+        return;
     }
 
-    if (BS_KIND(kind, jump)) {
-        BSValue label = bsObjectGetString(value, bsKeys.label);
-        if (label.type != BS_STRING) {
-            return false;
-        }
-        if (!bsObjectHasString(value, bsKeys.expr)) {
+    case BS_NODE_JUMP: {
+        BSValue label = bsNodeText(ast, node);
+        if (node->a == 0) {
             bsEmitJump(e, BS_OP_JUMP, 0, label);
-            return true;
+            return;
         }
         /* "jumpif (!expr)" - each NOT folds into the jump's sense */
-        BSValue expr = bsObjectGetString(value, bsKeys.expr);
+        uint32_t expr = node->a;
         bool jumpIfTrue = true;
-        for (;;) {
-            BSValue unary = bsObjectGetString(expr, bsKeys.unary);
-            BSValue unaryOp = bsObjectGetString(unary, bsKeys.op);
-            if (unaryOp.type != BS_STRING || strcmp(bsStringData(unaryOp), "!") != 0) {
-                break;
-            }
-            expr = bsObjectGetString(unary, bsKeys.expr);
+        while (ast->nodes[expr].kind == BS_NODE_UNARY && ast->nodes[expr].op == BS_OP_NOT) {
+            expr = ast->nodes[expr].a;
             jumpIfTrue = !jumpIfTrue;
         }
         uint8_t jumpOp;
         BSOperand cond;
-        if (!bsEmitCondition(e, expr, jumpIfTrue, &jumpOp, &cond)) {
-            return false;
-        }
+        bsEmitCondition(e, ast, expr, jumpIfTrue, &jumpOp, &cond);
         bsEmitJump(e, jumpOp, cond, label);
-        return true;
+        return;
     }
 
-    if (BS_KIND(kind, return_)) {
+    case BS_NODE_RETURN: {
         uint16_t base = e->tempTop;
-        BSOperand operand;
-        if (bsObjectHasString(value, bsKeys.expr)) {
-            if (!bsEmitExprOperand(e, bsObjectGetString(value, bsKeys.expr), &operand)) {
-                return false;
-            }
-        } else {
-            operand = e->nullConst;
+        BSOperand operand = e->nullConst;
+        if (node->a != 0) {
+            bsEmitExprOperand(e, ast, node->a, &operand);
         }
         e->tempTop = base;
         bsEmitInst(e, BS_OP_RETURN, operand, 0, 0);
-        return true;
+        return;
     }
 
-    if (BS_KIND(kind, label)) {
-        BSValue name = bsObjectGetString(value, bsKeys.name);
-        if (name.type != BS_STRING) {
-            return false;
-        }
-        bsEmitLabel(e, name);
-        return true;
-    }
+    case BS_NODE_LABEL:
+        bsEmitLabel(e, bsNodeText(ast, node));
+        return;
 
-    if (BS_KIND(kind, function)) {
-        return bsEmitFunction(e, value);
-    }
+    case BS_NODE_FUNCTION:
+        bsEmitFunction(e, ast, id);
+        return;
 
-    if (BS_KIND(kind, include)) {
-        BSValue includes = bsObjectGetString(value, bsKeys.includes);
-        size_t includeCount = bsArrayCount(includes);
-        if (includeCount == 0) {
-            return false;
-        }
-        /* One instruction runs the statement's includes, which fetch together */
+    default: {
+        /* An include statement: one instruction runs the statement's includes, which fetch together */
         size_t first = e->includeCount;
-        for (size_t inc = 0; inc < includeCount; inc++) {
-            BSValue include = bsArrayGet(includes, inc);
-            BSValue url = bsObjectGetString(include, bsKeys.url);
-            if (url.type != BS_STRING) {
-                return false;
-            }
+        size_t includeCount = 0;
+        for (uint32_t item = node->a; item != 0; item = ast->nodes[item].next) {
             if (e->includeCount > BS_OPERAND_MAX) {
                 e->overflow = true;
             }
             BS_GROW(e->includes, e->includeCount, e->includeCap, 4);
-            e->includes[e->includeCount].url = bsInternName(url);
-            e->includes[e->includeCount].system = bsValueBoolean(bsObjectGetString(include, bsKeys.system));
+            e->includes[e->includeCount].url = bsRetain(bsNodeText(ast, &ast->nodes[item]));
+            e->includes[e->includeCount].system = ast->nodes[item].flag;
             e->includeCount++;
+            includeCount++;
         }
         bsEmitInst(e, BS_OP_INCLUDE, (uint16_t) first, (uint16_t) includeCount, 0);
-        return true;
+        break;
     }
-
-    return false;
+    }
 }
 
 
-static bool bsEmitStatements(BSEmit *e, BSValue statementModels)
+static void bsEmitStatements(BSEmit *e, const BSAst *ast, const uint32_t *statements, size_t count)
 {
-    size_t count = bsArrayCount(statementModels);
     for (size_t ix = 0; ix < count; ix++) {
         if (e->assignedWords != 0 && (ix == 0 || e->blockOf[ix] != e->blockOf[ix - 1])) {
             memcpy(e->assigned, &e->blockIn[e->blockOf[ix] * e->assignedWords],
                    e->assignedWords * sizeof(uint32_t));
         }
-        if (!bsEmitStatement(e, bsArrayGet(statementModels, ix))) {
-            return false;
-        }
+        bsEmitStatement(e, ast, statements[ix]);
     }
-    return true;
 }
 
 
@@ -1266,15 +1488,15 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
 
 
 /*
- * End a chunk whose statements were emitted with result "emitted": return null and finish it into
+ * End a chunk whose statements were loaded with result "loaded": return null and finish it into
  * "code". Returns false - the chunk released - for a malformed statement or an overflowed operand
  * space.
  */
-static bool bsEmitEnd(BSEmit *e, bool emitted, BSCode *code, BSOperand ret)
+static bool bsEmitEnd(BSEmit *e, bool loaded, BSCode *code, BSOperand ret)
 {
     bsEmitInst(e, BS_OP_RETURN, ret, 0, 0);
     bool finished = bsEmitFinish(e, code);
-    if (!emitted || !finished) {
+    if (!loaded || !finished) {
         bsCodeFree(code);
         return false;
     }
@@ -1282,26 +1504,15 @@ static bool bsEmitEnd(BSEmit *e, bool emitted, BSCode *code, BSOperand ret)
 }
 
 
-static bool bsEmitFunction(BSEmit *e, BSValue model)
+static void bsEmitFunction(BSEmit *e, const BSAst *ast, uint32_t id)
 {
-    BSValue name = bsObjectGetString(model, bsKeys.name);
-    BSValue statements = bsObjectGetString(model, bsKeys.statements);
-    if (name.type != BS_STRING || statements.type != BS_ARRAY) {
-        return false;
-    }
-
+    const BSNode *node = &ast->nodes[id];
     BSFunctionDef *def = bsAlloc(sizeof(BSFunctionDef));
     memset(def, 0, sizeof(*def));
-    def->name = bsInternName(name);
-    def->lastArgArray = bsValueBoolean(bsObjectGetString(model, bsKeys.lastArgArray));
-
-    BSValue args = bsObjectGetString(model, bsKeys.args);
-    def->argCount = bsArrayCount(args);
-    for (size_t ix = 0; ix < def->argCount; ix++) {
-        if (bsArrayGet(args, ix).type != BS_STRING) {
-            bsFunctionDefFree(def);
-            return false;
-        }
+    def->name = bsRetain(bsNodeText(ast, node));
+    def->lastArgArray = node->flag;
+    for (uint32_t arg = node->b; arg != 0; arg = ast->nodes[arg].next) {
+        def->argCount++;
     }
 
     BS_GROW(e->script->functions, e->script->functionCount, *e->functionCap, 8);
@@ -1310,39 +1521,54 @@ static bool bsEmitFunction(BSEmit *e, BSValue model)
 
     BSEmit body;
     bsEmitInit(&body, e->script, e->functionCap);
-    for (size_t ix = 0; ix < def->argCount; ix++) {
-        bsSlotAdd(&body, bsArrayGet(args, ix), true);
+    for (uint32_t arg = node->b; arg != 0; arg = ast->nodes[arg].next) {
+        bsSlotAdd(&body, bsNodeText(ast, &ast->nodes[arg]), true);
     }
-    size_t stmtCount = bsArrayCount(statements);
-    for (size_t ix = 0; ix < stmtCount; ix++) {
-        BSValue assign = bsStatementAssignName(bsArrayGet(statements, ix));
+
+    /* The body's statements, indexed for the definite-assignment analysis */
+    size_t count = 0;
+    for (uint32_t statement = node->a; statement != 0; statement = ast->nodes[statement].next) {
+        count++;
+    }
+    uint32_t *statements = bsAlloc((count + 1) * sizeof(uint32_t));
+    count = 0;
+    for (uint32_t statement = node->a; statement != 0; statement = ast->nodes[statement].next) {
+        statements[count++] = statement;
+    }
+    for (size_t ix = 0; ix < count; ix++) {
+        BSValue assign = bsStatementAssignName(ast, statements[ix]);
         if (assign.type == BS_STRING) {
             bsSlotAdd(&body, assign, false);
         }
     }
-    bsAssignedAnalyze(&body, statements, def->argCount);
-    bool emitted = bsEmitEnd(&body, bsEmitStatements(&body, statements), &def->code, body.nullConst);
-    if (!emitted) {
-        return false;
-    }
-    if (index > 0xffffu) {
+    bsAssignedAnalyze(&body, ast, statements, count, def->argCount);
+    bsEmitStatements(&body, ast, statements, count);
+    free(statements);
+    if (!bsEmitEnd(&body, true, &def->code, body.nullConst) || index > 0xffffu) {
+        /* The body overflowed an operand space, so the script is invalid */
         e->overflow = true;
+        return;
     }
     bsEmitInst(e, BS_OP_FUNCTION, (uint16_t) index, 0, 0);
-    return true;
 }
 
 
 BSExpr *bsExprFromModel(BSValue model)
 {
     bsModelKeysInit();
+    BSAst ast;
+    bsAstInit(&ast);
+    uint32_t node = bsAstExpr(&ast, model);
     BSEmit e;
     bsEmitInit(&e, NULL, NULL);
     BSOperand operand = e.nullConst;
-    bool emitted = bsEmitExprOperand(&e, model, &operand);
+    if (node != 0) {
+        bsEmitExprOperand(&e, &ast, node, &operand);
+    }
+    bsAstFree(&ast);
     BSExpr *expr = bsAlloc(sizeof(BSExpr));
     memset(expr, 0, sizeof(*expr));
-    if (!bsEmitEnd(&e, emitted, &expr->code, operand)) {
+    if (!bsEmitEnd(&e, node != 0, &expr->code, operand)) {
         bsExprFree(expr);
         return NULL;
     }
@@ -1395,10 +1621,24 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
     script->model = bsRetain(model);
     bsScriptInfo(script, model, scriptName);
 
+    /* Each statement is loaded, emitted, and dropped from the arena before the next */
     size_t functionCap = 0;
     BSEmit e;
     bsEmitInit(&e, script, &functionCap);
-    if (!bsEmitEnd(&e, bsEmitStatements(&e, statements), &script->code, e.nullConst)) {
+    BSAst ast;
+    bsAstInit(&ast);
+    bool loaded = true;
+    size_t count = bsArrayCount(statements);
+    for (size_t ix = 0; loaded && ix < count; ix++) {
+        bsAstReset(&ast);
+        uint32_t node = bsAstStatement(&ast, bsArrayGet(statements, ix));
+        loaded = node != 0;
+        if (loaded) {
+            bsEmitStatement(&e, &ast, node);
+        }
+    }
+    bsAstFree(&ast);
+    if (!bsEmitEnd(&e, loaded, &script->code, e.nullConst)) {
         bsScriptRelease(script);
         return NULL;
     }
@@ -1407,10 +1647,11 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
 
 
 /* Emit a streamed statement; an overflow is reported as the decoder's invalid-model error */
-static bool bsEmitStreamedStatement(BSValue statement, void *data)
+static bool bsEmitStreamedStatement(BSAst *ast, uint32_t statement, void *data)
 {
     BSEmit *e = data;
-    return bsEmitStatement(e, statement) && !e->overflow;
+    bsEmitStatement(e, ast, statement);
+    return !e->overflow;
 }
 
 
@@ -1421,8 +1662,11 @@ BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scrip
     size_t functionCap = 0;
     BSEmit e;
     bsEmitInit(&e, script, &functionCap);
+    BSAst ast;
+    bsAstInit(&ast);
     BSValue rest;
-    bool decoded = bsJSONDecodeStatements(text, size, bsEmitStreamedStatement, &e, &rest, error);
+    bool decoded = bsJSONDecodeScript(text, size, &ast, bsEmitStreamedStatement, &e, &rest, error);
+    bsAstFree(&ast);
     if (!bsEmitEnd(&e, decoded, &script->code, e.nullConst)) {
         bsRelease(rest);
         if (error != NULL && *error == NULL) {

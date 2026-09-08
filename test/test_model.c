@@ -152,6 +152,7 @@ TEST(model_operand_limits)
     /* A chunk holds at most 32768 includes */
     json = bsTestRepeat("{\"statements\":[{\"include\":{\"includes\":[{\"url\":\"a.bare\"}", ",{\"url\":\"a.bare\"}", 32768, "]}}]}");
     bsTestInvalidModel(bsStringData(json));
+    bsTestInvalidModelJSON(bsStringData(json), "Invalid BareScript model");
     bsRelease(json);
 
     /* A script defines at most 65536 functions */
@@ -241,6 +242,200 @@ TEST(model_script_from_json)
     bsTestInvalidModelJSON("{\"statements\": [}", "Expecting value");
     bsTestInvalidModelJSON("{\"statements\": [],}", "Illegal trailing comma before end of object");
     bsTestInvalidModelJSON("{\"statements\": []} x", "Extra data");
+    bsTestInvalidModelJSON("{\"statements\": [{5}]}", "Expecting property name enclosed in double quotes");
+    bsTestInvalidModelJSON("{\"stat\\u0065ments\" []}", "Expecting ':' delimiter");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {5}}]}", "Expecting property name enclosed in double quotes");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"lineNumber\": 1 \"x\": 2}}]}", "Expecting ',' delimiter");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {5}}}]}",
+                           "Expecting property name enclosed in double quotes");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"f\", "
+                           "\"args\": [{\"number\": }]}}}}]}", "Expecting value");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"f\", "
+                           "\"args\": [{\"number\": 1} {\"number\": 2}]}}}}]}", "Expecting ',' delimiter");
+    bsTestInvalidModelJSON("{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": [], "
+                           "\"statements\": [{\"return\": {\"expr\": }}]}}]}", "Expecting value");
+    bsTestInvalidModelJSON("{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": [], "
+                           "\"statements\": [], \"lastArgArray\": }}]}", "Expecting value");
+    bsTestInvalidModelJSON("{\"statements\": [{\"expr\": {\"expr\": {\"binary\": {\"op\": \"+\", "
+                           "\"left\": {\"number\": 1}, \"right\": {\"number\": 2}, \"x\": }}}}]}", "Expecting value");
+    bsTestInvalidModelJSON("{\"state\\qments\": []}", "Invalid \\escape");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"lineNumber\": }}]}", "Expecting value");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"f\", \"args\": "
+                           "[{\"function\": {\"name\": \"g\", \"args\": [{\"number\": }]}}]}}}}]}", "Expecting value");
+    bsTestInvalidModelJSON("{\"statements\": [{\"include\": {\"includes\": [{\"url\": \"a\", \"system\": }]}}]}",
+                           "Expecting value");
+    bsTestInvalidModelJSON("{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": [\"x\" \"y\"], "
+                           "\"statements\": []}}]}", "Expecting ',' delimiter");
+}
+
+
+/* Assert a streamed model's JSON compiles, returning the script */
+static BSScript *bsTestModelJSON(const char *json)
+{
+    const char *error = NULL;
+    BSScript *script = bsScriptFromModelJSON(json, strlen(json), NULL, &error);
+    if (script == NULL) {
+        bsTestFail(__FILE__, __LINE__, "bsScriptFromModelJSON(%s) failed: %s", json, error);
+    }
+    return script;
+}
+
+
+/* Assert a streamed model's JSON compiles and executes to the expected JSON result */
+static void bsTestModelJSONResult(const char *json, const char *expected)
+{
+    BSScript *script = bsTestModelJSON(json);
+    if (script == NULL) {
+        return;
+    }
+    BSOptions *options = bsOptionsNew();
+    ASSERT_VALUE(bsExecuteScript(script, options), expected);
+    bsOptionsFree(options);
+    bsScriptRelease(script);
+}
+
+
+TEST(model_script_from_json_shapes)
+{
+    /* Each statement kind, its members, and the members a statement or expression ignores */
+    bsTestModelJSONResult(
+        "{\"stat\\u0065ments\": ["
+        "{\"expr\": {\"name\": 5, \"expr\": {\"number\": 1}, \"lineNumber\": \"x\"}},"
+        "{\"expr\": {\"name\": \"a\", \"expr\": {\"function\": {\"name\": \"arrayNew\", \"args\": 5, \"extra\": 1}}}},"
+        "{\"expr\": {\"name\": \"b\", \"expr\": {\"binary\": {\"op\": \"+\", \"left\": {\"number\": 1}, "
+        "\"right\": {\"number\": 2}, \"x\": 1}}}},"
+        "{\"expr\": {\"name\": \"c\", \"expr\": {\"unary\": {\"op\": \"-\", \"expr\": {\"number\": 3}, \"x\": 1}}}},"
+        "{\"function\": {\"name\": \"f\", \"args\": 5, \"statements\": [{\"return\": {\"expr\": {\"number\": 4}}}], "
+        "\"lastArgArray\": 0, \"lineCount\": 1}},"
+        "{\"function\": {\"name\": \"g\", \"args\": [\"x\", \"y\"], \"statements\": [{\"return\": {\"expr\": "
+        "{\"function\": {\"name\": \"if\", \"args\": [{\"variable\": \"x\"}, {\"variable\": \"y\"}, "
+        "{\"number\": 0}, {\"bogus\": 1}, {\"number\": 9}]}}}}], \"lastArgArray\": true}},"
+        "{\"jump\": {\"label\": \"skip\", \"expr\": {\"variable\": \"true\"}, \"lineNumber\": 5}},"
+        "{\"return\": {\"expr\": {\"number\": 0}}},"
+        "{\"label\": {\"name\": \"skip\", \"lineNumber\": 6}},"
+        "{\"return\": {\"expr\": {\"function\": {\"name\": \"arrayNew\", \"args\": [{\"variable\": \"a\"}, "
+        "{\"variable\": \"b\"}, {\"variable\": \"c\"}, {\"function\": {\"name\": \"f\"}}, "
+        "{\"function\": {\"name\": \"g\", \"args\": [{\"number\": 1}, {\"number\": 7}]}}]}}}}"
+        "]}",
+        "[[],3,-3,4,[7]]");
+
+    /* A conditional's arguments past its third are not read, so their shapes are not checked - any other function's are */
+    bsTestModelJSONResult(
+        "{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"if\", \"args\": "
+        "[{\"number\": 1}, {\"number\": 2}, {\"number\": 3}, {\"bogus\": 1}]}}}}]}", "2");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"if\", \"args\": "
+                           "[{\"number\": 1}, {\"bogus\": 1}, {\"number\": 3}, {\"number\": 4}]}}}}]}",
+                           "Invalid BareScript model");
+    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"f\", \"args\": "
+                           "[{\"number\": 1}, {\"number\": 2}, {\"number\": 3}, {\"bogus\": 1}]}}}}]}",
+                           "Invalid BareScript model");
+
+    /* An include statement's includes */
+    BSScript *script = bsTestModelJSON(
+        "{\"statements\": [{\"include\": {\"includes\": [{\"url\": \"a.bare\", \"extra\": 1}, "
+        "{\"url\": \"b.bare\", \"system\": true}], \"lineNumber\": 1}}]}");
+    ASSERT_NOT_NULL(script);
+    ASSERT_INT_EQ(script->code.includeCount, 2);
+    ASSERT_VALUE_STRING(bsRetain(script->code.includes[1].url), "b.bare");
+    ASSERT_TRUE(script->code.includes[1].system);
+    ASSERT_FALSE(script->code.includes[0].system);
+    bsScriptRelease(script);
+
+    /* Malformed statements */
+    static const char *const invalid[] = {
+        "{\"statements\": [{\"expr\": 5}]}",
+        "{\"statements\": [{\"expr\": {}}]}",
+        "{\"statements\": [{\"expr\": {\"expr\": {\"bogus\": {}}}}]}",
+        "{\"statements\": [{\"expr\": {\"expr\": {\"number\": 1}, \"x\": 1}, \"y\": 1}]}",
+        "{\"statements\": [{\"jump\": {\"label\": 5}}]}",
+        "{\"statements\": [{\"jump\": {\"expr\": {\"number\": 1}}}]}",
+        "{\"statements\": [{\"jump\": {\"label\": \"x\", \"expr\": {\"bogus\": {}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": 5}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"bogus\": 1}}}]}",
+        "{\"statements\": [{\"label\": {\"name\": 5}}]}",
+        "{\"statements\": [{\"label\": {}}]}",
+        "{\"statements\": [{\"function\": {\"args\": [], \"statements\": []}}]}",
+        "{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": []}}]}",
+        "{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": [5], \"statements\": []}}]}",
+        "{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": [], \"statements\": 5}}]}",
+        "{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": [], \"statements\": [{\"bogus\": {}}]}}]}",
+        "{\"statements\": [{\"include\": {}}]}",
+        "{\"statements\": [{\"include\": {\"includes\": 5}}]}",
+        "{\"statements\": [{\"include\": {\"includes\": []}}]}",
+        "{\"statements\": [{\"include\": {\"includes\": [5]}}]}",
+        "{\"statements\": [{\"include\": {\"includes\": [{}]}}]}",
+        "{\"statements\": [{\"include\": {\"includes\": [{\"url\": 5}]}}]}",
+        /* Malformed expressions */
+        "{\"statements\": [{\"return\": {\"expr\": {\"number\": \"5\"}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"number\": 1e999}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"string\": 5}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"variable\": 5}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"group\": {\"bogus\": 1}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"args\": []}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": 5}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"function\": 5}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"binary\": {\"op\": \"+\"}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"binary\": {\"op\": 5, \"left\": {\"number\": 1}, "
+        "\"right\": {\"number\": 1}}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"binary\": {\"op\": \"??\", \"left\": {\"number\": 1}, "
+        "\"right\": {\"number\": 1}}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"binary\": {\"op\": \"<<<\", \"left\": {\"number\": 1}, "
+        "\"right\": {\"number\": 1}}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"binary\": {\"op\": \"+-\", \"left\": {\"number\": 1}, "
+        "\"right\": {\"number\": 1}}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"binary\": {\"op\": \"+\", \"left\": {\"bogus\": 1}, "
+        "\"right\": {\"number\": 1}}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"unary\": {\"op\": \"-\"}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"unary\": {\"op\": 5, \"expr\": {\"number\": 1}}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"unary\": {\"op\": \"?\", \"expr\": {\"number\": 1}}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"unary\": {\"op\": \"-\", \"expr\": {\"bogus\": 1}}}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"number\": 1, \"x\": 1}}}]}",
+        "{\"statements\": [{\"return\": {\"expr\": {\"bogus\": {}}}}]}"
+    };
+    for (size_t ix = 0; ix < sizeof(invalid) / sizeof(invalid[0]); ix++) {
+        bsTestInvalidModelJSON(invalid[ix], "Invalid BareScript model");
+    }
+
+    /* Nesting past the decoder's depth - at an expression, at a node's members, at an argument array */
+    static const struct {
+        int groups;
+        const char *inner;
+    } deep[] = {
+        {1000, "{\"number\": 1}"},
+        {995, "{\"unary\": {\"op\": \"-\", \"expr\": {\"number\": 1}}}"},
+        {994, "{\"function\": {\"name\": \"f\", \"args\": [{\"number\": 1}]}}"}
+    };
+    for (size_t ix = 0; ix < sizeof(deep) / sizeof(deep[0]); ix++) {
+        BSValue open = bsTestRepeat("{\"statements\": [{\"return\": {\"expr\": ", "{\"group\": ", (size_t) deep[ix].groups,
+                                    deep[ix].inner);
+        BSValue close = bsTestRepeat("", "}", (size_t) deep[ix].groups, "}}]}");
+        BSValue json = bsStringConcat(open, close);
+        bsTestInvalidModelJSON(bsStringData(json), "Maximum nesting depth exceeded");
+        bsRelease(json);
+        bsRelease(open);
+        bsRelease(close);
+    }
+}
+
+
+TEST(model_from_model_shapes)
+{
+    /* A conditional's arguments past its third are not read, so a malformed one stands */
+    ASSERT_VALUE(bsTestExecute("return if(1, 2, 3, 4, 5)"), "2");
+    BSScript *script = bsTestScriptFromJSON(
+        "{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"if\", "
+        "\"args\": [{\"number\": 1}, {\"number\": 2}, {\"number\": 3}, {\"bogus\": 1}]}}}}]}");
+    ASSERT_NOT_NULL(script);
+    BSOptions *options = bsOptionsNew();
+    ASSERT_VALUE(bsExecuteScript(script, options), "2");
+    bsOptionsFree(options);
+    bsScriptRelease(script);
+
+    /* Malformed models */
+    bsTestInvalidModel("{\"statements\": [{\"return\": {\"expr\": {\"variable\": 5}}}]}");
+    bsTestInvalidModel("{\"statements\": [{\"return\": {\"expr\": {\"bogus\": {}}}}]}");
+    bsTestInvalidModel("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"f\", "
+                       "\"args\": [{\"bogus\": 1}]}}}}]}");
 }
 
 
