@@ -265,6 +265,9 @@ typedef struct {
     uint32_t hash;
 } BSInternSlot;
 
+/* The scratch a string builder starts in - past it, and for the results the pool does not take, a heap block */
+#define BS_SB_SCRATCH 256
+
 typedef struct {
     BSString *stringPool[BS_STRING_POOL_CLASSES];
     unsigned stringPoolCount[BS_STRING_POOL_CLASSES];
@@ -280,6 +283,8 @@ typedef struct {
     size_t internMask;
     size_t internCount;
     BSString *shortStrings[128 + 1]; /* the empty string, then each one-byte ASCII string, once created */
+    char sbScratch[BS_SB_SCRATCH];  /* where a string builder's small result takes shape - see bsSBReserve */
+    bool sbScratchBusy;
 } BSValueState;
 
 static _Thread_local BSValueState bsTS;
@@ -824,22 +829,50 @@ static BSString *bsSBString(const BSStringBuilder *sb)
 
 void bsSBFree(BSStringBuilder *sb)
 {
-    free(bsSBString(sb));
+    if (sb->data == bsTS.sbScratch) {
+        bsTS.sbScratchBusy = false;
+    } else {
+        free(bsSBString(sb));
+    }
     bsSBInit(sb);
+}
+
+
+/*
+ * Make room for "size" more bytes. A builder starts in the thread's scratch buffer when it is
+ * free, so a small result - most are - is finished as a pooled string with no allocation of its
+ * own; one that outgrows the scratch, or starts while another builder holds it, has a heap block
+ * that becomes the string uncopied, doubling as it fills or taking a larger request as it is.
+ */
+static BS_NOINLINE void bsSBGrow(BSStringBuilder *sb, size_t needed)
+{
+    if (sb->data == NULL && needed <= BS_SB_SCRATCH && !bsTS.sbScratchBusy) {
+        bsTS.sbScratchBusy = true;
+        sb->data = bsTS.sbScratch;
+        sb->capacity = BS_SB_SCRATCH;
+        return;
+    }
+    bool scratch = sb->data == bsTS.sbScratch;
+    size_t capacity = sb->capacity != 0 ? sb->capacity * 2 : 32;
+    if (capacity < needed) {
+        capacity = needed;
+    }
+    BSString *string = bsRealloc(scratch ? NULL : bsSBString(sb), sizeof(BSString) + BS_STRING_HEAP_HEAD + capacity);
+    char *data = BS_STRING_STORAGE(string) + BS_STRING_HEAP_HEAD;
+    if (scratch) {
+        memcpy(data, sb->data, sb->size);
+        bsTS.sbScratchBusy = false;
+    }
+    sb->data = data;
+    sb->capacity = capacity;
 }
 
 
 void bsSBReserve(BSStringBuilder *sb, size_t size)
 {
-    if (sb->size + size + 1 > sb->capacity) {
-        /* Double, or take a larger request as it is - a file's text is sized once */
-        size_t capacity = sb->capacity != 0 ? sb->capacity * 2 : 32;
-        if (capacity < sb->size + size + 1) {
-            capacity = sb->size + size + 1;
-        }
-        BSString *string = bsRealloc(bsSBString(sb), sizeof(BSString) + BS_STRING_HEAP_HEAD + capacity);
-        sb->data = BS_STRING_STORAGE(string) + BS_STRING_HEAP_HEAD;
-        sb->capacity = capacity;
+    size_t needed = sb->size + size + 1;
+    if (needed > sb->capacity) {
+        bsSBGrow(sb, needed);
     }
 }
 
@@ -890,12 +923,15 @@ void bsSBAppendValue(BSStringBuilder *sb, BSValue value)
 }
 
 
-BSValue bsSBToValue(BSStringBuilder *sb)
+/* Out of line: the pool allocation it inlines would bulk every builder's finish site */
+BS_NOINLINE BSValue bsSBToValue(BSStringBuilder *sb)
 {
-    BSString *string = bsSBString(sb);
-    if (string == NULL) {
-        return bsStringNewSize("", 0);
+    if (sb->data == NULL || sb->data == bsTS.sbScratch) {
+        BSValue value = bsStringNewSize(sb->data != NULL ? sb->data : "", sb->size);
+        bsSBFree(sb);
+        return value;
     }
+    BSString *string = bsSBString(sb);
     /* The buffer becomes the string, uncopied; built this way it is freed rather than pooled */
     bsStringInitHeap(string, sb->size, sb->capacity - 1);
     BSValue value = bsStringFinish(string, sb->size);

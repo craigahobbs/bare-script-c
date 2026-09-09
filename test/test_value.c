@@ -359,6 +359,35 @@ TEST(value_string_builder)
     bsSBAppendString(&sb, "abc");
     bsSBFree(&sb);
     ASSERT_NULL(sb.data);
+
+    /* A builder that outgrows the thread's scratch buffer moves to a heap block and keeps its text */
+    bsSBInit(&sb);
+    for (int ix = 0; ix < 30; ix++) {
+        bsSBAppendString(&sb, "0123456789");
+    }
+    value = bsSBToValue(&sb);
+    ASSERT_INT_EQ(bsStringSize(value), 300);
+    ASSERT_TRUE(strncmp(bsStringData(value) + 290, "0123456789", 10) == 0);
+    bsRelease(value);
+
+    /* A second builder alive while the first holds the scratch builds on the heap, freed or converted */
+    BSStringBuilder inner;
+    bsSBInit(&sb);
+    bsSBAppendString(&sb, "outer");
+    bsSBInit(&inner);
+    bsSBAppendString(&inner, "inner");
+    ASSERT_TRUE(inner.data != sb.data);
+    bsSBFree(&inner);
+    bsSBInit(&inner);
+    bsSBAppendString(&inner, "inner");
+    ASSERT_VALUE_STRING(bsSBToValue(&inner), "inner");
+    ASSERT_VALUE_STRING(bsSBToValue(&sb), "outer");
+
+    /* A first reservation past the scratch takes a heap block at once */
+    bsSBInit(&sb);
+    bsSBReserve(&sb, 1000);
+    bsSBAppendString(&sb, "big");
+    ASSERT_VALUE_STRING(bsSBToValue(&sb), "big");
 }
 
 
