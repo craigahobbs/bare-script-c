@@ -6,6 +6,7 @@
  */
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "barescript/json.h"
@@ -198,13 +199,27 @@ BSValue bsJSONEncode(BSValue value, int indent)
  */
 
 
+/*
+ * The key memo: the keys of the last object decoded at each nesting depth, by position. Records
+ * repeat a shape, so a key is usually the string decoded at the same position of the last
+ * object at this depth - one compare instead of a hash and an intern table probe.
+ */
+#define BS_JSON_MEMO_DEPTH 6
+#define BS_JSON_MEMO_KEYS 12
+
 typedef struct BSJSONParser {
     const char *text;
     size_t size;
     size_t offset;
     const char *error;
     size_t errorOffset;
-} BSJSONParser;
+    BSValue *memo;     /* BS_JSON_MEMO_DEPTH x BS_JSON_MEMO_KEYS keys, allocated at the first key */
+    int memoDepth;     /* the object being decoded: its depth, and the position of the key at hand */
+    size_t memoIndex;
+    bool memoHit;      /* the key at hand came from the memo */
+    size_t memoCount[BS_JSON_MEMO_DEPTH];   /* the last object at each depth: its key count, and whether */
+    bool memoDistinct[BS_JSON_MEMO_DEPTH];  /* every key was new to it - so a record repeating its keys in */
+} BSJSONParser;                             /* order has distinct keys too, and appends without a scan */
 
 
 /* Record a decoding error and its position. Always returns false, for the caller to return. */
@@ -283,10 +298,33 @@ static const char bsJSONUnescape[256] = {
 };
 
 
-/* A decoded string: a plain string, or a key - an interned name when there is one */
-static BSValue bsJSONString(const char *data, size_t size, bool key)
+/* A key: the memo's string for this depth and position when it is the same, else an interned name when there is one */
+static BSValue bsJSONKey(BSJSONParser *parser, const char *data, size_t size)
 {
-    return key ? bsStringInternExisting(data, size) : bsStringNewSize(data, size);
+    parser->memoHit = false;
+    if (parser->memoDepth >= BS_JSON_MEMO_DEPTH || parser->memoIndex >= BS_JSON_MEMO_KEYS) {
+        return bsStringInternExisting(data, size);
+    }
+    if (parser->memo == NULL) {
+        parser->memo = bsAlloc(BS_JSON_MEMO_DEPTH * BS_JSON_MEMO_KEYS * sizeof(BSValue));
+        for (size_t ix = 0; ix < BS_JSON_MEMO_DEPTH * BS_JSON_MEMO_KEYS; ix++) {
+            parser->memo[ix] = bsNull();
+        }
+    }
+    BSValue *slot = &parser->memo[parser->memoDepth * BS_JSON_MEMO_KEYS + parser->memoIndex];
+    if (slot->type == BS_STRING && slot->u.string->size == size && memcmp(slot->u.string->data, data, size) == 0) {
+        parser->memoHit = true;
+        return bsRetain(*slot);
+    }
+    BSValue key = bsStringInternExisting(data, size);
+    bsAssign(slot, bsRetain(key));
+    return key;
+}
+
+/* A decoded string: a plain string, or a key */
+static BSValue bsJSONString(BSJSONParser *parser, const char *data, size_t size, bool key)
+{
+    return key ? bsJSONKey(parser, data, size) : bsStringNewSize(data, size);
 }
 
 /*
@@ -301,7 +339,7 @@ static inline bool bsJSONDecodePlainString(BSJSONParser *parser, BSValue *result
     while (ix < parser->size) {
         unsigned char ch = (unsigned char) parser->text[ix];
         if (ch == '"') {
-            *result = bsJSONString(parser->text + begin, ix - begin, key);
+            *result = bsJSONString(parser, parser->text + begin, ix - begin, key);
             parser->offset = ix + 1;
             return true;
         }
@@ -376,7 +414,7 @@ static BS_NOINLINE bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result
         }
     }
 
-    *result = bsJSONString(sb.data, sb.size, key);
+    *result = bsJSONString(parser, sb.data, sb.size, key);
     bsSBFree(&sb);
     return true;
 }
@@ -463,8 +501,20 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
         *result = object;
         return true;
     }
-    while (true) {
+
+    /*
+     * A key that repeats the last object's at its position, every key so far having done so and
+     * that object's keys having all been new to it, is new to this object too: appended, no scan
+     */
+    bool memoed = depth < BS_JSON_MEMO_DEPTH;
+    bool inOrder = memoed && parser->memoDistinct[depth];
+    size_t previousCount = memoed ? parser->memoCount[depth] : 0;
+    bool distinct = true;
+    size_t index = 0;
+    for (;; index++) {
         BSValue key;
+        parser->memoDepth = depth;
+        parser->memoIndex = index;
         if (!bsJSONDecodeKey(parser, &key)) {
             bsRelease(object);
             return false;
@@ -475,7 +525,14 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
             bsRelease(object);
             return false;
         }
-        bsObjectSetString(object, key, item);
+        inOrder = inOrder && parser->memoHit && index < previousCount;
+        if (inOrder) {
+            bsObjectAppend(object, key, item);
+        } else {
+            size_t count = bsObjectCount(object);
+            bsObjectSetString(object, key, item);
+            distinct = distinct && bsObjectCount(object) > count;
+        }
         bsRelease(key);
         int separator = bsJSONSeparator(parser, '}');
         if (separator < 0) {
@@ -485,6 +542,10 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
         if (separator > 0) {
             break;
         }
+    }
+    if (memoed) {
+        parser->memoCount[depth] = index + 1;
+        parser->memoDistinct[depth] = distinct;
     }
     *result = object;
     return true;
@@ -599,9 +660,15 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
 BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t *errorOffset)
 {
     bsModelKeysInit();
-    BSJSONParser parser = {text, size, 0, NULL, 0};
+    BSJSONParser parser = {text, size, 0, NULL, 0, NULL, 0, 0, false, {0}, {false}};
     BSValue result;
     bool decoded = bsJSONDecodeValue(&parser, 0, &result);
+    if (parser.memo != NULL) {
+        for (size_t ix = 0; ix < BS_JSON_MEMO_DEPTH * BS_JSON_MEMO_KEYS; ix++) {
+            bsRelease(parser.memo[ix]);
+        }
+        free(parser.memo);
+    }
     if (decoded) {
         bsJSONSkipSpace(&parser);
         if (parser.offset != parser.size) {

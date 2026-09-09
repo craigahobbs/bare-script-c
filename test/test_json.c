@@ -175,6 +175,39 @@ TEST(json_decode_string_escapes)
 }
 
 
+TEST(json_decode_key_memo)
+{
+    /* Records of one shape take their keys from the memo; a different key at a memo'd position replaces it;
+       a key past the memo's depth or width, and an escaped key, intern as before */
+    const char *text = "[{\"a\": 1, \"b\": {\"c\": 2}}, {\"a\": 3, \"b\": {\"c\": 4}}, {\"a\": 5, \"bb\": {\"c\": 6}}, "
+                       "{\"a\\u0062\": 7, \"k0\": 0, \"k1\": 1, \"k2\": 2, \"k3\": 3, \"k4\": 4, \"k5\": 5, \"k6\": 6, \"k7\": 7, "
+                       "\"k8\": 8, \"k9\": 9, \"k10\": 10, \"k11\": 11, \"k12\": 12}, "
+                       "{\"d\": {\"d\": {\"d\": {\"d\": {\"d\": {\"d\": {\"d\": 8}}}}}}}]";
+    BSValue value = bsJSONDecode(text, strlen(text), NULL);
+    ASSERT_VALUE(value, "[{\"a\":1,\"b\":{\"c\":2}},{\"a\":3,\"b\":{\"c\":4}},{\"a\":5,\"bb\":{\"c\":6}},"
+                        "{\"ab\":7,\"k0\":0,\"k1\":1,\"k10\":10,\"k11\":11,\"k12\":12,\"k2\":2,\"k3\":3,\"k4\":4,\"k5\":5,"
+                        "\"k6\":6,\"k7\":7,\"k8\":8,\"k9\":9},{\"d\":{\"d\":{\"d\":{\"d\":{\"d\":{\"d\":{\"d\":8}}}}}}}]");
+    /* A record repeating a record with a repeated key still keeps the last value; one repeating a
+       distinct record appends, and a longer one scans its extra keys */
+    const char *dupes = "[{\"a\": 1, \"a\": 2, \"b\": 3}, {\"a\": 4, \"a\": 5, \"b\": 6}, {\"a\": 7, \"b\": 8, \"b\": 9}, "
+                        "{\"a\": 10, \"b\": 11, \"c\": 12, \"a\": 13}]";
+    ASSERT_VALUE(bsJSONDecode(dupes, strlen(dupes), NULL),
+                 "[{\"a\":2,\"b\":3},{\"a\":5,\"b\":6},{\"a\":7,\"b\":9},{\"a\":13,\"b\":11,\"c\":12}]");
+
+    /* The second record's keys are the first's strings */
+    BSValue first = bsObjectKeys(bsArrayGet(value, 0));
+    BSValue second = bsObjectKeys(bsArrayGet(value, 1));
+    ASSERT_TRUE(bsArrayGet(first, 0).u.string == bsArrayGet(second, 0).u.string);
+    ASSERT_TRUE(bsArrayGet(first, 1).u.string == bsArrayGet(second, 1).u.string);
+    bsRelease(first);
+    bsRelease(second);
+    bsRelease(value);
+
+    /* A decode with no object allocates no memo */
+    ASSERT_VALUE(bsJSONDecode("[1, \"x\"]", 8, NULL), "[1,\"x\"]");
+}
+
+
 TEST(json_decode_containers)
 {
     ASSERT_VALUE(bsTestJSON("[]"), "[]");
