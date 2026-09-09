@@ -1241,7 +1241,7 @@ static uint8_t bsCallOpcode(const char *name, size_t argCount)
         {"arrayGet", 2, 2, BS_OP_CALL_ARRAY_GET}, {"arrayLength", 1, 1, BS_OP_CALL_ARRAY_LENGTH},
         {"arrayPush", 2, 2, BS_OP_CALL_ARRAY_PUSH}, {"arraySet", 3, 3, BS_OP_CALL_ARRAY_SET},
         {"objectGet", 2, 3, BS_OP_CALL_OBJECT_GET}, {"objectHas", 2, 2, BS_OP_CALL_OBJECT_HAS},
-        {"objectSet", 3, 3, BS_OP_CALL_OBJECT_SET},
+        {"objectSet", 3, 3, BS_OP_CALL_OBJECT_SET}, {"stringCharCodeAt", 2, 2, BS_OP_CALL_STRING_CHAR_CODE_AT},
         {"stringLength", 1, 1, BS_OP_CALL_STRING_LENGTH}, {"stringSlice", 2, 3, BS_OP_CALL_STRING_SLICE}
     };
     for (size_t ix = 0; ix < sizeof(table) / sizeof(table[0]); ix++) {

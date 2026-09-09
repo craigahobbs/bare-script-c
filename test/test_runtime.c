@@ -1148,14 +1148,17 @@ TEST(runtime_intrinsic_opcodes)
         "function f(a, i, o, k, s, e):\n"
         "    stringSlice(s, i, e)\n"
         "    return [arrayGet(a, i), arrayLength(a), arrayPush(a, 2), arraySet(a, i, 1), objectGet(o, k), "
-        "objectSet(o, k, 1), stringLength(s), stringSlice(s, i, e), stringSlice(s, i), objectHas(o, k)]\n"
+        "objectSet(o, k, 1), stringLength(s), stringSlice(s, i, e), stringSlice(s, i), objectHas(o, k), "
+        "stringCharCodeAt(s, i)]\n"
         "endfunction\n"
         "f([1], 0, {'k': 3}, 'k', 'abc', 1)\n"
         "return [f([1], 1, {}, 'k', 'ab', 0), f('x', 'y', 1, 'k', 1, 'z'), f([1], 0.5, {}, 'k', 'abc', 'x'), "
-        "f([1], 0, {}, 'k', 'abc', 4), f([1], 0, {}, 'k', 'abc', 'x'), f([1], 'y', {}, 'k', 'abc', 1)]"),
-        "[[null,1,[1,1],1,null,1,2,\"\",\"b\",true],[null,0,null,null,null,null,0,null,null,false],"
-        "[null,1,[1,2],null,null,1,3,null,null,true],[1,1,[1,2],1,null,1,3,null,\"abc\",true],"
-        "[1,1,[1,2],1,null,1,3,null,\"abc\",true],[null,1,[1,2],null,null,1,3,null,null,true]]");
+        "f([1], 0, {}, 'k', 'abc', 4), f([1], 0, {}, 'k', 'abc', 'x'), f([1], 'y', {}, 'k', 'abc', 1), "
+        "f([1], 1, {}, 'k', '\xc3\xa9x', 1), f([1], 3, {}, 'k', 'abc', 1)]"),
+        "[[null,1,[1,1],1,null,1,2,\"\",\"b\",true,98],[null,0,null,null,null,null,0,null,null,false,null],"
+        "[null,1,[1,2],null,null,1,3,null,null,true,null],[1,1,[1,2],1,null,1,3,null,\"abc\",true,97],"
+        "[1,1,[1,2],1,null,1,3,null,\"abc\",true,97],[null,1,[1,2],null,null,1,3,null,null,true,null],"
+        "[null,1,[1,1],1,null,1,2,\"\",\"x\",true,120],[null,1,[1,2],null,null,1,3,\"\",\"\",true,null]]");
 
     /* A script function of the same name shadows the intrinsic - the site's global is not the library's */
     ASSERT_VALUE(bsTestExecute(
@@ -1167,8 +1170,10 @@ TEST(runtime_intrinsic_opcodes)
         "function objectSet(o, k, v):\n    return -5\nendfunction\n"
         "function stringLength(s):\n    return -6\nendfunction\n"
         "function objectHas(o, k):\n    return -7\nendfunction\n"
+        "function stringCharCodeAt(s, i):\n    return -8\nendfunction\n"
         "return [arrayGet([1], 0), arrayLength([]), arrayPush([], 1), arraySet([1], 0, 2), objectGet({}, 'k'), "
-        "objectSet({}, 'k', 1), stringLength('abc'), objectHas({}, 'k')]"), "[\"mine\",-1,-2,-3,-4,-5,-6,-7]");
+        "objectSet({}, 'k', 1), stringLength('abc'), objectHas({}, 'k'), stringCharCodeAt('a', 0)]"),
+        "[\"mine\",-1,-2,-3,-4,-5,-6,-7,-8]");
 
     /* A locals object shadows too - an expression evaluated with locals takes the general call */
     ASSERT_VALUE(bsTestExecute(
@@ -1194,9 +1199,9 @@ TEST(runtime_intrinsic_opcodes)
 
     /* Called through a local holding the function, the library function itself runs */
     ASSERT_VALUE(bsTestExecute(
-        "function g():\n    f = arrayGet\n    h = objectGet\n    k = stringSlice\n"
-        "    return [f([1, 2], 1), h({'k': 3}, 'k'), h({}, 'k', 4), k('abcdef', 1, 3)]\n"
-        "endfunction\nreturn g()"), "[2,3,4,\"bc\"]");
+        "function g():\n    f = arrayGet\n    h = objectGet\n    k = stringSlice\n    c = stringCharCodeAt\n"
+        "    return [f([1, 2], 1), h({'k': 3}, 'k'), h({}, 'k', 4), k('abcdef', 1, 3), c('abc', 1)]\n"
+        "endfunction\nreturn g()"), "[2,3,4,\"bc\",98]");
 }
 
 

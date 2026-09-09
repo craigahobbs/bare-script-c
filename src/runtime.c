@@ -478,8 +478,9 @@ static BSValue bsRunChunk(const BSCode *code, BSScript *script, BSOptions *optio
  * Returns true with "*result" set to the owned return value when the arguments are the happy-path
  * shape; false means the caller runs the full library function, which validates the arguments and
  * reports the error. The intrinsics with one argument shape - arrayGet, arrayLength, arrayPush,
- * arraySet, objectGet, objectHas, objectSet, stringLength, stringSlice - have call opcodes of their
- * own, which run them in place; their ids only identify the library function to those opcodes' guard.
+ * arraySet, objectGet, objectHas, objectSet, stringCharCodeAt, stringLength, stringSlice - have call
+ * opcodes of their own, which run them in place; their ids only identify the library function to those
+ * opcodes' guard.
  */
 static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
 {
@@ -568,16 +569,6 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
         }
         *result = object;
         return true;
-    }
-    case BS_INTRIN_STRING_CHAR_CODE_AT: {
-        /* An ASCII string's code point is its byte */
-        size_t index;
-        if (argCount == 2 && args[0].type == BS_STRING && args[0].u.string->length == args[0].u.string->size &&
-            bsIntrinsicIndex(args[1], &index) && index < args[0].u.string->size) {
-            *result = bsNumber((double) (unsigned char) args[0].u.string->data[index]);
-            return true;
-        }
-        return false;
     }
     BS_INTRIN(STRING_ENDS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
               bsBoolean(bsStringEndsWith(args[0], args[1])))
@@ -965,7 +956,7 @@ static inline BSValue bsOperandTake(BSValue *regs, size_t slotCount, size_t owne
 /*
  * The intrinsic call opcodes' fast paths
  *
- * A CALL_NAME of one of the nine opcode intrinsics compiles to an opcode of its own, whose
+ * A CALL_NAME of one of the ten opcode intrinsics compiles to an opcode of its own, whose
  * handler runs one of these: the site's cached global must be the library function - the one
  * function value carrying that intrinsic id, so a script function of the same name is not it - a
  * locals object must not shadow the name, and the arguments must be the happy-path shape. Any
@@ -1127,6 +1118,24 @@ static inline bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSV
         *memo = object.u.object->count - 1;
     }
     bsIntrinResult(inst, regs, value);
+    return true;
+}
+
+/* An ASCII string's code point is its byte; any other string takes the general call */
+static inline bool bsIntrinStringCharCodeAt(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
+                                                 BSOptions *options)
+{
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_STRING_CHAR_CODE_AT);
+    size_t index;
+    if (args == NULL) {
+        return false;
+    }
+    BSValue string = bsOperandRead(regs, args->a);
+    if (string.type != BS_STRING || string.u.string->length != string.u.string->size ||
+        !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) || index >= string.u.string->size) {
+        return false;
+    }
+    bsIntrinResult(inst, regs, bsNumber((double) (unsigned char) string.u.string->data[index]));
     return true;
 }
 
@@ -1361,7 +1370,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         &&op_BAND, &&op_BOR, &&op_BXOR, &&op_SHL, &&op_SHR, &&op_NEG, &&op_NOT, &&op_BNOT,
         &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT, &&op_CALL_ARRAY_GET,
         &&op_CALL_ARRAY_LENGTH, &&op_CALL_ARRAY_PUSH, &&op_CALL_ARRAY_SET, &&op_CALL_OBJECT_GET,
-        &&op_CALL_OBJECT_HAS, &&op_CALL_OBJECT_SET, &&op_CALL_STRING_LENGTH, &&op_CALL_STRING_SLICE, &&op_JUMP_EQ,
+        &&op_CALL_OBJECT_HAS, &&op_CALL_OBJECT_SET, &&op_CALL_STRING_CHAR_CODE_AT, &&op_CALL_STRING_LENGTH,
+        &&op_CALL_STRING_SLICE, &&op_JUMP_EQ,
         &&op_JUMP_NE, &&op_JUMP_LT, &&op_JUMP_LE, &&op_JUMP_GT, &&op_JUMP_GE
     };
     /* "inst" is the instruction being run; BS_NEXT runs the one after it, BS_GOTO the one at an index */
@@ -1460,6 +1470,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CALL_INTRIN(CALL_OBJECT_GET, bsIntrinObjectGet)
         BS_CALL_INTRIN(CALL_OBJECT_HAS, bsIntrinObjectHas)
         BS_CALL_INTRIN(CALL_OBJECT_SET, bsIntrinObjectSet)
+        BS_CALL_INTRIN(CALL_STRING_CHAR_CODE_AT, bsIntrinStringCharCodeAt)
         BS_CALL_INTRIN(CALL_STRING_LENGTH, bsIntrinStringLength)
         BS_CALL_INTRIN(CALL_STRING_SLICE, bsIntrinStringSlice)
 #undef BS_CALL_INTRIN
