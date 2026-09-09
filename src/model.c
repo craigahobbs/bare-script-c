@@ -110,6 +110,7 @@ static void bsFunctionDefFree(BSFunctionDef *def)
 {
     bsRelease(def->name);
     bsCodeFree(&def->code);
+    free(def->frame);
     free(def);
 }
 

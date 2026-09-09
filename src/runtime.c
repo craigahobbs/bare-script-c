@@ -419,7 +419,14 @@ static void bsScriptFunctionFree(void *data)
 }
 
 
-/* The script function implementation */
+/*
+ * The script function implementation
+ *
+ * The registers are the slots, filled from the arguments, then the temporaries, null, then the
+ * constants. A function called more than once keeps a resident frame: its constants stay in
+ * place and its owned registers are released to null on the way out, so a call fills only the
+ * slots. A recursive call, finding the frame busy, builds a frame of its own.
+ */
 static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BSScriptFunction *scriptFunction = data;
@@ -428,9 +435,26 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     size_t ownedCount = slotCount + def->code.tempCount;
     size_t regCount = ownedCount + def->code.constantCount;
 
-    /* The registers: the slots, filled from the arguments, then the temporaries, nulled, then the constants */
     BSValue regsInline[BS_REGS_INLINE];
-    BSValue *regs = regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue));
+    BSValue *regs;
+    bool resident = def->frame != NULL && !def->frameBusy;
+    if (resident) {
+        regs = def->frame;
+    } else {
+        if (def->called && def->frame == NULL) {
+            def->frame = bsAlloc(regCount * sizeof(BSValue));
+            regs = def->frame;
+            resident = true;
+        } else {
+            regs = regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue));
+        }
+        for (size_t ix = slotCount; ix < ownedCount; ix++) {
+            regs[ix] = bsNull();
+        }
+        memcpy(regs + ownedCount, def->code.constants, def->code.constantCount * sizeof(BSValue));
+    }
+    def->called = true;
+    def->frameBusy = def->frameBusy || resident;
 
     for (size_t ix = 0; ix < def->argCount; ix++) {
         if (def->lastArgArray && ix + 1 == def->argCount) {
@@ -442,13 +466,17 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
     for (size_t ix = def->argCount; ix < slotCount; ix++) {
         regs[ix] = bsUnset();
     }
-    for (size_t ix = slotCount; ix < ownedCount; ix++) {
-        regs[ix] = bsNull();
-    }
-    memcpy(regs + ownedCount, def->code.constants, def->code.constantCount * sizeof(BSValue));
 
     BSValue result = bsRunCode(&def->code, scriptFunction->script, options, regs, bsNull(), false);
-    bsRegsRelease(regs, ownedCount, regsInline);
+    if (resident) {
+        for (size_t ix = 0; ix < ownedCount; ix++) {
+            bsReleaseInline(regs[ix]);
+            regs[ix] = bsNull();
+        }
+        def->frameBusy = false;
+    } else {
+        bsRegsRelease(regs, ownedCount, regsInline);
+    }
     return result;
 }
 

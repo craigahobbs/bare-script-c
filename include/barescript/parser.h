@@ -103,6 +103,9 @@ struct BSFunctionDef {
     size_t argCount;      /* the arguments are the first slots of the code */
     bool lastArgArray;
     BSCode code;
+    BSValue *frame;       /* the resident frame - registers kept between calls, from the second call */
+    bool frameBusy;       /* the resident frame is in use, so a recursive call builds its own */
+    bool called;          /* the function has been called once */
 };
 
 
