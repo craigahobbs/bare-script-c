@@ -189,9 +189,6 @@ BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scrip
  */
 void bsScriptForgetModel(BSScript *script);
 
-/* Convert a compiled expression to its JSON "Expression" model - returns an owned object value */
-BSValue bsExprToModel(const BSExpr *expr);
-
 
 /* Script reference counting */
 BSScript *bsScriptRetain(BSScript *script);

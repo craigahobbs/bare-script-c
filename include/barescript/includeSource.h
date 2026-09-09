@@ -32,15 +32,8 @@ BS_VISIBILITY_BEGIN
 #define BS_INCLUDE_COUNT 32
 
 
-/* A bundled include library stub accessor - returns its include's inflated binary script model and its size */
-typedef const unsigned char *(*BSIncludeSourceFn)(size_t *size);
-
-/* The bundled include library stub accessors, in registry order */
-extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];
-
-
 /*
- * The bundled include library stub accessors
+ * The bundled include library stub accessors - each returns its include's inflated binary script model and its size
  */
 
 /* args.bare - the inflated binary script model and its size */
@@ -159,6 +152,10 @@ extern BSIncludeSource bsIncludeSources[BS_INCLUDE_COUNT];
 
 /* The shared string table - the strings the optional includes' models refer to in common */
 extern const BSIncludeSource bsIncludeSourceShared;
+
+/* The stub accessors, in registry order */
+typedef const unsigned char *(*BSIncludeSourceFn)(size_t *size);
+extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];
 
 #ifdef __cplusplus
 }

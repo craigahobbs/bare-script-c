@@ -680,11 +680,7 @@ async function main():
         'const BSIncludeSourceFn bsIncludeSourceStubs[] = {\n' + arrayJoin(stubs, ',\n') + '\n};\n')
 
     arrayPush(headerParts, arrayLength(files) + '\n\n\n' + \
-        "/* A bundled include library stub accessor - returns its include's inflated binary script model and its size */\n" + \
-        'typedef const unsigned char *(*BSIncludeSourceFn)(size_t *size);\n\n' + \
-        '/* The bundled include library stub accessors, in registry order */\n' + \
-        'extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];\n\n\n' + \
-        '/*\n * The bundled include library stub accessors\n */\n\n' + \
+        '/*\n * The bundled include library stub accessors - each returns its include\'s inflated binary script model and its size\n */\n\n' + \
         arrayJoin(accessors, '\n\n') + '\n\n\n' + \
         'BS_VISIBILITY_END\n\n\n' + \
         '/*\n * The registry tables - the implementation\'s and its tests\', not exported\n */\n\n' + \
@@ -698,6 +694,9 @@ async function main():
         'extern BSIncludeSource bsIncludeSources[BS_INCLUDE_COUNT];\n\n' + \
         '/* The shared string table - the strings the optional includes\' models refer to in common */\n' + \
         'extern const BSIncludeSource bsIncludeSourceShared;\n\n' + \
+        '/* The stub accessors, in registry order */\n' + \
+        'typedef const unsigned char *(*BSIncludeSourceFn)(size_t *size);\n' + \
+        'extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];\n\n' + \
         '#ifdef __cplusplus\n}\n#endif\n\n#endif\n')
 
     # Write the generated files

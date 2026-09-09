@@ -77,12 +77,6 @@ void bsArgsFree(const BSArgModel *argModel, size_t argModelCount, BSValue *value
 /* Add the BareScript library's script functions to a globals object */
 void bsLibraryGlobals(BSValue globals);
 
-/* Look up a built-in expression function alias (min, max, len, ...); returns a borrowed value */
-BSValue bsLibraryExpressionFunction(BSValue name);
-
-/* Look up a built-in script function by name; returns a borrowed value */
-BSValue bsLibraryScriptFunction(const char *name);
-
 /*
  * Release the calling thread's library function values and HTTP connection pool - call at thread
  * exit, before bsValueCleanup

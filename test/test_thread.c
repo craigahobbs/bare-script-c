@@ -110,7 +110,7 @@ static void *bsThreadRun(void *data)
         bsParserErrorFree(&error);
     } else {
         BSOptions *options = bsOptionsNew();
-        BSValue result = bsEvaluateExpression(expr, options, NULL, true);
+        BSValue result = bsEvaluateExpression(expr, options, bsNull(), true);
         if (result.type != BS_NUMBER || result.u.number != 7) {
             bsThreadFail(task, "evaluate expression", "not 7");
         }

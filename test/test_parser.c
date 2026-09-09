@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "test.h"
+#include "../src/internal.h"
 
 
 /* Parse script text and return its model as JSON, or the parse error message */

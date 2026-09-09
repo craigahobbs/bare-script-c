@@ -45,9 +45,6 @@ void bsLogStdout(const char *text, void *data);
  */
 char *bsUrlFileRelative(const char *url, void *data);
 
-/* True if the text begins with a URL scheme ("http:", "file:", ...) */
-bool bsUrlIsURL(const char *url);
-
 
 BS_VISIBILITY_END
 

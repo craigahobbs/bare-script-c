@@ -235,14 +235,6 @@ const char *bsStringData(BSValue value);
 size_t bsStringSize(BSValue value);   /* the size, in bytes */
 size_t bsStringLength(BSValue value); /* the length, in Unicode code points */
 
-/*
- * Concatenate two values' string representations - returns an owned string value
- *
- * The result is allocated once, at its final size, so the "+" operator does not pay for a growable
- * buffer and an intermediate string on every concatenation.
- */
-BSValue bsStringConcat(BSValue left, BSValue right);
-
 /* Get the byte offset of a code point index; returns the string size if out of range */
 size_t bsStringOffset(BSValue value, size_t index);
 
@@ -318,23 +310,6 @@ bool bsObjectIter(BSValue value, BSObjectIterFn iter, void *data);
 
 /* Iterate an object's key/value pairs in sorted key order. Return false to stop iteration. */
 bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data);
-
-
-/*
- * Number values
- */
-
-/* Round a number to "digits" decimal digits; returns false if the scaled number is past the double range */
-bool bsNumberRound(double value, double digits, double *result);
-
-/* Parse a number string; returns false if parsing fails */
-bool bsNumberParse(const char *text, size_t size, double *result);
-
-/* Parse an integer string of the given radix (2 - 36); returns false if parsing fails */
-bool bsIntegerParse(const char *text, size_t size, int radix, double *result);
-
-/* Format a number the way JavaScript's Number.prototype.toString does */
-size_t bsNumberFormat(double value, char *buffer, size_t bufferSize);
 
 
 /*

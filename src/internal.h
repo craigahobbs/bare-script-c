@@ -138,6 +138,25 @@ BSString *bsStringAppendValue(BSString *string, BSValue value);
 /* strtod over an unterminated span */
 double bsStrtod(const char *text, size_t size);
 
+/* Round a number to "digits" decimal digits; returns false if the scaled number is past the double range */
+bool bsNumberRound(double value, double digits, double *result);
+
+/* Parse a number string; returns false if parsing fails */
+bool bsNumberParse(const char *text, size_t size, double *result);
+
+/* Parse an integer string of the given radix (2 - 36); returns false if parsing fails */
+bool bsIntegerParse(const char *text, size_t size, int radix, double *result);
+
+/* Format a number the way JavaScript's Number.prototype.toString does */
+size_t bsNumberFormat(double value, char *buffer, size_t bufferSize);
+
+/*
+ * Concatenate two values' string representations - returns an owned string value. The result is
+ * allocated once, at its final size, so the "+" operator does not pay for a growable buffer and an
+ * intermediate string on every concatenation.
+ */
+BSValue bsStringConcat(BSValue left, BSValue right);
+
 /* Allocate a string whose bytes are already known to be ASCII (length == size). */
 BSValue bsStringNewAscii(const char *text, size_t size);
 
@@ -312,6 +331,9 @@ BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const 
 
 /* Intern the parser-model object keys so JSON decode and emit share interned names */
 void bsModelKeysInit(void);
+
+/* Convert a compiled expression to its JSON "Expression" model - returns an owned object value */
+BSValue bsExprToModel(const BSExpr *expr);
 
 /*
  * The line of the statement containing the instruction at "pc" - the last of "count" statements
@@ -494,6 +516,10 @@ BSValue bsRegexMatchImpl(BSValue regex, BSValue string);
 /* A value's interned type name string - "array", "boolean", ... - as an owned value */
 BSValue bsSystemTypeName(BSValue value);
 
+/* Look up a built-in script function by name, or an expression function alias (min, max, len, ...); borrowed */
+BSValue bsLibraryScriptFunction(const char *name);
+BSValue bsLibraryExpressionFunction(BSValue name);
+
 
 /*
  * The runtime (runtime.c)
@@ -546,6 +572,9 @@ bool bsIncludeSharedString(size_t index, BSValue *string);
 
 /* Release the calling thread's HTTP connection pool */
 void bsFetchCleanup(void);
+
+/* True if the text begins with a URL scheme ("http:", "file:", ...) */
+bool bsUrlIsURL(const char *url);
 
 
 #endif

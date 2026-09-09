@@ -215,7 +215,7 @@ int bsMain(int argc, char **argv)
                 statusCode = 1;
                 break;
             }
-            BSValue value = bsEvaluateExpression(expr, options, NULL, true);
+            BSValue value = bsEvaluateExpression(expr, options, bsNull(), true);
             bsExprFree(expr);
             bsObjectSet(sharedGlobals, vars[ix].name, value);
             const char *error = bsErrorGet(options);

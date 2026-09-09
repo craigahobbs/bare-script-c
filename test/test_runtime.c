@@ -393,59 +393,44 @@ TEST(runtime_error_helpers)
 }
 
 
-TEST(runtime_scope_init)
-{
-    BSScope scope;
-    bsScopeInit(&scope);
-    ASSERT_INT_EQ(scope.object.type, BS_NULL);
-}
-
-
 TEST(runtime_evaluate_expression)
 {
     BSOptions *options = bsTestOptions();
     BSExpr *expr = bsParseExpression("1 + 2", 5, 0, NULL, false, NULL);
-    ASSERT_VALUE(bsEvaluateExpression(expr, options, NULL, false), "3");
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, bsNull(), false), "3");
     bsExprFree(expr);
 
     /* The built-in expression function aliases */
     expr = bsParseExpression("max(1, 5, 3)", 12, 0, NULL, false, NULL);
-    ASSERT_VALUE(bsEvaluateExpression(expr, options, NULL, true), "5");
-    ASSERT_VALUE(bsEvaluateExpression(expr, options, NULL, false), "null");
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, bsNull(), true), "5");
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, bsNull(), false), "null");
     ASSERT_STR_EQ(bsErrorGet(options), "Undefined function \"max\"");
     bsErrorClear(options);
     bsExprFree(expr);
 
     /* A locals object */
     expr = bsParseExpression("a + b", 5, 0, NULL, false, NULL);
-    BSScope scope;
-    bsScopeInit(&scope);
     BSValue locals = bsObjectNew();
     bsObjectSet(locals, "a", bsNumber(1));
-    scope.object = locals;
     bsObjectSet(options->globals, "b", bsNumber(2));
-    ASSERT_VALUE(bsEvaluateExpression(expr, options, &scope, false), "3");
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, locals, false), "3");
     bsRelease(locals);
     bsExprFree(expr);
 
     /* A function value in the locals object */
     bsLibraryGlobals(options->globals);
     expr = bsParseExpression("f(-3)", 5, 0, NULL, false, NULL);
-    bsScopeInit(&scope);
     locals = bsObjectNew();
     bsObjectSet(locals, "f", bsRetain(bsObjectGet(options->globals, "mathAbs")));
-    scope.object = locals;
-    ASSERT_VALUE(bsEvaluateExpression(expr, options, &scope, false), "3");
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, locals, false), "3");
     bsRelease(locals);
     bsExprFree(expr);
 
     /* A locals object that does not contain the function falls through to globals */
     expr = bsParseExpression("mathAbs(-5)", 11, 0, NULL, false, NULL);
-    bsScopeInit(&scope);
     locals = bsObjectNew();
     bsObjectSet(locals, "other", bsNumber(1));
-    scope.object = locals;
-    ASSERT_VALUE(bsEvaluateExpression(expr, options, &scope, false), "5");
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, locals, false), "5");
     bsRelease(locals);
     bsExprFree(expr);
 
@@ -453,7 +438,7 @@ TEST(runtime_evaluate_expression)
     expr = bsParseExpression("mathAbs(-1)", 11, 0, NULL, false, NULL);
     BSValue savedGlobals = options->globals;
     options->globals = bsNull();
-    ASSERT_VALUE(bsEvaluateExpression(expr, options, NULL, false), "null");
+    ASSERT_VALUE(bsEvaluateExpression(expr, options, bsNull(), false), "null");
     options->globals = savedGlobals;
     bsExprFree(expr);
 

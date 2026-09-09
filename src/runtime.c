@@ -147,12 +147,6 @@ void bsLog(BSOptions *options, const char *format, ...)
 }
 
 
-void bsScopeInit(BSScope *scope)
-{
-    scope->object = bsNull();
-}
-
-
 /*
  * The system include library
  */
@@ -1746,9 +1740,9 @@ fail:
 }
 
 
-BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins)
+BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSValue locals, bool builtins)
 {
-    return bsRunChunk(&expr->code, NULL, options, scope != NULL ? scope->object : bsNull(), builtins);
+    return bsRunChunk(&expr->code, NULL, options, locals, builtins);
 }
 
 

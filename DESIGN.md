@@ -258,7 +258,7 @@ When `__barescriptCoverage` is enabled, each compiled script keeps a line-indexe
 pointers into the coverage object's per-line counts, so a loop increments a number instead of
 formatting a line key and searching the covered object on every statement.
 
-`bsScriptToModel` and `bsExprToModel` return the model (with `scriptName` / `scriptLines` /
+`bsScriptToModel` (and, internally, `bsExprToModel`) return the model (with `scriptName` / `scriptLines` /
 `system` overlaid), which is how the linter receives a script and how `barescriptEvaluateExpression`
 works. A model is several times the size of its script text and only the linter and coverage
 reporting read it, so a compiled script does not have to keep one: `bsScriptForgetModel` drops it,
@@ -310,8 +310,6 @@ its size:
 const unsigned char *bsIncludeSourceUnittest(size_t *size);      /* unittest.bare */
 const unsigned char *bsIncludeSourceMarkdownUp(size_t *size);    /* markdownUp.bare */
 /* ... one per bundled script ... */
-
-extern const BSIncludeSourceFn bsIncludeSourceStubs[BS_INCLUDE_COUNT];   /* all of them, in order */
 ```
 
 `runtime.h` adds `bsIncludeCount`, `bsIncludeName`, and `bsIncludeSource` for lookup by name. A model

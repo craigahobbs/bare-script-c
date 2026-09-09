@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "test.h"
+#include "../src/internal.h"
 
 
 /* Assert a model's JSON is rejected with an error */

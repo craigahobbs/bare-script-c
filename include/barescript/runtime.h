@@ -146,23 +146,11 @@ BSValue bsExecuteScript(BSScript *script, BSOptions *options);
 
 
 /*
- * The expression evaluation scope - the caller-supplied locals object an expression evaluates
- * against, or a null value for the global scope; a compiled function body runs on registers of
- * its own
+ * Evaluate an expression. "locals" is the object the expression's names resolve in before the
+ * globals, or a null value for the global scope alone. If "builtins" is true, the built-in
+ * expression function aliases (min, max, len, ...) are in scope.
  */
-typedef struct BSScope {
-    BSValue object;
-} BSScope;
-
-/* Initialize an empty scope - the global scope */
-void bsScopeInit(BSScope *scope);
-
-
-/*
- * Evaluate an expression. "scope" may be NULL for the global scope. If "builtins" is true, the
- * built-in expression function aliases (min, max, len, ...) are in scope.
- */
-BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSScope *scope, bool builtins);
+BSValue bsEvaluateExpression(BSExpr *expr, BSOptions *options, BSValue locals, bool builtins);
 
 
 /*
