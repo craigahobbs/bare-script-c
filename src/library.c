@@ -457,6 +457,7 @@ static const BSArgModel arrayNewSizeArgs[] = {
     {"value", BS_ARG_ANY, BS_ARG_HAS_DEFAULT, 0, 0, 0, 0}
 };
 
+/* Out of line: inlined into the intrinsic switch, these bulk the interpreter loop */
 BS_NOINLINE BSValue bsArrayNewSizeValue(size_t size, BSValue value)
 {
     BSValue result = bsArrayNewCapacity(size);
@@ -1665,7 +1666,6 @@ BS_LIBRARY_FN(bsFnStringStartsWith, stringSearchArgs, bsNull(),
               bsBoolean(bsStringStartsWith(values[0], values[1])))
 
 
-/* Out of line: inlined into the intrinsic switch, these bulk the interpreter loop */
 BS_NOINLINE BSValue bsStringTrimValue(BSValue string)
 {
     const char *text = bsStringSpan(string);

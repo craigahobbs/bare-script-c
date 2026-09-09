@@ -34,7 +34,7 @@ char *bsStrdup(const char *text);
 /* Make room in "array" - "count" elements of "cap" allocated - for one more, doubling when it is full */
 #define BS_GROW(array, count, cap, initial) \
     do { \
-        if ((count) == (cap)) { \
+        if ((count) >= (cap)) { \
             (cap) = (cap) != 0 ? (cap) * 2 : (initial); \
             (array) = bsRealloc((array), (cap) * sizeof(*(array))); \
         } \
@@ -158,7 +158,8 @@ struct BSInst {
 };
 
 #define BS_OPERAND_CONST 0x8000u           /* while emitting, an operand naming a constant rather than a register */
-#define BS_OPERAND_INDEX(o) ((o) & 0x7fffu)
+#define BS_OPERAND_MAX 0x7fffu             /* the largest register or constant index an operand can name */
+#define BS_OPERAND_INDEX(o) ((o) & BS_OPERAND_MAX)
 #define BS_REG_DISCARD 0xffffu              /* a call destination that drops the result */
 #define BS_OPERANDS_PER_DATA 3              /* call argument operands per DATA word */
 
