@@ -77,6 +77,12 @@ static void bsPrintError(const char *text)
 }
 
 
+static bool bsCliFlag(const char *arg, const char *shortOpt, const char *longOpt)
+{
+    return strcmp(arg, shortOpt) == 0 || strcmp(arg, longOpt) == 0;
+}
+
+
 int bsMain(int argc, char **argv)
 {
     /* Three extra slots for the MarkdownUp preamble and postamble */
@@ -94,7 +100,7 @@ int bsMain(int argc, char **argv)
     /* Parse the command-line arguments */
     for (int ix = 1; ix < argc; ix++) {
         const char *arg = argv[ix];
-        if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0) {
+        if (bsCliFlag(arg, "-h", "--help")) {
             fputs(bsUsage, stdout);
             goto done;
         }
@@ -102,29 +108,29 @@ int bsMain(int argc, char **argv)
             printf("%s\n", bsVersion());
             goto done;
         }
-        if (strcmp(arg, "-d") == 0 || strcmp(arg, "--debug") == 0) {
+        if (bsCliFlag(arg, "-d", "--debug")) {
             debug = true;
             continue;
         }
-        if (strcmp(arg, "-s") == 0 || strcmp(arg, "--static") == 0) {
+        if (bsCliFlag(arg, "-s", "--static")) {
             staticAnalysis = true;
             staticExecute = false;
             continue;
         }
-        if (strcmp(arg, "-x") == 0 || strcmp(arg, "--staticx") == 0) {
+        if (bsCliFlag(arg, "-x", "--staticx")) {
             staticAnalysis = true;
             staticExecute = true;
             continue;
         }
-        if (strcmp(arg, "-m") == 0 || strcmp(arg, "--markdown") == 0) {
+        if (bsCliFlag(arg, "-m", "--markdown")) {
             markdown = true;
             continue;
         }
-        if (strcmp(arg, "-l") == 0 || strcmp(arg, "--html") == 0) {
+        if (bsCliFlag(arg, "-l", "--html")) {
             html = true;
             continue;
         }
-        if (strcmp(arg, "-c") == 0 || strcmp(arg, "--code") == 0) {
+        if (bsCliFlag(arg, "-c", "--code")) {
             if (ix + 1 >= argc) {
                 bsPrintError("bare: argument -c/--code: expected one argument");
                 statusCode = 2;
@@ -133,7 +139,7 @@ int bsMain(int argc, char **argv)
             sources[sourceCount++] = (BSScriptSource) {false, argv[++ix]};
             continue;
         }
-        if (strcmp(arg, "-v") == 0 || strcmp(arg, "--var") == 0) {
+        if (bsCliFlag(arg, "-v", "--var")) {
             if (ix + 2 >= argc) {
                 bsPrintError("bare: argument -v/--var: expected 2 arguments");
                 statusCode = 2;
