@@ -22,10 +22,6 @@
 static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSValue *regs,
                          BSValue locals, bool builtins);
 
-/* Run a top-level chunk or an expression, which gets its registers here. Returns an owned value. */
-static BSValue bsRunChunk(const BSCode *code, BSScript *script, BSOptions *options, BSValue locals,
-                          bool builtins);
-
 
 /* The maximum expression evaluation recursion depth */
 #define BS_DEPTH_MAX 500
@@ -409,6 +405,13 @@ static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, B
  */
 
 
+/* The script function closure data - a function value created by a function definition statement */
+typedef struct BSScriptFunction {
+    BSScript *script;
+    BSFunctionDef *def;
+} BSScriptFunction;
+
+
 static void bsScriptFunctionFree(void *data)
 {
     BSScriptFunction *scriptFunction = data;
@@ -451,6 +454,7 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
 }
 
 
+/* Run a top-level chunk or an expression, which gets its registers here. Returns an owned value. */
 static BSValue bsRunChunk(const BSCode *code, BSScript *script, BSOptions *options, BSValue locals,
                           bool builtins)
 {
@@ -473,10 +477,9 @@ static BSValue bsRunChunk(const BSCode *code, BSScript *script, BSOptions *optio
  *
  * Returns true with "*result" set to the owned return value when the arguments are the happy-path
  * shape; false means the caller runs the full library function, which validates the arguments and
- * reports the error. The seven intrinsics with one argument shape - arrayGet, arrayLength, arraySet,
- * objectGet, objectSet, stringLength, stringSlice - have call opcodes of their own, which run them in
- * place, as does arrayPush's two-argument shape; their ids only identify the library function to
- * those opcodes' guard.
+ * reports the error. The intrinsics with one argument shape - arrayGet, arrayLength, arrayPush,
+ * arraySet, objectGet, objectHas, objectSet, stringLength, stringSlice - have call opcodes of their
+ * own, which run them in place; their ids only identify the library function to those opcodes' guard.
  */
 static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
 {
@@ -962,7 +965,7 @@ static inline BSValue bsOperandTake(BSValue *regs, size_t slotCount, size_t owne
 /*
  * The intrinsic call opcodes' fast paths
  *
- * A CALL_NAME of one of the eight opcode intrinsics compiles to an opcode of its own, whose
+ * A CALL_NAME of one of the nine opcode intrinsics compiles to an opcode of its own, whose
  * handler runs one of these: the site's cached global must be the library function - the one
  * function value carrying that intrinsic id, so a script function of the same name is not it - a
  * locals object must not shadow the name, and the arguments must be the happy-path shape. Any
@@ -1349,7 +1352,6 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 
     const BSInst *insts = code->inst;
     const BSInst *inst = insts;
-    BSValue result;
 
 #ifdef BS_THREADED_DISPATCH
     /* Indexed by opcode - the order is the BS_OP_ enumeration's */
@@ -1442,8 +1444,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         }
 
         BS_CASE(RETURN)
-            result = bsOperandTake(regs, slotCount, ownedCount, inst->a);
-            goto done;
+            return bsOperandTake(regs, slotCount, ownedCount, inst->a);
 
 #define BS_CALL_INTRIN(name, function) \
         BS_CASE(name) \
@@ -1618,9 +1619,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 #undef BS_READ
 
 fail:
-    result = bsNull();
-done:
-    return result;
+    return bsNull();
 }
 
 

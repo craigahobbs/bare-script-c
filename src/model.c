@@ -4,9 +4,10 @@
 /*
  * BareScript model conversion
  *
- * The parser produces a JSON BareScript model. This file compiles that model to bytecode and
- * keeps the original model on the script for lint and coverage. Jump labels become instruction
- * indexes and function-local names become slot indexes during emit - there is no expression tree.
+ * The parser produces a BareScript model - objects - and the bundled include library arrives as a
+ * binary model. This file loads either into a transient syntax tree a statement at a time and
+ * compiles it to bytecode, keeping a parsed script's model on the script for lint and coverage.
+ * Jump labels become instruction indexes and function-local names become slot indexes during emit.
  */
 
 #include <stdlib.h>
@@ -338,12 +339,12 @@ static void bsAstAppend(BSAst *ast, uint32_t *head, uint32_t *tail, uint32_t nod
  */
 static BSString *bsModelKind(BSValue node, BSValue *member)
 {
-    BSString *kind;
-    if (!bsObjectSole(node, &kind, member)) {
+    if (node.type != BS_OBJECT || node.u.object->count != 1) {
         *member = bsNull();
         return NULL;
     }
-    return kind;
+    *member = node.u.object->entries->value;
+    return node.u.object->entries->key;
 }
 
 /* Whether a node's kind key is the model key "field" */
@@ -829,9 +830,8 @@ static void bsSlotAdd(BSEmit *e, BSValue name, bool argument)
         e->slotMap = bsObjectNew();
     }
     BS_GROW(e->slotNames, e->slotCount, e->slotCap, 8);
-    BSValue interned = bsInternName(name);
-    bsObjectSetString(e->slotMap, interned, bsNumber((double) e->slotCount));
-    e->slotNames[e->slotCount++] = interned;
+    bsObjectSetString(e->slotMap, name, bsNumber((double) e->slotCount));
+    e->slotNames[e->slotCount++] = bsRetain(name);
 }
 
 
@@ -844,9 +844,7 @@ static uint16_t bsEmitSite(BSEmit *e, BSValue name)
     BS_GROW(e->caches, e->cacheCount, e->cacheCap, 8);
     BSCallCache *cache = &e->caches[e->cacheCount];
     memset(cache, 0, sizeof(*cache));
-    BSValue interned = bsInternName(name);
-    cache->nameIndex = bsEmitName(e, interned);
-    bsRelease(interned);
+    cache->nameIndex = bsEmitName(e, name);
     return (uint16_t) e->cacheCount++;
 }
 
@@ -860,7 +858,6 @@ static void bsEmitLabel(BSEmit *e, BSValue name)
 }
 
 
-/* Emit a jump to a label - patched when the chunk is finished if the label is not yet defined */
 /* Point the jump word at "at" to a label - now if the label is behind, at the chunk's end if ahead */
 static void bsEmitJumpLabel(BSEmit *e, uint32_t at, BSValue label)
 {
@@ -873,12 +870,6 @@ static void bsEmitJumpLabel(BSEmit *e, uint32_t at, BSValue label)
     e->patches[e->patchCount].pc = at;
     e->patches[e->patchCount].label = bsRetain(label);
     e->patchCount++;
-}
-
-
-static void bsEmitJump(BSEmit *e, uint8_t op, BSOperand cond, BSValue label)
-{
-    bsEmitJumpLabel(e, bsEmitJumpInst(e, op, cond, 0xffffffffu), label);
 }
 
 
@@ -1068,44 +1059,49 @@ static void bsAssignedAnalyze(BSEmit *e, const BSAst *ast, const uint32_t *state
  * Compile an expression to an operand: a constant or a local costs no instruction; anything else
  * is computed into the lowest free temporary, which stays allocated for the caller to consume.
  */
-static void bsEmitExprOperand(BSEmit *e, const BSAst *ast, uint32_t id, BSOperand *operand)
+static BSOperand bsEmitExprOperand(BSEmit *e, const BSAst *ast, uint32_t id)
 {
     const BSNode *node = &ast->nodes[id];
     switch (node->kind) {
     case BS_NODE_NUMBER:
-        *operand = bsEmitConst(e, bsNumber(node->number));
-        return;
+        return bsEmitConst(e, bsNumber(node->number));
     case BS_NODE_STRING:
-        *operand = bsEmitConst(e, bsNodeText(ast, node));
-        return;
+        return bsEmitConst(e, bsNodeText(ast, node));
     case BS_NODE_VARIABLE: {
         BSValue name = bsNodeText(ast, node);
         const char *text = bsStringData(name);
         if (bsNameIs(text, "null")) {
-            *operand = e->nullConst;
-            return;
+            return e->nullConst;
         }
         if (bsNameIs(text, "true") || bsNameIs(text, "false")) {
-            *operand = bsEmitBool(e, text[0] == 't');
-            return;
+            return bsEmitBool(e, text[0] == 't');
         }
         int slot = bsSlotFind(e, name);
         if (slot >= 0 && bsAssignedTest(e, slot)) {
-            *operand = (BSOperand) slot;
-            return;
+            return (BSOperand) slot;
         }
         break;
     }
     case BS_NODE_GROUP:
-        bsEmitExprOperand(e, ast, node->a, operand);
-        return;
+        return bsEmitExprOperand(e, ast, node->a);
     default:
         break;
     }
 
     /* A global or a possibly unset local loads into a temporary; a call or an operator computes into one */
-    *operand = bsTempAlloc(e);
-    bsEmitExprTo(e, ast, id, *operand);
+    BSOperand temp = bsTempAlloc(e);
+    bsEmitExprTo(e, ast, id, temp);
+    return temp;
+}
+
+
+/* Compile an operand the next instruction consumes: its temporaries are free again once it is emitted */
+static BSOperand bsEmitExprConsumed(BSEmit *e, const BSAst *ast, uint32_t id)
+{
+    uint16_t base = e->tempTop;
+    BSOperand operand = bsEmitExprOperand(e, ast, id);
+    e->tempTop = base;
+    return operand;
 }
 
 
@@ -1200,19 +1196,15 @@ static void bsEmitCondition(BSEmit *e, const BSAst *ast, uint32_t expr, bool jum
     uint32_t right;
     uint8_t compareJump = bsCompareJumpOpcode(ast, expr, jumpIfTrue, &left, &right);
     if (compareJump != 0) {
-        BSOperand leftOperand;
-        BSOperand rightOperand;
-        bsEmitExprOperand(e, ast, left, &leftOperand);
-        bsEmitExprOperand(e, ast, right, &rightOperand);
+        BSOperand leftOperand = bsEmitExprOperand(e, ast, left);
+        BSOperand rightOperand = bsEmitExprOperand(e, ast, right);
         e->tempTop = base;
         bsEmitInst(e, compareJump, 0, leftOperand, rightOperand);
-        bsJumpsAdd(jumps, bsEmitJumpInst(e, BS_OP_DATA, 0, 0xffffffffu));
+        bsJumpsAdd(jumps, bsEmitJumpInst(e, BS_OP_DATA, 0, 0));
         return;
     }
-    BSOperand cond;
-    bsEmitExprOperand(e, ast, expr, &cond);
-    e->tempTop = base;
-    bsJumpsAdd(jumps, bsEmitJumpInst(e, jumpIfTrue ? BS_OP_JUMP_TRUE : BS_OP_JUMP_FALSE, cond, 0xffffffffu));
+    BSOperand cond = bsEmitExprConsumed(e, ast, expr);
+    bsJumpsAdd(jumps, bsEmitJumpInst(e, jumpIfTrue ? BS_OP_JUMP_TRUE : BS_OP_JUMP_FALSE, cond, 0));
 }
 
 
@@ -1275,7 +1267,7 @@ static void bsEmitCallTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t ds
     BSOperand *operands = argCount <= 16 ? argInline : bsAlloc(argCount * sizeof(BSOperand));
     size_t ix = 0;
     for (uint32_t arg = node->a; ix < argCount; arg = ast->nodes[arg].next) {
-        bsEmitExprOperand(e, ast, arg, &operands[ix++]);
+        operands[ix++] = bsEmitExprOperand(e, ast, arg);
     }
     e->tempTop = base;
     int slot = bsSlotFind(e, name);
@@ -1346,26 +1338,19 @@ static void bsEmitExprTo(BSEmit *e, const BSAst *ast, uint32_t id, uint16_t dst)
         if (dstTop) {
             e->tempTop--;
         }
-        BSOperand left;
-        BSOperand right;
-        bsEmitExprOperand(e, ast, node->a, &left);
+        BSOperand left = bsEmitExprOperand(e, ast, node->a);
         if (dstTop && e->tempTop < base) {
             e->tempTop = base;
         }
-        bsEmitExprOperand(e, ast, node->b, &right);
+        BSOperand right = bsEmitExprOperand(e, ast, node->b);
         e->tempTop = base;
         bsEmitInst(e, (uint8_t) node->op, dst, left, right);
         return;
     }
 
-    case BS_NODE_UNARY: {
-        uint16_t base = e->tempTop;
-        BSOperand operand;
-        bsEmitExprOperand(e, ast, node->a, &operand);
-        e->tempTop = base;
-        bsEmitInst(e, (uint8_t) node->op, dst, operand, 0);
+    case BS_NODE_UNARY:
+        bsEmitInst(e, (uint8_t) node->op, dst, bsEmitExprConsumed(e, ast, node->a), 0);
         return;
-    }
 
     case BS_NODE_GROUP:
         bsEmitExprTo(e, ast, node->a, dst);
@@ -1393,8 +1378,7 @@ static void bsEmitExprTo(BSEmit *e, const BSAst *ast, uint32_t id, uint16_t dst)
         /* A number or a string */
         break;
     }
-    BSOperand operand;
-    bsEmitExprOperand(e, ast, id, &operand);
+    BSOperand operand = bsEmitExprOperand(e, ast, id);
     if (operand != dst) {
         bsEmitInst(e, BS_OP_MOVE, dst, operand, 0);
     }
@@ -1409,10 +1393,7 @@ static void bsEmitExprDiscard(BSEmit *e, const BSAst *ast, uint32_t id)
         bsEmitCallTo(e, ast, id, BS_REG_DISCARD);
         return;
     }
-    uint16_t base = e->tempTop;
-    BSOperand operand;
-    bsEmitExprOperand(e, ast, id, &operand);
-    e->tempTop = base;
+    bsEmitExprConsumed(e, ast, id);
 }
 
 
@@ -1459,18 +1440,14 @@ static void bsEmitStatement(BSEmit *e, const BSAst *ast, uint32_t id)
             return;
         }
         uint16_t site = bsEmitSite(e, name);
-        uint16_t base = e->tempTop;
-        BSOperand operand;
-        bsEmitExprOperand(e, ast, node->a, &operand);
-        e->tempTop = base;
-        bsEmitInst(e, BS_OP_STORE_NAME, site, operand, 0);
+        bsEmitInst(e, BS_OP_STORE_NAME, site, bsEmitExprConsumed(e, ast, node->a), 0);
         return;
     }
 
     case BS_NODE_JUMP: {
         BSValue label = bsNodeText(ast, node);
         if (node->a == 0) {
-            bsEmitJump(e, BS_OP_JUMP, 0, label);
+            bsEmitJumpLabel(e, bsEmitJumpInst(e, BS_OP_JUMP, 0, 0), label);
             return;
         }
         BSJumps jumps;
@@ -1480,16 +1457,9 @@ static void bsEmitStatement(BSEmit *e, const BSAst *ast, uint32_t id)
         return;
     }
 
-    case BS_NODE_RETURN: {
-        uint16_t base = e->tempTop;
-        BSOperand operand = e->nullConst;
-        if (node->a != 0) {
-            bsEmitExprOperand(e, ast, node->a, &operand);
-        }
-        e->tempTop = base;
-        bsEmitInst(e, BS_OP_RETURN, operand, 0, 0);
+    case BS_NODE_RETURN:
+        bsEmitInst(e, BS_OP_RETURN, node->a != 0 ? bsEmitExprConsumed(e, ast, node->a) : e->nullConst, 0, 0);
         return;
-    }
 
     case BS_NODE_LABEL:
         bsEmitLabel(e, bsNodeText(ast, node));
@@ -1649,7 +1619,7 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
 
 
 /*
- * End a chunk whose statements were loaded with result "loaded": return null and finish it into
+ * End a chunk whose statements were loaded with result "loaded": return "ret" and finish it into
  * "code". Returns false - the chunk released - for a malformed statement or an overflowed operand
  * space.
  */
@@ -1720,10 +1690,7 @@ BSExpr *bsExprFromModel(BSValue model)
     uint32_t node = bsAstExpr(&ast, model);
     BSEmit e;
     bsEmitInit(&e, NULL, NULL);
-    BSOperand operand = e.nullConst;
-    if (node != 0) {
-        bsEmitExprOperand(&e, &ast, node, &operand);
-    }
+    BSOperand operand = node != 0 ? bsEmitExprOperand(&e, &ast, node) : e.nullConst;
     bsAstFree(&ast);
     BSExpr *expr = bsAlloc(sizeof(BSExpr));
     memset(expr, 0, sizeof(*expr));
@@ -1946,14 +1913,12 @@ static uint32_t bsModelExpr(BSModelReader *reader, int depth, bool required)
     case 3:
     case 4: {
         node = bsAstNode(ast, tag == 3 ? BS_NODE_STRING : BS_NODE_VARIABLE);
-        uint32_t text = bsModelText(reader);
-        ast->nodes[node].text = text;
+        ast->nodes[node].text = bsModelText(reader);
         return node;
     }
     case 5: {
         node = bsAstNode(ast, BS_NODE_CALL);
-        uint32_t text = bsModelText(reader);
-        ast->nodes[node].text = text;
+        ast->nodes[node].text = bsModelText(reader);
         uint64_t count = bsModelVarint(reader);
         ast->nodes[node].b = (uint32_t) count;
         uint32_t tail = 0;
@@ -2022,8 +1987,7 @@ static uint32_t bsModelStatement(BSModelReader *reader, int depth)
     }
     case 2: {
         node = bsAstNode(ast, BS_NODE_JUMP);
-        uint32_t text = bsModelText(reader);
-        ast->nodes[node].text = text;
+        ast->nodes[node].text = bsModelText(reader);
         uint32_t cond = bsModelExpr(reader, depth + 1, false);
         ast->nodes[node].a = cond;
         break;
@@ -2036,20 +2000,17 @@ static uint32_t bsModelStatement(BSModelReader *reader, int depth)
     }
     case 4: {
         node = bsAstNode(ast, BS_NODE_LABEL);
-        uint32_t text = bsModelText(reader);
-        ast->nodes[node].text = text;
+        ast->nodes[node].text = bsModelText(reader);
         break;
     }
     case 5: {
         node = bsAstNode(ast, BS_NODE_FUNCTION);
-        uint32_t text = bsModelText(reader);
-        ast->nodes[node].text = text;
+        ast->nodes[node].text = bsModelText(reader);
         ast->nodes[node].flag = (uint8_t) (bsModelByte(reader) & 1);
         uint64_t argCount = bsModelVarint(reader);
         for (uint64_t ix = 0; ix < argCount && !reader->failed; ix++) {
             uint32_t arg = bsAstNode(ast, BS_NODE_ARG);
-            uint32_t argText = bsModelText(reader);
-            ast->nodes[arg].text = argText;
+            ast->nodes[arg].text = bsModelText(reader);
             bsAstAppend(ast, &ast->nodes[node].b, &tail, arg);
         }
         tail = 0;
@@ -2068,8 +2029,7 @@ static uint32_t bsModelStatement(BSModelReader *reader, int depth)
         }
         for (uint64_t ix = 0; ix < count && !reader->failed; ix++) {
             uint32_t item = bsAstNode(ast, BS_NODE_INCLUDE_ITEM);
-            uint32_t url = bsModelText(reader);
-            ast->nodes[item].text = url;
+            ast->nodes[item].text = bsModelText(reader);
             ast->nodes[item].flag = (uint8_t) (bsModelByte(reader) & 1);
             bsAstAppend(ast, &ast->nodes[node].a, &tail, item);
         }

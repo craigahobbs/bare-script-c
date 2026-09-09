@@ -169,7 +169,7 @@ enum {
     BS_OP_JUMP,        /* pc = w */
     BS_OP_JUMP_FALSE,  /* if !a: pc = w */
     BS_OP_JUMP_TRUE,   /* if a: pc = w */
-    BS_OP_JUMP_UNDEF,  /* the unknown-label error for the name in constant a */
+    BS_OP_JUMP_UNDEF,  /* the unknown-label error for the name at index a of the chunk's names */
     BS_OP_RETURN,      /* return a */
     BS_OP_CALL_NAME,   /* a = the global at site b called with the c arguments in the DATA words that follow */
     BS_OP_CALL_SLOT,   /* the same, calling the function in register b */
@@ -226,12 +226,6 @@ enum {
 };
 
 
-/* The script function closure data - a function value created by a function definition statement */
-typedef struct BSScriptFunction {
-    BSScript *script;
-    BSFunctionDef *def;
-} BSScriptFunction;
-
 
 /*
  * Look up an object key by a string value. Returns true if the key is present; "*out" is then a
@@ -239,13 +233,6 @@ typedef struct BSScriptFunction {
  * null. An interned key skips intern-table hashing.
  */
 bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out);
-
-/*
- * The one member of an object with exactly one key. A model node - an expression or a statement -
- * is such an object, whose member's name is its kind. Returns false for any other value; the key
- * and value are borrowed.
- */
-bool bsObjectSole(BSValue object, BSString **key, BSValue *value);
 
 /* Whether a stored key equals the string "key" - a pointer compare when both are interned */
 bool bsObjectKeyIs(const BSString *stored, BSValue key);

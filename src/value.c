@@ -1587,18 +1587,6 @@ BSValue bsObjectGetString(BSValue value, BSValue key)
 }
 
 
-bool bsObjectSole(BSValue object, BSString **key, BSValue *value)
-{
-    if (object.type != BS_OBJECT || object.u.object->count != 1) {
-        return false;
-    }
-    const BSObjectEntry *entry = object.u.object->entries;
-    *key = entry->key;
-    *value = entry->value;
-    return true;
-}
-
-
 bool bsObjectKeyIs(const BSString *stored, BSValue key)
 {
     return bsKeyEqual(stored, key.u.string, key.u.string->data, key.u.string->size);

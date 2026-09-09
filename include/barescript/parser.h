@@ -40,7 +40,7 @@ typedef struct BSInclude {
 
 
 /*
- * Per-site cache of a global name lookup - a CALL_NAME function or a LOAD_NAME variable
+ * Per-site cache of a global name lookup - a CALL_NAME function, or a LOAD_NAME or STORE_NAME variable
  *
  * The cache points at the globals object's value slot for the name, so an assignment to the name
  * is seen through the slot. The slot is re-resolved when the globals object's structural
@@ -60,8 +60,9 @@ typedef struct BSCallCache {
 /*
  * A compiled bytecode chunk
  *
- * Instructions are eight-byte register instructions whose operands name a register - a slot or a
- * temporary - or a constant: an interned name, a string literal, or a number. STMT operands index
+ * Instructions are eight-byte register instructions whose operands name a register - a slot, a
+ * temporary, or a constant (a string literal or a number) copied in after them; the names call,
+ * load, and store sites refer to are in names[]. STMT operands index
  * cover[], borrowed statement models from the parser output - NULL once the script forgets its
  * model, until coverage recording restores them. CALL_NAME, LOAD_NAME, and STORE_NAME operands
  * index caches[], one per site. tempCount is the temporaries the chunk needs past its slots,

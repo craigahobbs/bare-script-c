@@ -148,8 +148,8 @@ BSValue bsExecuteScript(BSScript *script, BSOptions *options);
 /*
  * The expression evaluation scope
  *
- * A compiled function body uses the "slots" array, indexed by the slot numbers the parser
- * resolved. An expression evaluated against a caller-supplied locals object uses "object".
+ * An expression evaluated against a caller-supplied locals object uses "object"; a compiled
+ * function body runs on registers of its own, so "slots" is unused.
  * A slot holding the internal unset marker falls through to the globals object, matching the
  * reference implementation's "name not in locals" behavior.
  */
