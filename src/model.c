@@ -91,11 +91,6 @@ void bsScriptRelease(BSScript *script)
 
 
 /*
- * The model keys
- */
-
-
-/*
  * The model keys, interned once so every lookup compares pointers. The JSON decoder and the
  * parser script produce interned keys, so a model object's keys are never compared by content.
  */
@@ -832,7 +827,7 @@ static void bsJumpsInit(BSJumps *jumps)
 {
     jumps->pcs = jumps->inline_;
     jumps->count = 0;
-    jumps->cap = sizeof(jumps->inline_) / sizeof(jumps->inline_[0]);
+    jumps->cap = BS_COUNT_OF(jumps->inline_);
 }
 
 static void bsJumpsAdd(BSJumps *jumps, uint32_t pc)

@@ -44,7 +44,7 @@ static _Thread_local uint32_t bsCacheEpoch;
 BSOptions *bsOptionsNew(void)
 {
     BSOptions *options = bsAlloc(sizeof(BSOptions));
-    memset(options, 0, sizeof(BSOptions));
+    memset(options, 0, sizeof(*options));
     options->globals = bsObjectNew();
     options->maxStatements = BS_MAX_STATEMENTS_DEFAULT;
     options->depthMax = BS_DEPTH_MAX;
