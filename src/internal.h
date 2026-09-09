@@ -212,6 +212,7 @@ enum {
     BS_OP_CALL_STRING_CHAR_CODE_AT,
     BS_OP_CALL_STRING_LENGTH,
     BS_OP_CALL_STRING_SLICE,
+    BS_OP_CALL_SYSTEM_GLOBAL_SET,
     /*
      * A jump on a comparison: if b op c, pc = the target in the DATA word that follows, else past
      * that word. A jump on a comparison being true takes the comparison's own opcode, a jump on it
@@ -274,6 +275,13 @@ BSValue bsStringIntern(const char *data, size_t size);
 
 /* Reuse an interned string if present; otherwise a new ordinary string. Does not grow the table. */
 BSValue bsStringInternExisting(const char *data, size_t size);
+
+/* The library's stringTrim and stringIndexOf of validated arguments, shared with the intrinsic switch (library.c) */
+BSValue bsStringTrimValue(BSValue string);
+BSValue bsStringIndexOfValue(BSValue string, BSValue search, size_t index);
+
+/* An array of "size" retained copies of "value" (library.c) */
+BSValue bsArrayNewSizeValue(size_t size, BSValue value);
 
 /* Whether a name is the word - a first-character test before the compare, the names rarely being it */
 static inline bool bsNameIs(const char *name, const char *word)
@@ -429,6 +437,7 @@ enum {
     BS_INTRIN_ARRAY_PUSH,
     BS_INTRIN_ARRAY_SET,
     BS_INTRIN_ARRAY_NEW,
+    BS_INTRIN_ARRAY_NEW_SIZE,
     BS_INTRIN_MATH_ABS,
     BS_INTRIN_MATH_CEIL,
     BS_INTRIN_MATH_FLOOR,
@@ -444,8 +453,10 @@ enum {
     BS_INTRIN_OBJECT_NEW,
     BS_INTRIN_STRING_CHAR_CODE_AT,
     BS_INTRIN_STRING_ENDS_WITH,
+    BS_INTRIN_STRING_INDEX_OF,
     BS_INTRIN_STRING_LENGTH,
     BS_INTRIN_STRING_STARTS_WITH,
+    BS_INTRIN_STRING_TRIM,
     BS_INTRIN_STRING_SLICE,
     BS_INTRIN_SYSTEM_BOOLEAN,
     BS_INTRIN_SYSTEM_GLOBAL_SET,

@@ -1748,8 +1748,13 @@ static bool bsObjectKeysIter(BSValue key, BSValue item, void *data)
 
 BSValue bsObjectKeys(BSValue value)
 {
-    BSValue keys = bsArrayNewCapacity(bsObjectCount(value));
-    bsObjectIter(value, bsObjectKeysIter, &keys);
+    size_t count = bsObjectCount(value);
+    BSValue keys = bsArrayNewCapacity(count);
+    BSArray *array = keys.u.array;
+    for (size_t ix = 0; ix < count; ix++) {
+        array->values[ix] = bsRetainInline(bsStringTake(value.u.object->entries[ix].key));
+    }
+    array->count = count;
     return keys;
 }
 

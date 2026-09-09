@@ -457,16 +457,16 @@ static const BSArgModel arrayNewSizeArgs[] = {
     {"value", BS_ARG_ANY, BS_ARG_HAS_DEFAULT, 0, 0, 0, 0}
 };
 
-static BSValue bsFnArrayNewSize(const BSValue *args, size_t argCount, BSOptions *options, void *data)
+BS_NOINLINE BSValue bsArrayNewSizeValue(size_t size, BSValue value)
 {
-    BS_ARGS(arrayNewSizeArgs, bsNull());
-    size_t size = (size_t) values[0].u.number;
     BSValue result = bsArrayNewCapacity(size);
     for (size_t ix = 0; ix < size; ix++) {
-        bsArrayPush(result, bsRetain(values[1]));
+        bsArrayPush(result, bsRetain(value));
     }
     return result;
 }
+
+BS_LIBRARY_FN(bsFnArrayNewSize, arrayNewSizeArgs, bsNull(), bsArrayNewSizeValue((size_t) values[0].u.number, values[1]))
 
 
 BS_LIBRARY_FN(bsFnArrayPop, arrayArgs, bsNull(), bsArrayTake(values[0], true, options))
@@ -1446,19 +1446,25 @@ static const BSArgModel stringIndexOfArgs[] = {
     {"index", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 0, 0, 0, 0}
 };
 
+BS_NOINLINE BSValue bsStringIndexOfValue(BSValue string, BSValue search, size_t index)
+{
+    size_t offset = bsMemFind(bsStringData(string), bsStringSize(string), bsStringData(search),
+                              bsStringSize(search), bsStringOffset(string, index));
+    if (offset == SIZE_MAX) {
+        return bsNumber(-1);
+    }
+    /* An ASCII string's code point index is its byte offset */
+    const BSString *text = string.u.string;
+    return bsNumber((double) (text->length == text->size ? offset : bsUTF8Length(text->data, offset)));
+}
+
 static BSValue bsFnStringIndexOf(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringIndexOfArgs, bsNumber(-1));
     if (values[2].u.number > (double) bsStringLength(values[0])) {
         return bsArgFail(options, "index", values[2], bsNumber(-1));
     }
-    size_t index = (size_t) values[2].u.number;
-    size_t offset = bsMemFind(bsStringData(values[0]), bsStringSize(values[0]), bsStringData(values[1]),
-                              bsStringSize(values[1]), bsStringOffset(values[0], index));
-    if (offset == SIZE_MAX) {
-        return bsNumber(-1);
-    }
-    return bsNumber((double) bsUTF8Length(bsStringData(values[0]), offset));
+    return bsStringIndexOfValue(values[0], values[1], (size_t) values[2].u.number);
 }
 
 
@@ -1662,11 +1668,11 @@ BS_LIBRARY_FN(bsFnStringStartsWith, stringSearchArgs, bsNull(),
               bsBoolean(bsStringStartsWith(values[0], values[1])))
 
 
-static BSValue bsFnStringTrim(const BSValue *args, size_t argCount, BSOptions *options, void *data)
+/* Out of line: inlined into the intrinsic switch, these bulk the interpreter loop */
+BS_NOINLINE BSValue bsStringTrimValue(BSValue string)
 {
-    BS_ARGS(stringArgs, bsNull());
-    const char *text = bsStringData(values[0]);
-    size_t size = bsStringSize(values[0]);
+    const char *text = bsStringData(string);
+    size_t size = bsStringSize(string);
     size_t begin = 0;
     size_t end = size;
     size_t codeSize;
@@ -1684,10 +1690,12 @@ static BSValue bsFnStringTrim(const BSValue *args, size_t argCount, BSOptions *o
         end = lead;
     }
     if (begin == 0 && end == size) {
-        return bsRetain(values[0]);
+        return bsRetain(string);
     }
     return bsStringNewSize(text + begin, end - begin);
 }
+
+BS_LIBRARY_FN(bsFnStringTrim, stringArgs, bsNull(), bsStringTrimValue(values[0]))
 
 
 /*
@@ -1934,7 +1942,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
     {"arrayLastIndexOf", bsFnArrayLastIndexOf, NULL, 0},
     {"arrayLength", bsFnArrayLength, NULL, BS_INTRIN_ARRAY_LENGTH},
     {"arrayNew", bsFnArrayNew, "arrayNew", BS_INTRIN_ARRAY_NEW},
-    {"arrayNewSize", bsFnArrayNewSize, NULL, 0},
+    {"arrayNewSize", bsFnArrayNewSize, NULL, BS_INTRIN_ARRAY_NEW_SIZE},
     {"arrayPop", bsFnArrayPop, NULL, BS_INTRIN_ARRAY_POP},
     {"arrayPush", bsFnArrayPush, NULL, BS_INTRIN_ARRAY_PUSH},
     {"arrayReverse", bsFnArrayReverse, NULL, 0},
@@ -2001,7 +2009,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
     {"stringEncode", bsFnStringEncode, NULL, 0},
     {"stringEndsWith", bsFnStringEndsWith, "endsWith", BS_INTRIN_STRING_ENDS_WITH},
     {"stringFromCharCode", bsFnStringFromCharCode, "fromCharCode", 0},
-    {"stringIndexOf", bsFnStringIndexOf, "indexOf", 0},
+    {"stringIndexOf", bsFnStringIndexOf, "indexOf", BS_INTRIN_STRING_INDEX_OF},
     {"stringLastIndexOf", bsFnStringLastIndexOf, "lastIndexOf", 0},
     {"stringLength", bsFnStringLength, "len", BS_INTRIN_STRING_LENGTH},
     {"stringLower", bsFnStringLower, "lower", 0},
@@ -2012,7 +2020,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
     {"stringSplit", bsFnStringSplit, NULL, 0},
     {"stringSplitLines", bsFnStringSplitLines, NULL, 0},
     {"stringStartsWith", bsFnStringStartsWith, "startsWith", BS_INTRIN_STRING_STARTS_WITH},
-    {"stringTrim", bsFnStringTrim, "trim", 0},
+    {"stringTrim", bsFnStringTrim, "trim", BS_INTRIN_STRING_TRIM},
     {"stringUpper", bsFnStringUpper, "upper", 0},
     {"systemBoolean", bsFnSystemBoolean, NULL, BS_INTRIN_SYSTEM_BOOLEAN},
     {"systemCompare", bsFnSystemCompare, NULL, 0},

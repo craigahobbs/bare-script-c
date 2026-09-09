@@ -248,6 +248,13 @@ TEST(runtime_functions)
     ASSERT_VALUE(bsTestExecute("x = 1\nfunction f():\n    systemGlobalSet('x', 2)\n    return systemGlobalGet('x')\n"
                                "endfunction\nreturn [f(), x]"), "[2,2]");
 
+    /* systemGlobalSet's opcode: a cold site, then a warm site's in-place update, a new global, and a non-string name */
+    ASSERT_VALUE(bsTestExecute("x = 1\nfunction f(n, v):\n    return systemGlobalSet(n, v)\nendfunction\n"
+                               "return [f('x', 2), x, f('x', 3), x, f('y', 4), y, f('y', 5), y, f(1, 6)]"),
+                 "[2,2,3,3,4,4,5,5,null]");
+    ASSERT_VALUE(bsTestExecute("function systemGlobalSet(n, v):\n    return 'mine'\nendfunction\n"
+                               "return systemGlobalSet('x', 1)"), "\"mine\"");
+
     /* Function-local jump labels */
     ASSERT_VALUE(bsTestExecute("function f():\n    i = 0\n    loop:\n    i = i + 1\n"
                                "    jumpif (i < 3) loop\n    return i\nendfunction\nreturn f()"), "3");
