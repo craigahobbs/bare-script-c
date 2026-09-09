@@ -118,6 +118,9 @@ void bsObjectAppend(BSValue object, BSValue key, BSValue item);
 /* Copy src's pairs onto dest, overwriting matching keys */
 void bsObjectAssign(BSValue dest, BSValue src);
 
+/* A string reference as a value - takes ownership of the reference */
+BSValue bsStringTake(BSString *string);
+
 /* Intern a short string. Strings longer than 64 bytes are not interned. Returns an owned value. */
 BSValue bsStringIntern(const char *data, size_t size);
 #define bsStringInternLiteral(text) bsStringIntern(text, sizeof(text) - 1)

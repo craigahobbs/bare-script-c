@@ -177,7 +177,6 @@ BSValue bsStringNew(const char *text);
 BSValue bsStringNewSize(const char *text, size_t size);
 BSValue bsStringNewFormat(const char *format, ...);
 BSValue bsStringNewVFormat(const char *format, va_list args);
-BSValue bsStringTake(BSString *string); /* takes ownership of the string reference */
 BSValue bsArrayNew(void);
 BSValue bsArrayNewCapacity(size_t capacity);
 BSValue bsObjectNew(void);

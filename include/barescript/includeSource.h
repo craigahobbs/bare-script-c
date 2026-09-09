@@ -32,19 +32,6 @@ BS_VISIBILITY_BEGIN
 #define BS_INCLUDE_COUNT 32
 
 
-/* A bundled include library script */
-typedef struct BSIncludeSource {
-    const char *name;
-    const unsigned char *gzip;
-    size_t gzipSize;
-} BSIncludeSource;
-
-/* The bundled include library registry, in name order */
-extern BSIncludeSource bsIncludeSources[BS_INCLUDE_COUNT];
-
-/* The shared string table - the strings the optional includes' models refer to in common */
-extern const BSIncludeSource bsIncludeSourceShared;
-
 /* A bundled include library stub accessor - returns its include's inflated binary script model and its size */
 typedef const unsigned char *(*BSIncludeSourceFn)(size_t *size);
 
@@ -154,6 +141,24 @@ const unsigned char *bsIncludeSourceUrl(size_t *size);
 
 
 BS_VISIBILITY_END
+
+
+/*
+ * The registry tables - the implementation's and its tests', not exported
+ */
+
+/* A bundled include library script */
+typedef struct BSIncludeSource {
+    const char *name;
+    const unsigned char *gzip;
+    size_t gzipSize;
+} BSIncludeSource;
+
+/* The bundled include library registry, in name order */
+extern BSIncludeSource bsIncludeSources[BS_INCLUDE_COUNT];
+
+/* The shared string table - the strings the optional includes' models refer to in common */
+extern const BSIncludeSource bsIncludeSourceShared;
 
 #ifdef __cplusplus
 }
