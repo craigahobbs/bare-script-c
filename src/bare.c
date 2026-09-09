@@ -366,3 +366,12 @@ done:
     bsValueCleanup();
     return statusCode;
 }
+
+
+/* The entry point - left out of the test builds, which supply their own and call bsMain */
+#ifndef BARESCRIPT_NO_MAIN
+int main(int argc, char **argv)
+{
+    return bsMain(argc, argv);
+}
+#endif

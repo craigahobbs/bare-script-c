@@ -202,7 +202,7 @@ subset BareScript exposes - see DESIGN.md's **Regular Expressions** table.
 | `src/unicode.c`           | Unicode case mapping - stringUpper, stringLower, the regex `i` flag - and its Unicode 16.0 tables |
 | `src/options.c`           | the fetch, log, and URL option implementations                |
 | `src/includeSource.c`     | **generated** - compressed include library models             |
-| `src/bare.c`, `src/main.c`| the CLI (`bsMain`) and its entry point                        |
+| `src/bare.c`              | the CLI - `bsMain` and the entry point                        |
 | `src/internal.h`          | declarations shared across implementation files               |
 | `test/`                   | C unit tests; `test/include/` is the BareScript language suite |
 | `lib/include/`            | **vendored** reference include library and its test suite     |

@@ -107,7 +107,7 @@ endif
 
 
 # Sources
-CLI_SRCS := $(SRC_DIR)/bare.c $(SRC_DIR)/main.c
+CLI_SRCS := $(SRC_DIR)/bare.c
 LIB_SRCS := $(filter-out $(CLI_SRCS),$(sort $(wildcard $(SRC_DIR)/*.c)))
 TEST_SRCS := $(sort $(wildcard $(TEST_DIR)/*.c))
 
@@ -213,6 +213,11 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 $(OBJ_DIR)/test-%.o: $(TEST_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(BASE_CFLAGS) $(OPT_CFLAGS) -I$(TEST_DIR) -MMD -MP -c -o $@ $<
+
+# The CLI without its entry point, for the test binary, which calls bsMain from a main of its own
+$(OBJ_DIR)/bare-test.o: $(SRC_DIR)/bare.c
+	@mkdir -p $(dir $@)
+	$(CC) $(BASE_CFLAGS) $(OPT_CFLAGS) -DBARESCRIPT_NO_MAIN -MMD -MP -c -o $@ $<
 
 $(LIB_SO): $(LIB_OBJS)
 	$(CC) $(OPT_CFLAGS) $(SO_LDFLAGS) -o $@ $^ $(LIBS)
@@ -393,7 +398,7 @@ $(RELEASE_LIB_A): $(RELEASE_A_OBJS)
 # Test
 #
 
-$(TEST_BIN): $(TEST_OBJS) $(OBJ_DIR)/bare.o $(LIB_A)
+$(TEST_BIN): $(TEST_OBJS) $(OBJ_DIR)/bare-test.o $(LIB_A)
 	$(CC) -o $@ $^ $(LIBS) $(TEST_LIBS)
 
 .PHONY: test
@@ -410,6 +415,7 @@ test: $(TEST_BIN)
 # negative counts that report covered lines as missed. Atomic counters make the run repeatable.
 COVER_CFLAGS := --coverage -O0 -g $(call CC_SUPPORTS,-fprofile-update=atomic)
 
+$(COVER_DIR)/bare.o: COVER_CFLAGS += -DBARESCRIPT_NO_MAIN
 $(COVER_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(BASE_CFLAGS) $(COVER_CFLAGS) -MMD -MP -c -o $@ $<
