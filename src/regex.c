@@ -656,18 +656,13 @@ static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
 static bool rxParseName(RxCompiler *compiler, BSValue *name)
 {
     size_t begin = compiler->offset;
-    while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] != '>') {
-        char ch = compiler->pattern[compiler->offset];
-        if (!rxIsWordCode((unsigned char) ch) || (compiler->offset == begin && ch >= '0' && ch <= '9')) {
-            return false;
-        }
-        compiler->offset++;
-    }
-    if (compiler->offset >= compiler->size || compiler->offset == begin) {
+    size_t end;
+    if (!rxNameRun(compiler->pattern, compiler->size, begin, &end) ||
+        (compiler->pattern[begin] >= '0' && compiler->pattern[begin] <= '9')) {
         return false;
     }
-    *name = bsStringIntern(compiler->pattern + begin, compiler->offset - begin);
-    compiler->offset++;
+    *name = bsStringIntern(compiler->pattern + begin, end - begin);
+    compiler->offset = end + 1;
     return true;
 }
 
@@ -1297,22 +1292,16 @@ typedef struct RxRepeatGroups {
 static bool rxClassMatchOne(const RxClass *cls, uint32_t ch)
 {
     unsigned classes = cls->classes;
-    if ((classes & RX_CLASS_DIGIT) != 0 && ch >= '0' && ch <= '9') {
+    bool digit = ch >= '0' && ch <= '9';
+    if ((classes & (digit ? RX_CLASS_DIGIT : RX_CLASS_NOTDIGIT)) != 0) {
         return true;
     }
-    if ((classes & RX_CLASS_NOTDIGIT) != 0 && !(ch >= '0' && ch <= '9')) {
+    bool word = rxIsWordCode(ch);
+    if ((classes & (word ? RX_CLASS_WORD : RX_CLASS_NOTWORD)) != 0) {
         return true;
     }
-    if ((classes & RX_CLASS_WORD) != 0 && rxIsWordCode(ch)) {
-        return true;
-    }
-    if ((classes & RX_CLASS_NOTWORD) != 0 && !rxIsWordCode(ch)) {
-        return true;
-    }
-    if ((classes & RX_CLASS_SPACE) != 0 && bsIsSpaceCode(ch)) {
-        return true;
-    }
-    if ((classes & RX_CLASS_NOTSPACE) != 0 && !bsIsSpaceCode(ch)) {
+    bool space = bsIsSpaceCode(ch);
+    if ((classes & (space ? RX_CLASS_SPACE : RX_CLASS_NOTSPACE)) != 0) {
         return true;
     }
     for (size_t ix = 0; ix < cls->rangeCount; ix++) {
