@@ -146,15 +146,11 @@ BSValue bsExecuteScript(BSScript *script, BSOptions *options);
 
 
 /*
- * The expression evaluation scope
- *
- * An expression evaluated against a caller-supplied locals object uses "object"; a compiled
- * function body runs on registers of its own, so "slots" is unused.
- * A slot holding the internal unset marker falls through to the globals object, matching the
- * reference implementation's "name not in locals" behavior.
+ * The expression evaluation scope - the caller-supplied locals object an expression evaluates
+ * against, or a null value for the global scope; a compiled function body runs on registers of
+ * its own
  */
 typedef struct BSScope {
-    BSValue *slots;
     BSValue object;
 } BSScope;
 

@@ -149,7 +149,6 @@ void bsLog(BSOptions *options, const char *format, ...)
 
 void bsScopeInit(BSScope *scope)
 {
-    scope->slots = NULL;
     scope->object = bsNull();
 }
 
