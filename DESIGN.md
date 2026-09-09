@@ -396,6 +396,15 @@ because the parser is itself regex-driven:
   runtime, and the backtrack stack lives on the heap, so no pattern can overflow the C stack.
 
 
+A general repeat - one whose body is more than a single code point - carries the follow set of
+what comes after it: the code points that can begin its continuation, computed by the emitter from
+the rest of the enclosing chain and, when that can be empty, the chain's own follow, and unknown
+inside a lookaround, in a backward body, or past anything that can begin with any code point. At
+a lazy repeat's iteration end the matcher consults it before trying the continuation and skips a
+try that could not match, so a lazy loop over a table cell or a quoted string advances a
+character at a time without a failed attempt and a backtrack entry per character; a greedy
+repeat, whose continuation is only tried on the way back, is not worth the test.
+
 ## Threads
 
 The runtime has no process-wide mutable state. Every free list, the intern table, the interned

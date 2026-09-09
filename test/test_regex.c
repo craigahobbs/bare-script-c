@@ -742,6 +742,31 @@ TEST(regex_first_set)
 }
 
 
+TEST(regex_follow_set)
+{
+    /* A general repeat skips a continuation that cannot begin at the position: a lazy repeat's first
+       try, a greedy repeat's way back. The matches are what JavaScript's are; the follow set only prunes. */
+    ASSERT_VALUE_STRING(bsTestMatch("^\\s*(?<cell>(?:\\\\\\||[^|])*?)\\s*\\|", "  ab\\| cd |x", 0), "  ab\\| cd |");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab|c)*?x", "abcab", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab|c)*x", "abcabx", 0), "abcabx");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab|c)*?d", "abcabd", 0), "abcabd");
+    /* A continuation that can be empty, and one beginning with anything, are not follow sets */
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab|c)*?x?$", "abcab", 0), "abcab");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab|c)*?.x", "abcabx", 0), "bx");
+    /* The follow set through a group, into a repeat body, and past the pattern's end */
+    ASSERT_VALUE_STRING(bsTestMatch("((?:ab|c)*?)d", "abcabd", 0), "abcabd");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:a(?:b|c)*?d)*?e", "abcdacde", 0), "abcdacde");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab|c)*?", "abc", 0), "");
+    /* Inside a lookahead and a lookbehind the continuation is unknown */
+    ASSERT_VALUE_STRING(bsTestMatch("(?=(?:ab|c)*?d)", "cabd", 0), "");
+    ASSERT_VALUE_STRING(bsTestMatch("(?<=(?:ab|c)*?x)y", "abxy", 0), "y");
+    /* Case folding and non-ASCII code points in the follow set */
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab|c)*?D", "abcd", BS_REGEX_IGNORECASE), "abcd");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab|c)*?(?:\xc3\xa9|f)", "abc\xc3\xa9", 0), "abc\xc3\xa9");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:ab|c)*?(?:\xc3\xa9|f)", "abc", 0), "null");
+}
+
+
 TEST(regex_sequences_repeat)
 {
     /* A repeat of an alternation of atom sequences matches iteratively, in the recursive order */

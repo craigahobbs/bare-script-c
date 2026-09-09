@@ -1470,6 +1470,13 @@ typedef struct RxRepeat {
 typedef struct RxRepeatGroups {
     uint32_t first;
     uint32_t end;
+    /*
+     * The follow set: the code points that can begin what comes after the repeat, when known. A
+     * lazy iteration whose position holds none of them skips its first try, the continuation,
+     * which could not match there.
+     */
+    bool hasFollow;
+    RxFirstSet follow;
 } RxRepeatGroups;
 
 /* A trail entry restoring a repeat counter rather than a capture - the slot is in the low bits */
@@ -1822,10 +1829,30 @@ static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
 }
 
 
-static void rxEmitChain(RxEmit *e, RxNode *node);
+static void rxEmitChain(RxEmit *e, RxNode *node, const RxFirstSet *follow);
 
-/* Emit one node */
-static void rxEmitNode(RxEmit *e, RxNode *node)
+/*
+ * The follow set of a node whose chain continues with "rest" and, past the chain's end, with
+ * "follow" - NULL when unknown. Returns false when the set is unusable: unknown, or the rest can
+ * match the empty string with an unknown follow, or begins with anything.
+ */
+static bool rxFollowCompute(const RxNode *rest, const RxFirstSet *follow, unsigned flags, RxFirstSet *set)
+{
+    memset(set, 0, sizeof(*set));
+    if (rxFirstSet(rest, flags, set)) {
+        if (follow == NULL || follow->any) {
+            return false;
+        }
+        for (size_t ix = 0; ix < 4; ix++) {
+            set->bits[ix] |= follow->bits[ix];
+        }
+        set->high = set->high || follow->high;
+    }
+    return !set->any;
+}
+
+/* Emit one node, "follow" being the set of code points that can begin what comes after it, or NULL */
+static void rxEmitNode(RxEmit *e, RxNode *node, const RxFirstSet *follow)
 {
     switch (node->kind) {
     case RX_CHAR:
@@ -1844,7 +1871,7 @@ static void rxEmitNode(RxEmit *e, RxNode *node)
     case RX_ALT: {
         size_t count = node->u.alt.count;
         if (count == 1) {
-            rxEmitChain(e, node->u.alt.branches[0]);
+            rxEmitChain(e, node->u.alt.branches[0], follow);
             break;
         }
         BS_GROW(e->alts, e->altCount, e->altCapacity, 8);
@@ -1862,7 +1889,7 @@ static void rxEmitNode(RxEmit *e, RxNode *node)
         uint32_t *jumps = bsAlloc(count * sizeof(uint32_t));
         for (size_t ix = 0; ix < count; ix++) {
             pcs[ix] = (uint32_t) e->count;
-            rxEmitChain(e, node->u.alt.branches[ix]);
+            rxEmitChain(e, node->u.alt.branches[ix], follow);
             jumps[ix] = rxEmitOp(e, RXI_JMP);
         }
         for (size_t ix = 0; ix < count; ix++) {
@@ -1875,7 +1902,7 @@ static void rxEmitNode(RxEmit *e, RxNode *node)
 
     case RX_GROUP:
         rxEmit(e, e->backward ? RXI_GROUP_END_BACK : RXI_GROUP_BEGIN, (uint32_t) node->u.group.group, 0, 0, 0, 0);
-        rxEmitChain(e, node->u.group.sub);
+        rxEmitChain(e, node->u.group.sub, follow);
         rxEmit(e, e->backward ? RXI_GROUP_BEGIN_BACK : RXI_GROUP_END, (uint32_t) node->u.group.group, 0, 0, 0, 0);
         break;
 
@@ -1895,10 +1922,28 @@ static void rxEmitNode(RxEmit *e, RxNode *node)
         }
         uint32_t slot = e->repeatSlots;
         BS_GROW(e->repeatGroups, e->repeatSlots, e->repeatGroupCapacity, 4);
-        e->repeatGroups[e->repeatSlots++] = (RxRepeatGroups) {node->u.repeat.groupFirst, node->u.repeat.groupEnd};
+        RxRepeatGroups *groups = &e->repeatGroups[e->repeatSlots++];
+        groups->first = node->u.repeat.groupFirst;
+        groups->end = node->u.repeat.groupEnd;
+        groups->hasFollow = follow != NULL && !e->backward;
+        if (groups->hasFollow) {
+            groups->follow = *follow;
+        }
         rxEmit(e, RXI_REPEAT_ENTER, 0, 0, 0, 0, slot);
         uint32_t loop = rxEmit(e, RXI_REPEAT_LOOP, 0, maxOperand, (uint32_t) node->u.repeat.min, greedy, slot);
-        rxEmitChain(e, node->u.repeat.sub);
+        /* Within the body, an iteration's end is followed by the body again or by the continuation */
+        RxFirstSet bodyFollow;
+        bool bodyUsable = false;
+        if (!e->backward && follow != NULL) {
+            memset(&bodyFollow, 0, sizeof(bodyFollow));
+            rxFirstSet(node->u.repeat.sub, e->flags, &bodyFollow);
+            for (size_t ix = 0; ix < 4; ix++) {
+                bodyFollow.bits[ix] |= follow->bits[ix];
+            }
+            bodyFollow.high = bodyFollow.high || follow->high;
+            bodyUsable = !bodyFollow.any;
+        }
+        rxEmitChain(e, node->u.repeat.sub, bodyUsable ? &bodyFollow : NULL);
         uint32_t next = rxEmit(e, RXI_REPEAT_NEXT, loop, 0, (uint32_t) node->u.repeat.min, 0, slot);
         e->inst[loop].a = (uint32_t) e->count;
         e->inst[next].b = (uint32_t) e->count;
@@ -1954,7 +1999,7 @@ static void rxEmitNode(RxEmit *e, RxNode *node)
         e->inst[look].a = (uint32_t) e->count;
         bool backward = e->backward;
         e->backward = !ahead;
-        rxEmitChain(e, node->u.look.sub);
+        rxEmitChain(e, node->u.look.sub, NULL);
         e->backward = backward;
         rxEmitOp(e, RXI_MATCH);
         e->inst[look].b = (uint32_t) e->count;
@@ -1965,11 +2010,16 @@ static void rxEmitNode(RxEmit *e, RxNode *node)
 
 
 /* Emit a node chain - last node first for a lookbehind body, which matches right to left */
-static void rxEmitChain(RxEmit *e, RxNode *node)
+static void rxEmitChain(RxEmit *e, RxNode *node, const RxFirstSet *follow)
 {
     if (!e->backward) {
         for (; node != NULL; node = node->next) {
-            rxEmitNode(e, node);
+            /* What follows this node: the rest of the chain, then the chain's own follow - for the
+               nodes that hold a repeat with a counter, the only ones that consult it */
+            RxFirstSet nodeFollow;
+            bool usable = (node->kind == RX_REPEAT || node->kind == RX_GROUP || node->kind == RX_ALT) &&
+                rxFollowCompute(node->next, follow, e->flags, &nodeFollow);
+            rxEmitNode(e, node, usable ? &nodeFollow : NULL);
         }
         return;
     }
@@ -1981,7 +2031,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node)
         nodes[count++] = node;
     }
     while (count > 0) {
-        rxEmitNode(e, nodes[--count]);
+        rxEmitNode(e, nodes[--count], NULL);
     }
     free(nodes);
 }
@@ -2012,7 +2062,7 @@ static void rxEmitProgram(RxCompiler *compiler)
     RxEmit e;
     memset(&e, 0, sizeof(e));
     e.flags = compiler->flags;
-    rxEmitChain(&e, compiler->root);
+    rxEmitChain(&e, compiler->root, NULL);
     rxEmitOp(&e, RXI_MATCH);
     regex->prog = bsRealloc(e.inst, e.count * sizeof(RxInst));
     regex->classes = e.classes;
@@ -2483,12 +2533,20 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
             }
             if (count >= inst->operand) {
                 if (inst->aux == 0) {
-                    /* Lazy: try the continuation first; the body is the alternative */
-                    rxBtPush(state, RX_BT_REPEAT_BODY, pc, pos, 0);
-                    pc = inst->a;
-                    goto dispatch;
+                    /*
+                     * Lazy: try the continuation first, the body being the alternative - unless
+                     * the position holds none of the continuation's first code points, when only
+                     * the body can go on
+                     */
+                    const RxRepeatGroups *groups = &state->repeatGroups[slot];
+                    if (!groups->hasFollow || (pos < length && rxFirstHas(&groups->follow, rxCode(state, pos)))) {
+                        rxBtPush(state, RX_BT_REPEAT_BODY, pc, pos, 0);
+                        pc = inst->a;
+                        goto dispatch;
+                    }
+                } else {
+                    rxBtPush(state, RX_BT_SPLIT, inst->a, pos, 0);
                 }
-                rxBtPush(state, RX_BT_SPLIT, inst->a, pos, 0);
             }
             rxRepeatEnter(state, slot, pos);
             pc++;
