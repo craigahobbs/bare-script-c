@@ -550,6 +550,34 @@ BSValue bsStringNewFormat(const char *format, ...)
 }
 
 
+static size_t bsNumberFormatSlow(double number, char *buffer, size_t bufferSize);
+static size_t bsNumberEmit(char *buffer, size_t bufferSize, const char *text, size_t size);
+
+/*
+ * Format a number: an integer that prints without an exponent - the common case by far - by a
+ * digit loop in place, anything else through the round-trip search, which is kept out of line so
+ * the string concatenation, append, join, and JSON encoder bodies that inline this stay small
+ */
+static inline size_t bsNumberFormatFast(double number, char *buffer, size_t bufferSize)
+{
+    if (number == trunc(number) && number > -1e15 && number < 1e15) {
+        char text[24];
+        size_t begin = sizeof(text);
+        bool negative = number < 0;
+        uint64_t magnitude = (uint64_t) (negative ? -number : number);
+        do {
+            text[--begin] = (char) ('0' + (magnitude % 10));
+            magnitude /= 10;
+        } while (magnitude != 0);
+        if (negative) {
+            text[--begin] = '-';
+        }
+        return bsNumberEmit(buffer, bufferSize, text + begin, sizeof(text) - begin);
+    }
+    return bsNumberFormatSlow(number, buffer, bufferSize);
+}
+
+
 /*
  * A value's string bytes - "text" is an owned string value for the types that format into a new
  * string, and null when the bytes point at the caller's buffer or at an existing string
@@ -568,7 +596,7 @@ static BSStringBytes bsStringBytes(BSValue value, char *buffer, size_t bufferSiz
     case BS_STRING:
         return (BSStringBytes) {value.u.string->data, value.u.string->size, value.u.string->length, bsNull()};
     case BS_NUMBER: {
-        size_t size = bsNumberFormat(value.u.number, buffer, bufferSize);
+        size_t size = bsNumberFormatFast(value.u.number, buffer, bufferSize);
         return (BSStringBytes) {buffer, size, size, bsNull()};
     }
     case BS_NULL:
@@ -1972,34 +2000,19 @@ static size_t bsNumberEmit(char *buffer, size_t bufferSize, const char *text, si
 
 size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
 {
+    return bsNumberFormatFast(number, buffer, bufferSize);
+}
+
+
+/* A non-integer, or one past the fixed range: NaN, an infinity, or the shortest round-tripping digits */
+static BS_NOINLINE size_t bsNumberFormatSlow(double number, char *buffer, size_t bufferSize)
+{
     if (isnan(number)) {
         return bsNumberEmit(buffer, bufferSize, "NaN", 3);
     }
     if (isinf(number)) {
         return number > 0 ? bsNumberEmit(buffer, bufferSize, "Infinity", 8) :
             bsNumberEmit(buffer, bufferSize, "-Infinity", 9);
-    }
-    if (number == 0) {
-        return bsNumberEmit(buffer, bufferSize, "0", 1);
-    }
-
-    /*
-     * Integers in the range that prints without an exponent - the common case by far - format with
-     * a digit loop, skipping the round-trip search below entirely
-     */
-    if (number == trunc(number) && number > -1e15 && number < 1e15) {
-        char text[24];
-        size_t begin = sizeof(text);
-        bool negative = number < 0;
-        uint64_t magnitude = (uint64_t) (negative ? -number : number);
-        do {
-            text[--begin] = (char) ('0' + (magnitude % 10));
-            magnitude /= 10;
-        } while (magnitude != 0);
-        if (negative) {
-            text[--begin] = '-';
-        }
-        return bsNumberEmit(buffer, bufferSize, text + begin, sizeof(text) - begin);
     }
 
     /*
@@ -2460,7 +2473,7 @@ BSValue bsValueString(BSValue value)
     case BS_BOOLEAN:
         return bsStringNew(value.u.boolean ? "true" : "false");
     case BS_NUMBER:
-        return bsStringNewAscii(buffer, bsNumberFormat(value.u.number, buffer, sizeof(buffer)));
+        return bsStringNewAscii(buffer, bsNumberFormatFast(value.u.number, buffer, sizeof(buffer)));
     case BS_DATETIME: {
         BSDatetimeParts parts;
         bsDatetimeParts(value.u.datetime, &parts);
