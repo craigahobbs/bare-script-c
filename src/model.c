@@ -693,15 +693,22 @@ static BSValue bsEmitMap(BSValue *map)
     return *map;
 }
 
+/* A number stored under "key", or -1 if the map has no such key */
+static int bsMapNumber(BSValue map, BSValue key)
+{
+    BSValue value = bsObjectGetString(map, key);
+    return value.type == BS_NUMBER ? (int) value.u.number : -1;
+}
+
 
 /* A constant's operand. Interned strings - literals - are shared, so a chunk holds each once. */
 static BSOperand bsEmitConst(BSEmit *e, BSValue value)
 {
     bool interned = value.type == BS_STRING && (value.u.string->flags & BS_STR_INTERNED) != 0;
     if (interned) {
-        BSValue index = bsObjectGetString(bsEmitMap(&e->constMap), value);
-        if (index.type == BS_NUMBER) {
-            return (BSOperand) (BS_OPERAND_CONST | (uint32_t) index.u.number);
+        int index = bsMapNumber(bsEmitMap(&e->constMap), value);
+        if (index >= 0) {
+            return (BSOperand) (BS_OPERAND_CONST | (uint32_t) index);
         }
         bsObjectSetString(e->constMap, value, bsNumber((double) e->constCount));
     }
@@ -715,9 +722,9 @@ static BSOperand bsEmitConst(BSEmit *e, BSValue value)
 /* A name's index in the chunk's names, each held once - the name is interned */
 static uint16_t bsEmitName(BSEmit *e, BSValue name)
 {
-    BSValue index = bsObjectGetString(bsEmitMap(&e->nameMap), name);
-    if (index.type == BS_NUMBER) {
-        return (uint16_t) index.u.number;
+    int index = bsMapNumber(bsEmitMap(&e->nameMap), name);
+    if (index >= 0) {
+        return (uint16_t) index;
     }
     bsEmitLimit(e, e->nameCount, BS_INDEX_MAX);
     bsObjectSetString(e->nameMap, name, bsNumber((double) e->nameCount));
@@ -762,8 +769,7 @@ static uint16_t bsTempAlloc(BSEmit *e)
 
 static int bsSlotFind(const BSEmit *e, BSValue name)
 {
-    BSValue index = bsObjectGetString(e->slotMap, name);
-    return index.type == BS_NUMBER ? (int) index.u.number : -1;
+    return bsMapNumber(e->slotMap, name);
 }
 
 
@@ -803,9 +809,9 @@ static void bsEmitLabel(BSEmit *e, BSValue name)
 /* Point the jump word at "at" to a label - now if the label is behind, at the chunk's end if ahead */
 static void bsEmitJumpLabel(BSEmit *e, uint32_t at, BSValue label)
 {
-    BSValue pc = bsObjectGetString(e->labels, label);
-    if (pc.type == BS_NUMBER) {
-        e->inst[at].w = (uint32_t) pc.u.number;
+    int pc = bsMapNumber(e->labels, label);
+    if (pc >= 0) {
+        e->inst[at].w = (uint32_t) pc;
         return;
     }
     BS_GROW(e->patches, e->patchCount, e->patchCap, 8);
@@ -1469,14 +1475,13 @@ static void bsCodeRelocateConstants(BSInst *inst, size_t count, uint16_t base)
             inst[pc].a = bsOperandRelocate(inst[pc].a, base);
         } else if (op == BS_OP_MOVE || op == BS_OP_STORE_NAME || op == BS_OP_NEG || op == BS_OP_NOT || op == BS_OP_BNOT) {
             inst[pc].b = bsOperandRelocate(inst[pc].b, base);
-        } else if (op >= BS_OP_ADD && op <= BS_OP_SHR) {
+        } else if ((op >= BS_OP_ADD && op <= BS_OP_SHR) || (op >= BS_OP_JUMP_EQ && op <= BS_OP_JUMP_GE)) {
             inst[pc].b = bsOperandRelocate(inst[pc].b, base);
             inst[pc].c = bsOperandRelocate(inst[pc].c, base);
-        } else if (op >= BS_OP_JUMP_EQ && op <= BS_OP_JUMP_GE) {
-            /* The target word that follows is not operands */
-            inst[pc].b = bsOperandRelocate(inst[pc].b, base);
-            inst[pc].c = bsOperandRelocate(inst[pc].c, base);
-            pc++;
+            if (op >= BS_OP_JUMP_EQ) {
+                /* The target word that follows is not operands */
+                pc++;
+            }
         } else if (op == BS_OP_JUMP_UNDEF) {
             /* The line word that follows is not operands, and a is the label's name index */
             pc++;
@@ -1503,9 +1508,9 @@ static void bsCodeRelocateConstants(BSInst *inst, size_t count, uint16_t base)
 static bool bsEmitFinish(BSEmit *e, BSCode *code)
 {
     for (size_t ix = 0; ix < e->patchCount; ix++) {
-        BSValue pc = bsObjectGetString(e->labels, e->patches[ix].label);
-        if (pc.type == BS_NUMBER) {
-            e->inst[e->patches[ix].pc].w = (uint32_t) pc.u.number;
+        int pc = bsMapNumber(e->labels, e->patches[ix].label);
+        if (pc >= 0) {
+            e->inst[e->patches[ix].pc].w = (uint32_t) pc;
         } else {
             /*
              * A jump to a missing label only errors if the jump is taken. The trap sits past the
@@ -1592,9 +1597,7 @@ static void bsEmitFunction(BSEmit *e, const BSAst *ast, uint32_t id)
     for (uint32_t statement = node->a; statement != 0; statement = ast->nodes[statement].next) {
         BS_GROW(statements, count, capacity, 16);
         statements[count++] = statement;
-    }
-    for (size_t ix = 0; ix < count; ix++) {
-        BSValue assign = bsStatementAssignName(ast, statements[ix]);
+        BSValue assign = bsStatementAssignName(ast, statement);
         if (assign.type == BS_STRING) {
             bsSlotAdd(&body, assign, false);
         }
@@ -1645,6 +1648,17 @@ static BSScript *bsScriptNew(BSValue lines)
 }
 
 
+/* Finish a script's emit, or release the script if the chunk is invalid */
+static BSScript *bsEmitScriptEnd(BSScript *script, BSEmit *e, bool loaded)
+{
+    if (!bsEmitEnd(e, loaded, &script->code, BS_OPERAND_NULL)) {
+        bsScriptRelease(script);
+        return NULL;
+    }
+    return script;
+}
+
+
 /* Take a script's name and system flag from its model's members; "scriptName" overrides the name */
 static void bsScriptInfo(BSScript *script, BSValue model, const char *scriptName)
 {
@@ -1690,11 +1704,7 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
         }
     }
     bsAstFree(&ast);
-    if (!bsEmitEnd(&e, loaded, &script->code, BS_OPERAND_NULL)) {
-        bsScriptRelease(script);
-        return NULL;
-    }
-    return script;
+    return bsEmitScriptEnd(script, &e, loaded);
 }
 
 
@@ -2037,11 +2047,10 @@ BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const 
         bsRelease(reader.strings[ix]);
     }
     free(reader.strings);
-    if (!bsEmitEnd(&e, decoded, &script->code, BS_OPERAND_NULL)) {
-        bsScriptRelease(script);
-        return NULL;
+    script = bsEmitScriptEnd(script, &e, decoded);
+    if (script != NULL) {
+        script->scriptName = bsStringNew(scriptName);
     }
-    script->scriptName = bsStringNew(scriptName);
     return script;
 }
 
