@@ -7,7 +7,8 @@
  * Parsing is done by barescriptParser.bare, an include library script that runs on this runtime and
  * produces the JSON "BareScript model" - so the parser, and the exact syntax and error messages it
  * accepts, are shared with the JavaScript and Python implementations. The model is compiled to
- * bytecode; the original model is kept for lint and coverage.
+ * bytecode and kept only while the linter or coverage will read it; a script re-parses its
+ * retained lines when its model is wanted again.
  *
  * Structured statements - if/elif/else, while, for, break, continue - never reach the runtime; the
  * parser lowers them to labels and jumps, which compile to JUMP, JUMP_TRUE, JUMP_FALSE, and the
@@ -40,24 +41,6 @@ typedef struct BSInclude {
 
 
 /*
- * Per-site cache of a global name lookup - a CALL_NAME function, or a LOAD_NAME or STORE_NAME variable
- *
- * The cache points at the globals object's value slot for the name, so an assignment to the name
- * is seen through the slot. The slot is re-resolved when the globals object's structural
- * generation changes (a key added or removed) or the options instance changes. An objectGet or
- * objectSet call site also remembers the entry index its key was found at, since records built
- * the same way keep a key at the same index; the entry's key is checked before the memo is used.
- */
-typedef struct BSCallCache {
-    BSValue *slot;      /* the value slot in the globals object, or NULL if the name is absent */
-    uint32_t gen;       /* the globals object's structural generation the slot was resolved at */
-    uint32_t epoch;     /* the options instance the slot was resolved for */
-    uint32_t nameIndex; /* the name's index in the chunk's names */
-    uint32_t memo;      /* the entry index an object call site last found its key at */
-} BSCallCache;
-
-
-/*
  * A compiled bytecode chunk
  *
  * Instructions are eight-byte register instructions whose operands name a register - a slot, a
@@ -69,6 +52,7 @@ typedef struct BSCallCache {
  * interpreter allocates its registers once.
  */
 typedef struct BSInst BSInst;
+typedef struct BSCallCache BSCallCache;
 
 typedef struct BSCode {
     BSInst *inst;

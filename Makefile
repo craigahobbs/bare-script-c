@@ -147,7 +147,7 @@ commit: test cover test-include test-language release test-release
 
 .PHONY: help
 help:
-	@echo "usage: make [commit|compile|test|cover|test-include|test-language|test-release|perf|perfx|release|includes|install|clean]"
+	@echo "usage: make [commit|compile|test|cover|test-include|test-language|test-release|perf|perfx|perfx-check|release|includes|install|clean]"
 	@echo
 	@echo "  commit        everything that must pass before a commit"
 	@echo "  compile       build the shared library and the command-line interface"

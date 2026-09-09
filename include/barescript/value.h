@@ -290,7 +290,7 @@ size_t bsArrayCount(BSValue value);
 BSValue bsArrayGet(BSValue value, size_t index);          /* borrowed */
 void bsArraySet(BSValue value, size_t index, BSValue item); /* takes ownership of "item" */
 void bsArrayPush(BSValue value, BSValue item);            /* takes ownership of "item" */
-void bsArrayInsert(BSValue value, size_t index, BSValue item);
+void bsArrayInsert(BSValue value, size_t index, BSValue item); /* takes ownership of "item" */
 void bsArrayDelete(BSValue value, size_t index);
 void bsArrayReserve(BSValue value, size_t capacity);
 BSValue bsArrayCopy(BSValue value);
@@ -307,7 +307,7 @@ BSValue bsObjectGetString(BSValue value, BSValue key);         /* borrowed; bsNu
 bool bsObjectHas(BSValue value, const char *key);
 bool bsObjectHasString(BSValue value, BSValue key);
 void bsObjectSet(BSValue value, const char *key, BSValue item);       /* takes ownership of "item" */
-void bsObjectSetString(BSValue value, BSValue key, BSValue item);     /* takes ownership of "item" */
+void bsObjectSetString(BSValue value, BSValue key, BSValue item);     /* takes ownership of "item"; retains "key" */
 bool bsObjectDelete(BSValue value, const char *key);
 BSValue bsObjectKeys(BSValue value);       /* an owned array of the keys, in insertion order */
 BSValue bsObjectKeysSorted(BSValue value); /* an owned array of the keys, in sorted key order */

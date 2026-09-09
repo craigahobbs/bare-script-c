@@ -86,9 +86,9 @@ static void bsParserErrorFromModel(BSParserError *error, BSValue errorModel)
     error->error = bsRetain(bsObjectGet(errorModel, "error"));
     error->line = bsRetain(bsObjectGet(errorModel, "line"));
     error->scriptName = bsRetain(bsObjectGet(errorModel, "scriptName"));
-    error->message = bsRetain(bsObjectGet(errorModel, "message"));
     error->columnNumber = columnNumber.type == BS_NUMBER ? (int) columnNumber.u.number : 0;
     error->lineNumber = lineNumber.type == BS_NUMBER ? (int) lineNumber.u.number : 0;
+    error->message = bsRetain(bsObjectGet(errorModel, "message"));
 }
 
 
