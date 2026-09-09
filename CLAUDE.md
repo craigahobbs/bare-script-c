@@ -314,7 +314,9 @@ Profile first, change what the profile names, measure, keep or revert:
   allocation-free object comparison; copying a function's constants into its frame with a loop
   instead of memcpy (schemaValidate +4.8%, the parser tests +1%); changing code the interpreter loop
   inlines - the array buffer pool, the intrinsic switch's bodies - without keeping the changed
-  bodies out of line (nbody moved +0.7..1.5% on unrelated layout churn until they were `BS_NOINLINE`).
+  bodies out of line (nbody moved +0.7..1.5% on unrelated layout churn until they were `BS_NOINLINE`);
+  an `objectNew` call opcode even with its body out of line (markdownElements +1.2%, nbody +1.5% -
+  the general path's intrinsic switch is already as cheap for a variable-length argument list).
 - The perfx suite (`make perfx`) is the yardstick for container-heavy code - `nbody` and
   `pathfind` spend their time in `objectGet`/`arrayGet` calls - where the include suite is
   parser-bound.
