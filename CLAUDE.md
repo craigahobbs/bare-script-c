@@ -172,7 +172,7 @@ and the one-argument math functions, which share one opcode) compile to call opc
 site's *warm* cache - valid for the activation's globals object, its global carrying that intrinsic
 id - with a cold site, or one an expression's locals object could shadow, taking the general call,
 which resolves the cache; they have no case in `bsIntrinsicCall`, which serves the rest through the
-general call path.
+general call path (`arrayPush` has both: its opcode takes the two-argument shape, its case the rest).
 
 ### Regular expressions
 

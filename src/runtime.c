@@ -14,6 +14,14 @@
 
 #include "internal.h"
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wgnu-label-as-value"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+
 
 /* Run a compiled bytecode chunk on the registers its caller filled. Returns an owned value. */
 static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSValue *regs,
@@ -26,15 +34,6 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 /* Stamps each options instance so a script's per-site caches re-resolve for a new one */
 static _Thread_local uint32_t bsCacheEpoch;
 
-/* The coverage lookup keys, interned once per thread when a coverage slot is first resolved */
-static _Thread_local struct {
-    BSValue coverage, enabled;
-} bsCoverageKeys;
-
-const char *bsVersion(void)
-{
-    return BARESCRIPT_VERSION;
-}
 
 
 /*
@@ -100,11 +99,9 @@ void bsErrorSetStatement(BSOptions *options, const BSScript *script, int lineNum
 
     if (script != NULL && script->scriptName.type == BS_STRING) {
         const char *scriptName = bsStringData(script->scriptName);
-        if (lineNumber != 0) {
-            options->error = bsStringNewFormat("%s:%d: %s", scriptName, lineNumber, bsStringData(message));
-        } else {
-            options->error = bsStringNewFormat("%s: %s", scriptName, bsStringData(message));
-        }
+        options->error = lineNumber != 0 ?
+            bsStringNewFormat("%s:%d: %s", scriptName, lineNumber, bsStringData(message)) :
+            bsStringNewFormat("%s: %s", scriptName, bsStringData(message));
         bsRelease(message);
     } else {
         options->error = message;
@@ -262,6 +259,12 @@ static void bsRegsRelease(BSValue *regs, size_t count, const BSValue *inlineBuf)
 }
 
 
+static bool bsIsInteger(BSValue value)
+{
+    return value.type == BS_NUMBER && isfinite(value.u.number) && trunc(value.u.number) == value.u.number;
+}
+
+
 /* A JavaScript ToInt32 of a value bsIsInteger has passed */
 static int32_t bsToInt32(double value)
 {
@@ -270,12 +273,6 @@ static int32_t bsToInt32(double value)
         modulo += 4294967296.0;
     }
     return (int32_t) (uint32_t) modulo;
-}
-
-
-static bool bsIsInteger(BSValue value)
-{
-    return value.type == BS_NUMBER && isfinite(value.u.number) && trunc(value.u.number) == value.u.number;
 }
 
 
@@ -304,6 +301,22 @@ static BSValue bsAddSlow(BSValue left, BSValue right)
         return bsNull();
     }
     return (isfinite(value) && fabs(value) <= BS_DATETIME_MAX) ? bsDatetime((int64_t) value) : bsNull();
+}
+
+
+/*
+ * The modulo operator - integer operands, the common case by far, take the integer remainder,
+ * which agrees with fmod (the sign of the dividend, and a signed zero when the remainder is zero)
+ */
+static inline double bsModulo(double left, double right)
+{
+    if (left > -9007199254740992.0 && left < 9007199254740992.0 &&
+        right > -9007199254740992.0 && right < 9007199254740992.0 && right != 0 &&
+        left == (double) (int64_t) left && right == (double) (int64_t) right) {
+        int64_t remainder = (int64_t) left % (int64_t) right;
+        return remainder != 0 ? (double) remainder : copysign(0.0, left);
+    }
+    return fmod(left, right);
 }
 
 
@@ -526,7 +539,8 @@ static BSValue bsRunChunk(const BSCode *code, BSScript *script, BSOptions *optio
  * reports the error. The intrinsics with one argument shape - arrayGet, arrayLength, arrayPush,
  * arraySet, objectGet, objectHas, objectSet, stringCharCodeAt, stringLength, stringSlice, and the
  * one-argument math functions - have call opcodes of their own, which run them in place; their ids
- * only identify the library function to those opcodes' guard.
+ * only identify the library function to those opcodes' guard. arrayPush's opcode takes its
+ * two-argument shape, and its case here the others.
  */
 static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
 {
@@ -936,6 +950,17 @@ static bool bsExecuteIncludes(BSScript *script, const BSInclude *includes, size_
 }
 
 
+/* The coverage lookup keys, interned once per thread when a coverage slot is first resolved */
+static _Thread_local struct {
+    BSValue coverage, enabled;
+} bsCoverageKeys;
+
+const char *bsVersion(void)
+{
+    return BARESCRIPT_VERSION;
+}
+
+
 /*
  * Run a compiled chunk
  *
@@ -951,30 +976,6 @@ static bool bsExecuteIncludes(BSScript *script, const BSInclude *includes, size_
 #if defined(__GNUC__) || defined(__clang__)
 #define BS_THREADED_DISPATCH 1
 #endif
-
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wgnu-label-as-value"
-#elif defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
-#endif
-
-/*
- * The modulo operator - integer operands, the common case by far, take the integer remainder,
- * which agrees with fmod (the sign of the dividend, and a signed zero when the remainder is zero)
- */
-static inline double bsModulo(double left, double right)
-{
-    if (left > -9007199254740992.0 && left < 9007199254740992.0 &&
-        right > -9007199254740992.0 && right < 9007199254740992.0 && right != 0 &&
-        left == (double) (int64_t) left && right == (double) (int64_t) right) {
-        int64_t remainder = (int64_t) left % (int64_t) right;
-        return remainder != 0 ? (double) remainder : copysign(0.0, left);
-    }
-    return fmod(left, right);
-}
-
 
 /*
  * An operand's value, borrowed: a register - a slot, a temporary, or one of the constants copied
