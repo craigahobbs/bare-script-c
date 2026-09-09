@@ -61,11 +61,10 @@ static BSValue bsBootstrapGlobals(BSBootstrap *bootstrap)
 
 void bsParserCleanup(void)
 {
-    BSBootstrap *bootstraps[2] = {&bsParserBootstrap, &bsLintBootstrap};
-    for (size_t ix = 0; ix < 2; ix++) {
-        bsOptionsFree(bootstraps[ix]->options);
-        bootstraps[ix]->options = NULL;
-    }
+    bsOptionsFree(bsParserBootstrap.options);
+    bsParserBootstrap.options = NULL;
+    bsOptionsFree(bsLintBootstrap.options);
+    bsLintBootstrap.options = NULL;
 }
 
 

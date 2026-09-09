@@ -108,25 +108,6 @@ static inline void bsAssignInline(BSValue *target, BSValue value)
 #endif
 
 
-/*
- * The internal "unset" value
- *
- * A function-local slot holding the unset marker has not been assigned, so a variable lookup falls
- * through to the globals object - matching the reference implementations, where an unassigned
- * local simply is not a key of the locals dictionary.
- */
-#define BS_UNSET_TYPE ((BSType) -1)
-#define BS_IS_UNSET(value) ((int) (value).type == (int) BS_UNSET_TYPE)
-
-static inline BSValue bsUnset(void)
-{
-    BSValue value;
-    value.type = BS_UNSET_TYPE;
-    value.u.ref = NULL;
-    return value;
-}
-
-
 /* Re-parse a script's retained lines into a fresh model. Returns an owned model, or a null value. */
 BSValue bsScriptReparse(const BSScript *script);
 
@@ -165,6 +146,9 @@ struct BSInst {
 #define BS_OPERAND_INDEX(o) ((o) & BS_OPERAND_MAX)
 #define BS_REG_DISCARD 0xffffu              /* a call destination that drops the result */
 #define BS_OPERANDS_PER_DATA 3              /* call argument operands per DATA word */
+
+/* The arguments a call gets on the C stack before it needs the heap */
+#define BS_ARGS_INLINE 16
 
 enum {
     BS_OP_MOVE = 0,    /* a = b */
@@ -285,19 +269,6 @@ BSValue bsStringIndexOfValue(BSValue string, BSValue search, size_t index);
 
 /* An array of "size" retained copies of "value" (library.c) */
 BSValue bsArrayNewSizeValue(size_t size, BSValue value);
-
-/* Whether a name is the word - a first-character test before the compare, the names rarely being it */
-static inline bool bsNameIs(const char *name, const char *word)
-{
-    return name[0] == word[0] && strcmp(name, word) == 0;
-}
-
-/* The same of a string value, by size and bytes, so a slice is read as it is */
-static inline bool bsStringIs(BSValue value, const char *word)
-{
-    size_t size = strlen(word);
-    return value.u.string->size == size && memcmp(value.u.string->data, word, size) == 0;
-}
 
 /*
  * Append a value's string representation to a string that nothing else references - the caller

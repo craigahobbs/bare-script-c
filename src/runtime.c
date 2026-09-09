@@ -232,6 +232,22 @@ void bsSystemIncludeClear(void)
 #define BS_REGS_INLINE 192
 
 
+/*
+ * The internal "unset" value
+ *
+ * A function-local slot holding the unset marker has not been assigned, so a variable lookup falls
+ * through to the globals object - matching the reference implementations, where an unassigned
+ * local simply is not a key of the locals dictionary.
+ */
+#define BS_UNSET_TYPE ((BSType) -1)
+#define BS_IS_UNSET(value) ((int) (value).type == (int) BS_UNSET_TYPE)
+
+static inline BSValue bsUnset(void)
+{
+    return (BSValue) {.type = BS_UNSET_TYPE, .u.ref = NULL};
+}
+
+
 static void bsRegsRelease(BSValue *regs, size_t count, const BSValue *inlineBuf)
 {
     for (size_t ix = 0; ix < count; ix++) {
@@ -1553,8 +1569,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         call_general: {
             /* The arguments are operands, three per data word, read into a borrowed argument array */
             size_t argCount = inst->c;
-            BSValue argsInline[16];
-            BSValue *args = argCount <= 16 ? argsInline : bsAlloc(argCount * sizeof(BSValue));
+            BSValue argsInline[BS_ARGS_INLINE];
+            BSValue *args = argCount <= BS_ARGS_INLINE ? argsInline : bsAlloc(argCount * sizeof(BSValue));
             const BSInst *data = inst + 1;
             size_t ix = 0;
             for (; ix + BS_OPERANDS_PER_DATA <= argCount; ix += BS_OPERANDS_PER_DATA, data++) {

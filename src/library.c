@@ -214,6 +214,11 @@ static const BSArgModel stringArgs[] = {{"string", BS_ARG_STRING, 0, 0, 0, 0, 0}
 static const BSArgModel valueArgs[] = {{"value", BS_ARG_ANY, 0, 0, 0, 0, 0}};
 
 
+/*
+ * Shared helpers
+ */
+
+
 BSValue bsStringSlice(BSValue string, size_t begin, size_t end)
 {
     const BSString *source = string.u.string;
@@ -457,7 +462,7 @@ static const BSArgModel arrayNewSizeArgs[] = {
     {"value", BS_ARG_ANY, BS_ARG_HAS_DEFAULT, 0, 0, 0, 0}
 };
 
-/* Out of line: inlined into the intrinsic switch, these bulk the interpreter loop */
+/* Out of line: inlined into the intrinsic switch, it bulks the interpreter loop */
 BS_NOINLINE BSValue bsArrayNewSizeValue(size_t size, BSValue value)
 {
     BSValue result = bsArrayNewCapacity(size);
@@ -1447,6 +1452,7 @@ static const BSArgModel stringIndexOfArgs[] = {
     {"index", BS_ARG_NUMBER, BS_ARG_INTEGER | BS_ARG_HAS_DEFAULT | BS_ARG_GTE, 0, 0, 0, 0}
 };
 
+/* Out of line: inlined into the intrinsic switch, it bulks the interpreter loop */
 BS_NOINLINE BSValue bsStringIndexOfValue(BSValue string, BSValue search, size_t index)
 {
     size_t offset = bsMemFind(bsStringSpan(string), bsStringSize(string), bsStringSpan(search),
@@ -1515,7 +1521,7 @@ BS_LIBRARY_FN(bsFnStringLower, stringArgs, bsNull(), bsStringToCase(values[0], f
 BS_LIBRARY_FN(bsFnStringUpper, stringArgs, bsNull(), bsStringToCase(values[0], true))
 
 
-BS_LIBRARY_FN(bsFnStringNewFn, valueArgs, bsNull(), bsValueString(values[0]))
+BS_LIBRARY_FN(bsFnStringNew, valueArgs, bsNull(), bsValueString(values[0]))
 
 
 static const BSArgModel stringRepeatArgs[] = {
@@ -1666,6 +1672,7 @@ BS_LIBRARY_FN(bsFnStringStartsWith, stringSearchArgs, bsNull(),
               bsBoolean(bsStringStartsWith(values[0], values[1])))
 
 
+/* Out of line: inlined into the intrinsic switch, it bulks the interpreter loop */
 BS_NOINLINE BSValue bsStringTrimValue(BSValue string)
 {
     const char *text = bsStringSpan(string);
@@ -1864,8 +1871,8 @@ static BSValue bsPartialCall(const BSValue *args, size_t argCount, BSOptions *op
     BSPartial *partial = data;
     size_t boundCount = bsArrayCount(partial->args);
     size_t totalCount = boundCount + argCount;
-    BSValue inlineArgs[16];
-    BSValue *callArgs = totalCount <= 16 ? inlineArgs : bsAlloc(totalCount * sizeof(BSValue));
+    BSValue argsInline[BS_ARGS_INLINE];
+    BSValue *callArgs = totalCount <= BS_ARGS_INLINE ? argsInline : bsAlloc(totalCount * sizeof(BSValue));
     for (size_t ix = 0; ix < boundCount; ix++) {
         callArgs[ix] = bsArrayGet(partial->args, ix);
     }
@@ -1873,7 +1880,7 @@ static BSValue bsPartialCall(const BSValue *args, size_t argCount, BSOptions *op
         callArgs[boundCount + ix] = args[ix];
     }
     BSValue result = bsFunctionCall(partial->function, callArgs, totalCount, options);
-    if (callArgs != inlineArgs) {
+    if (callArgs != argsInline) {
         free(callArgs);
     }
     return result;
@@ -2010,7 +2017,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
     {"stringLastIndexOf", bsFnStringLastIndexOf, "lastIndexOf", 0},
     {"stringLength", bsFnStringLength, "len", BS_INTRIN_STRING_LENGTH},
     {"stringLower", bsFnStringLower, "lower", 0},
-    {"stringNew", bsFnStringNewFn, "text", 0},
+    {"stringNew", bsFnStringNew, "text", 0},
     {"stringRepeat", bsFnStringRepeat, "rept", 0},
     {"stringReplace", bsFnStringReplace, "replace", 0},
     {"stringSlice", bsFnStringSlice, "slice", BS_INTRIN_STRING_SLICE},

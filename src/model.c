@@ -319,6 +319,21 @@ static inline BSValue bsNodeText(const BSAst *ast, const BSNode *node)
 }
 
 
+/* Whether a name is the word - a first-character test before the compare, the names rarely being it */
+static inline bool bsNameIs(const char *name, const char *word)
+{
+    return name[0] == word[0] && strcmp(name, word) == 0;
+}
+
+
+/* The same of a string value, by size and bytes, so a slice is read as it is */
+static inline bool bsStringIs(BSValue value, const char *word)
+{
+    size_t size = strlen(word);
+    return value.u.string->size == size && memcmp(value.u.string->data, word, size) == 0;
+}
+
+
 /* Append a node to the list whose first node is "*head" and last node "*tail" */
 static void bsAstAppend(BSAst *ast, uint32_t *head, uint32_t *tail, uint32_t node)
 {
@@ -349,7 +364,6 @@ static BSString *bsModelKind(BSValue node, BSValue *member)
 #define BS_KIND(kind, field) ((kind) != NULL && bsObjectKeyIs((kind), bsKeys.field))
 
 
-/* A binary operator's opcode, or zero if the text is no operator */
 /* A binary node's op: the operator's opcode, or the short-circuit operators' own codes; zero if unknown */
 static uint16_t bsBinaryNodeOp(const char *op)
 {
@@ -716,7 +730,15 @@ static uint32_t bsEmitJumpInst(BSEmit *e, uint8_t op, uint16_t a, uint32_t targe
  * bsEmitFinish rejects the chunk.
  */
 
-/* A constant's operand. Interned strings - literals - are shared, so a chunk holds each once. */
+/* Mark the chunk overflowed when an operand space's count passes its bound */
+static inline void bsEmitLimit(BSEmit *e, size_t count, size_t max)
+{
+    if (count > max) {
+        e->overflow = true;
+    }
+}
+
+
 /* One of the emitter's lookup objects, created on its first store - the reads tolerate a null value */
 static BSValue bsEmitMap(BSValue *map)
 {
@@ -727,6 +749,7 @@ static BSValue bsEmitMap(BSValue *map)
 }
 
 
+/* A constant's operand. Interned strings - literals - are shared, so a chunk holds each once. */
 static BSOperand bsEmitConst(BSEmit *e, BSValue value)
 {
     bool interned = value.type == BS_STRING && (value.u.string->flags & BS_STR_INTERNED) != 0;
@@ -737,9 +760,7 @@ static BSOperand bsEmitConst(BSEmit *e, BSValue value)
         }
         bsObjectSetString(e->constMap, value, bsNumber((double) e->constCount));
     }
-    if (e->constCount > BS_OPERAND_MAX) {
-        e->overflow = true;
-    }
+    bsEmitLimit(e, e->constCount, BS_OPERAND_MAX);
     BS_GROW(e->constants, e->constCount, e->constCap, 16);
     e->constants[e->constCount] = bsRetain(value);
     return (BSOperand) (BS_OPERAND_CONST | (uint32_t) e->constCount++);
@@ -753,9 +774,7 @@ static uint16_t bsEmitName(BSEmit *e, BSValue name)
     if (index.type == BS_NUMBER) {
         return (uint16_t) index.u.number;
     }
-    if (e->nameCount > 0xffffu) {
-        e->overflow = true;
-    }
+    bsEmitLimit(e, e->nameCount, 0xffffu);
     bsObjectSetString(e->nameMap, name, bsNumber((double) e->nameCount));
     BS_GROW(e->names, e->nameCount, e->nameCap, 8);
     e->names[e->nameCount] = bsRetain(name);
@@ -787,9 +806,7 @@ static BSOperand bsEmitBool(BSEmit *e, bool value)
 static uint16_t bsTempAlloc(BSEmit *e)
 {
     size_t index = e->slotCount + e->tempTop;
-    if (index > BS_OPERAND_MAX) {
-        e->overflow = true;
-    }
+    bsEmitLimit(e, index, BS_OPERAND_MAX);
     e->tempTop++;
     if (e->tempTop > e->tempMax) {
         e->tempMax = e->tempTop;
@@ -823,9 +840,7 @@ static void bsSlotAdd(BSEmit *e, BSValue name, bool argument)
 /* Allocate a global-name cache site for a name instruction; the operand is its index */
 static uint16_t bsEmitSite(BSEmit *e, BSValue name)
 {
-    if (e->cacheCount > BS_OPERAND_MAX) {
-        e->overflow = true;
-    }
+    bsEmitLimit(e, e->cacheCount, BS_OPERAND_MAX);
     BS_GROW(e->caches, e->cacheCount, e->cacheCap, 8);
     BSCallCache *cache = &e->caches[e->cacheCount];
     memset(cache, 0, sizeof(*cache));
@@ -1238,12 +1253,10 @@ static void bsEmitCallTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t ds
     const BSNode *node = &ast->nodes[call];
     BSValue name = bsNodeText(ast, node);
     size_t argCount = node->b;
-    if (argCount > BS_OPERAND_MAX) {
-        e->overflow = true;
-    }
+    bsEmitLimit(e, argCount, BS_OPERAND_MAX);
     uint16_t base = e->tempTop;
-    BSOperand argInline[16];
-    BSOperand *operands = argCount <= 16 ? argInline : bsAlloc(argCount * sizeof(BSOperand));
+    BSOperand argsInline[BS_ARGS_INLINE];
+    BSOperand *operands = argCount <= BS_ARGS_INLINE ? argsInline : bsAlloc(argCount * sizeof(BSOperand));
     size_t ix = 0;
     for (uint32_t arg = node->a; ix < argCount; arg = ast->nodes[arg].next) {
         operands[ix++] = bsEmitExprOperand(e, ast, arg);
@@ -1260,7 +1273,7 @@ static void bsEmitCallTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t ds
                    ix + 1 < argCount ? operands[ix + 1] : 0,
                    ix + 2 < argCount ? operands[ix + 2] : 0);
     }
-    if (operands != argInline) {
+    if (operands != argsInline) {
         free(operands);
     }
 }
@@ -1452,9 +1465,7 @@ static void bsEmitStatement(BSEmit *e, const BSAst *ast, uint32_t id)
         /* An include statement: one instruction runs the statement's includes, which fetch together */
         size_t first = e->includeCount;
         for (uint32_t item = node->a; item != 0; item = ast->nodes[item].next) {
-            if (e->includeCount > BS_OPERAND_MAX) {
-                e->overflow = true;
-            }
+            bsEmitLimit(e, e->includeCount, BS_OPERAND_MAX);
             BS_GROW(e->includes, e->includeCount, e->includeCap, 4);
             e->includes[e->includeCount].url = bsRetain(bsNodeText(ast, &ast->nodes[item]));
             e->includes[e->includeCount].system = ast->nodes[item].flag;
@@ -2031,7 +2042,7 @@ static uint32_t bsModelStatement(BSModelReader *reader, int depth)
 BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const char *scriptName)
 {
     bsModelKeysInit();
-    BSModelReader reader = {data, size, 0, NULL, NULL, 0, false, false};
+    BSModelReader reader = {.data = data, .size = size};
     unsigned version = bsModelByte(&reader);
     reader.shared = version == 2;
 
