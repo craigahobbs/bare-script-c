@@ -16,10 +16,6 @@
 #include "barescript/value.h"
 
 
-/* Release the calling thread's HTTP connection pool (options.c) */
-void bsFetchCleanup(void);
-
-
 /* The largest datetime JavaScript's Date represents, in milliseconds */
 #define BS_DATETIME_MAX 8640000000000000.0
 
@@ -56,6 +52,9 @@ void bsRegexDestroy(BSValue value);
 
 /* Free the thread's regex match scratch buffers (regex.c) */
 void bsRegexScratchFree(void);
+
+/* Release the calling thread's HTTP connection pool (options.c) */
+void bsFetchCleanup(void);
 
 /* Destroy a heap value whose refcount has reached zero */
 void bsReleaseDestroyed(BSValue value);
@@ -130,76 +129,6 @@ BSValue bsScriptReparse(const BSScript *script);
 
 /* Bring back a forgotten model and the chunks' borrowed statement models, for coverage recording */
 bool bsScriptRestoreCover(BSScript *script);
-
-/*
- * The syntax tree the emitter compiles
- *
- * A statement is loaded into an arena of nodes - from the parser's model objects, or straight
- * from model JSON, which then builds no objects at all - emitted, and the arena reset for the
- * next, so the arena holds one statement at a time. A node's links are indexes into the arena,
- * zero meaning none; its string is an index plus one into the arena's interned strings.
- */
-enum {
-    BS_NODE_NUMBER = 1,   /* number */
-    BS_NODE_STRING,       /* text: the literal */
-    BS_NODE_VARIABLE,     /* text: the name */
-    BS_NODE_CALL,         /* text: the function name; a: the first argument; b: the argument count */
-    BS_NODE_BINARY,       /* op: the opcode, or BS_NODE_AND / BS_NODE_OR; a, b: the operands */
-    BS_NODE_UNARY,        /* op: the opcode; a: the operand */
-    BS_NODE_GROUP,        /* a: the expression */
-    BS_NODE_EXPR,         /* a: the expression; text: the name assigned, or none */
-    BS_NODE_JUMP,         /* text: the label; a: the condition, or none */
-    BS_NODE_RETURN,       /* a: the expression, or none */
-    BS_NODE_LABEL,        /* text: the name */
-    BS_NODE_FUNCTION,     /* text: the name; a: the first statement; b: the first argument; flag: lastArgArray */
-    BS_NODE_INCLUDE,      /* a: the first include */
-    BS_NODE_INCLUDE_ITEM, /* text: the url; flag: system */
-    BS_NODE_ARG           /* text: a function argument's name */
-};
-
-/* The short-circuit operators, in a binary node's op past the opcodes */
-#define BS_NODE_AND 0xFE
-#define BS_NODE_OR 0xFF
-
-typedef struct BSNode {
-    uint8_t kind;
-    uint8_t flag;
-    uint16_t op;
-    uint32_t next;  /* the next node of a list, or zero */
-    uint32_t a;
-    uint32_t b;
-    uint32_t text;
-    int32_t line;   /* a statement's line number, or zero */
-    double number;
-    BSValue model;  /* a statement's model object, borrowed, for coverage - or a null value */
-} BSNode;
-
-typedef struct BSAst {
-    BSNode *nodes;   /* node zero is unused, so a zero link means none */
-    uint32_t count;
-    uint32_t capacity;
-    BSValue *strings;
-    uint32_t stringCount;
-    uint32_t stringCapacity;
-} BSAst;
-
-void bsAstInit(BSAst *ast);
-void bsAstReset(BSAst *ast);  /* release the strings and empty the arena, keeping its buffers */
-void bsAstFree(BSAst *ast);
-
-/* A new node, zeroed, by index - the arena may move, so re-index after one */
-uint32_t bsAstNode(BSAst *ast, uint8_t kind);
-
-/* Take an owned string into the arena. Returns its index plus one, a node's "text". */
-uint32_t bsAstString(BSAst *ast, BSValue string);
-
-/* A binary node's op for an operator string - an opcode or a short-circuit code - and a unary node's opcode; zero if unknown */
-uint16_t bsBinaryNodeOp(const char *op);
-uint8_t bsUnaryOpcode(const char *op);
-
-/* Load a statement or expression model object into the arena. Returns the node, or zero for a malformed model. */
-uint32_t bsAstStatement(BSAst *ast, BSValue model);
-uint32_t bsAstExpr(BSAst *ast, BSValue model);
 
 /*
  * Compile a script from its binary model - the bundled include library's encoding, which

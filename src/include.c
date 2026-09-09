@@ -5,7 +5,8 @@
  * The bundled BareScript include library
  *
  * Each include library script is embedded in the library as its parser-compiled binary script
- * model, gzip-compressed (see bin/includeSource.bare). A model is inflated on first use and cached.
+ * model, gzip-compressed (see bin/includeSource.bare). A model is inflated on first use; its compiled
+ * script is cached, and the bytes are kept only for bsIncludeSource's callers.
  */
 
 #include <stdlib.h>

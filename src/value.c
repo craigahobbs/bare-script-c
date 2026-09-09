@@ -1264,7 +1264,6 @@ BSValue bsStringInternExisting(const char *data, size_t size)
 }
 
 
-
 /* Free every item on a pool's free list - "next" is the item's link, through "item" - and zero its count */
 #define BS_POOL_DRAIN(head, count, type, next) \
     do { \
@@ -1480,19 +1479,6 @@ static void bsObjectEntryAdd(BSObject *object, BSValue key, BSValue item)
 }
 
 
-/* Insert or update a key. Takes ownership of "item"; retains "key" if an entry is added. */
-static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
-{
-    BSObjectEntry *entry = bsObjectFind(object, key.u.string, key.u.string->data, key.u.string->size);
-    if (entry != NULL) {
-        bsReleaseInline(entry->value);
-        entry->value = item;
-        return;
-    }
-    bsObjectEntryAdd(object, key, item);
-}
-
-
 BSValue bsObjectNewCapacity(size_t count)
 {
     BSValue value = bsObjectNew();
@@ -1533,6 +1519,19 @@ static void bsObjectEntriesFree(BSObject *object)
     if (object->index != NULL) {
         free(object->index);
     }
+}
+
+
+/* Insert or update a key. Takes ownership of "item"; retains "key" if an entry is added. */
+static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
+{
+    BSObjectEntry *entry = bsObjectFind(object, key.u.string, key.u.string->data, key.u.string->size);
+    if (entry != NULL) {
+        bsReleaseInline(entry->value);
+        entry->value = item;
+        return;
+    }
+    bsObjectEntryAdd(object, key, item);
 }
 
 
@@ -2024,7 +2023,6 @@ bool bsNumberRound(double number, double digits, double *result)
 }
 
 
-
 /*
  * strtod over an unterminated span, copied out since strtod needs a terminator. Almost every
  * number fits the stack buffer; a longer one - a very long run of digits - takes a heap copy.
@@ -2060,8 +2058,7 @@ static size_t bsSkipSpaces(const char *text, size_t size, size_t ix)
 bool bsNumberParse(const char *text, size_t size, double *result)
 {
     /* ^\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*$ */
-    size_t ix = 0;
-    ix = bsSkipSpaces(text, size, ix);
+    size_t ix = bsSkipSpaces(text, size, 0);
     size_t begin = ix;
     if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
         ix++;
@@ -2116,8 +2113,7 @@ bool bsIntegerParse(const char *text, size_t size, int radix, double *result)
     if (radix < 2 || radix > 36) {
         return false;
     }
-    size_t ix = 0;
-    ix = bsSkipSpaces(text, size, ix);
+    size_t ix = bsSkipSpaces(text, size, 0);
     bool negative = false;
     if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
         negative = (text[ix] == '-');

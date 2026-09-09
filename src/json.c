@@ -22,8 +22,10 @@
  */
 
 
-/* The escape for a byte an encoded string escapes - the control characters, the quote, and the
- * backslash - or NULL for a byte that stands as it is */
+/*
+ * The escape for a byte an encoded string escapes - the control characters, the quote, and the
+ * backslash - or NULL for a byte that stands as it is
+ */
 static const char *bsJSONEscape(unsigned char ch)
 {
     static const char *const controls[0x20] = {
@@ -281,15 +283,10 @@ static const char bsJSONUnescape[256] = {
 };
 
 
-/* How a decoded string is made: a plain string, or a key - an interned name when there is one */
-enum {
-    BS_JSON_STRING_PLAIN,
-    BS_JSON_STRING_KEY
-};
-
-static BSValue bsJSONString(const char *data, size_t size, int mode)
+/* A decoded string: a plain string, or a key - an interned name when there is one */
+static BSValue bsJSONString(const char *data, size_t size, bool key)
 {
-    return mode == BS_JSON_STRING_PLAIN ? bsStringNewSize(data, size) : bsStringInternExisting(data, size);
+    return key ? bsStringInternExisting(data, size) : bsStringNewSize(data, size);
 }
 
 /*
@@ -297,14 +294,14 @@ static BSValue bsJSONString(const char *data, size_t size, int mode)
  * common case, copied once from the input. False for a string with an escape or an error, which
  * bsJSONDecodeString then decodes through a builder.
  */
-static inline bool bsJSONDecodePlainString(BSJSONParser *parser, BSValue *result, int mode)
+static inline bool bsJSONDecodePlainString(BSJSONParser *parser, BSValue *result, bool key)
 {
     size_t begin = parser->offset + 1;
     size_t ix = begin;
     while (ix < parser->size) {
         unsigned char ch = (unsigned char) parser->text[ix];
         if (ch == '"') {
-            *result = bsJSONString(parser->text + begin, ix - begin, mode);
+            *result = bsJSONString(parser->text + begin, ix - begin, key);
             parser->offset = ix + 1;
             return true;
         }
@@ -318,7 +315,7 @@ static inline bool bsJSONDecodePlainString(BSJSONParser *parser, BSValue *result
 
 
 /* Decode the string at the offset, which holds its opening quote, once the plain decode has declined it */
-static BS_NOINLINE bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, int mode)
+static BS_NOINLINE bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result, bool key)
 {
     size_t begin = parser->offset++;
     BSStringBuilder sb;
@@ -379,7 +376,7 @@ static BS_NOINLINE bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result
         }
     }
 
-    *result = bsJSONString(sb.data, sb.size, mode);
+    *result = bsJSONString(sb.data, sb.size, key);
     bsSBFree(&sb);
     return true;
 }
@@ -447,7 +444,7 @@ static bool bsJSONDecodeKey(BSJSONParser *parser, BSValue *key)
     if (parser->offset >= parser->size || parser->text[parser->offset] != '"') {
         return bsJSONError(parser, "Expecting property name enclosed in double quotes", parser->offset);
     }
-    if (!bsJSONDecodePlainString(parser, key, BS_JSON_STRING_KEY) && !bsJSONDecodeString(parser, key, BS_JSON_STRING_KEY)) {
+    if (!bsJSONDecodePlainString(parser, key, true) && !bsJSONDecodeString(parser, key, true)) {
         return false;
     }
     if (!bsJSONSkipTake(parser, ':')) {
@@ -572,8 +569,8 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
         return bsJSONDecodeArray(parser, depth, result);
     }
     if (ch == '"') {
-        return bsJSONDecodePlainString(parser, result, BS_JSON_STRING_PLAIN) ||
-            bsJSONDecodeString(parser, result, BS_JSON_STRING_PLAIN);
+        return bsJSONDecodePlainString(parser, result, false) ||
+            bsJSONDecodeString(parser, result, false);
     }
     if (ch == 't' && bsJSONLiteral(parser, "true")) {
         *result = bsBoolean(true);

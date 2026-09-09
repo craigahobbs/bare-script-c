@@ -195,7 +195,7 @@ void bsSystemIncludeClear(void);
  * The bundled BareScript include library
  *
  * The library embeds the BareScript include library - args.bare, markdown.bare, schema.bare, and
- * the rest - as compressed, parser-compiled JSON script models, so "include <name.bare>" resolves
+ * the rest - as compressed, parser-compiled binary script models, so "include <name.bare>" resolves
  * without a file system. See barescript/includeSource.h for the per-include stub accessors.
  */
 

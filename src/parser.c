@@ -6,7 +6,7 @@
  *
  * BareScript is parsed by barescriptParser.bare and linted by barescriptLint.bare, the same
  * include library scripts the JavaScript and Python implementations use, running on this runtime.
- * Both are bootstrapped straight from their bundled, parser-compiled JSON script models - there is
+ * Both are bootstrapped straight from their bundled, parser-compiled binary script models - there is
  * no parser to run before the parser exists - and their output models are converted to the
  * runtime's compiled representation by model.c.
  */

@@ -211,21 +211,69 @@ static BSValue bsInternName(BSValue name)
 
 
 /*
- * The syntax tree
+ * The syntax tree the emitter compiles
+ *
+ * A statement is loaded into an arena of nodes - from the parser's model objects, or straight
+ * from a bundled include's binary model, which then builds no objects at all - emitted, and the
+ * arena reset for the next, so the arena holds one statement at a time. A node's links are indexes into the arena,
+ * zero meaning none; its string is an index plus one into the arena's interned strings.
  */
+enum {
+    BS_NODE_NUMBER = 1,   /* number */
+    BS_NODE_STRING,       /* text: the literal */
+    BS_NODE_VARIABLE,     /* text: the name */
+    BS_NODE_CALL,         /* text: the function name; a: the first argument; b: the argument count */
+    BS_NODE_BINARY,       /* op: the opcode, or BS_NODE_AND / BS_NODE_OR; a, b: the operands */
+    BS_NODE_UNARY,        /* op: the opcode; a: the operand */
+    BS_NODE_GROUP,        /* a: the expression */
+    BS_NODE_EXPR,         /* a: the expression; text: the name assigned, or none */
+    BS_NODE_JUMP,         /* text: the label; a: the condition, or none */
+    BS_NODE_RETURN,       /* a: the expression, or none */
+    BS_NODE_LABEL,        /* text: the name */
+    BS_NODE_FUNCTION,     /* text: the name; a: the first statement; b: the first argument; flag: lastArgArray */
+    BS_NODE_INCLUDE,      /* a: the first include */
+    BS_NODE_INCLUDE_ITEM, /* text: the url; flag: system */
+    BS_NODE_ARG           /* text: a function argument's name */
+};
+
+/* The short-circuit operators, in a binary node's op past the opcodes */
+#define BS_NODE_AND 0xFE
+#define BS_NODE_OR 0xFF
+
+typedef struct BSNode {
+    uint8_t kind;
+    uint8_t flag;
+    uint16_t op;
+    uint32_t next;  /* the next node of a list, or zero */
+    uint32_t a;
+    uint32_t b;
+    uint32_t text;
+    int32_t line;   /* a statement's line number, or zero */
+    double number;
+    BSValue model;  /* a statement's model object, borrowed, for coverage - or a null value */
+} BSNode;
+
+typedef struct BSAst {
+    BSNode *nodes;   /* node zero is unused, so a zero link means none */
+    uint32_t count;
+    uint32_t capacity;
+    BSValue *strings;
+    uint32_t stringCount;
+    uint32_t stringCapacity;
+} BSAst;
 
 
 #define BS_AST_INITIAL 64
 
 
-void bsAstInit(BSAst *ast)
+static void bsAstInit(BSAst *ast)
 {
     memset(ast, 0, sizeof(*ast));
     ast->count = 1;
 }
 
 
-void bsAstReset(BSAst *ast)
+static void bsAstReset(BSAst *ast)
 {
     for (uint32_t ix = 0; ix < ast->stringCount; ix++) {
         bsRelease(ast->strings[ix]);
@@ -235,7 +283,7 @@ void bsAstReset(BSAst *ast)
 }
 
 
-void bsAstFree(BSAst *ast)
+static void bsAstFree(BSAst *ast)
 {
     bsAstReset(ast);
     free(ast->nodes);
@@ -244,7 +292,7 @@ void bsAstFree(BSAst *ast)
 }
 
 
-uint32_t bsAstNode(BSAst *ast, uint8_t kind)
+static uint32_t bsAstNode(BSAst *ast, uint8_t kind)
 {
     if (ast->count >= ast->capacity) {
         ast->capacity = ast->capacity != 0 ? ast->capacity * 2 : BS_AST_INITIAL;
@@ -257,7 +305,7 @@ uint32_t bsAstNode(BSAst *ast, uint8_t kind)
 }
 
 
-uint32_t bsAstString(BSAst *ast, BSValue string)
+static uint32_t bsAstString(BSAst *ast, BSValue string)
 {
     BS_GROW(ast->strings, ast->stringCount, ast->stringCapacity, 16);
     ast->strings[ast->stringCount] = string;
@@ -347,7 +395,7 @@ static uint8_t bsBinaryOpcode(const char *op)
 
 
 /* A binary node's op: the operator's opcode, or the short-circuit operators' own codes; zero if unknown */
-uint16_t bsBinaryNodeOp(const char *op)
+static uint16_t bsBinaryNodeOp(const char *op)
 {
     if (op[0] != '\0' && op[0] == op[1] && op[2] == '\0') {
         if (op[0] == '&') {
@@ -361,7 +409,7 @@ uint16_t bsBinaryNodeOp(const char *op)
 }
 
 
-uint8_t bsUnaryOpcode(const char *op)
+static uint8_t bsUnaryOpcode(const char *op)
 {
     if (op[0] != '\0' && op[1] == '\0') {
         if (op[0] == '-') {
@@ -378,7 +426,7 @@ uint8_t bsUnaryOpcode(const char *op)
 }
 
 
-uint32_t bsAstExpr(BSAst *ast, BSValue model)
+static uint32_t bsAstExpr(BSAst *ast, BSValue model)
 {
     BSValue member;
     BSString *kind = bsModelKind(model, &member);
@@ -482,7 +530,7 @@ static bool bsAstOptionalExpr(BSAst *ast, BSValue value, uint32_t *expr)
 }
 
 
-uint32_t bsAstStatement(BSAst *ast, BSValue model)
+static uint32_t bsAstStatement(BSAst *ast, BSValue model)
 {
     BSValue value;
     BSString *kind = bsModelKind(model, &value);
