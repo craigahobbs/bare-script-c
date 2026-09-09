@@ -42,6 +42,9 @@ typedef struct BSIncludeSource {
 /* The bundled include library registry, in name order */
 extern BSIncludeSource bsIncludeSources[BS_INCLUDE_COUNT];
 
+/* The shared string table - the strings the optional includes' models refer to in common */
+extern const BSIncludeSource bsIncludeSourceShared;
+
 /* A bundled include library stub accessor - returns its include's inflated binary script model and its size */
 typedef const unsigned char *(*BSIncludeSourceFn)(size_t *size);
 

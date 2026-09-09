@@ -57,7 +57,8 @@ TEST(include_registry)
 {
     ASSERT_INT_EQ(bsIncludeCount(), BS_INCLUDE_COUNT);
 
-    /* Every bundled include has a name and inflates to a binary script model, version one */
+    /* Every bundled include has a name and inflates to a binary script model - the parser and linter
+       self-contained version one, the rest version two, referring to the shared strings */
     for (size_t ix = 0; ix < bsIncludeCount(); ix++) {
         const char *name = bsIncludeName(ix);
         ASSERT_NOT_NULL(name);
@@ -65,7 +66,8 @@ TEST(include_registry)
         const unsigned char *source = bsIncludeSource(name, &size);
         ASSERT_NOT_NULL(source);
         ASSERT_TRUE(size > 1);
-        ASSERT_INT_EQ(source[0], 1);
+        bool required = strcmp(name, "barescriptParser.bare") == 0 || strcmp(name, "barescriptLint.bare") == 0;
+        ASSERT_INT_EQ(source[0], required ? 1 : 2);
     }
 
     /* An out-of-range index and an unknown name */
@@ -286,7 +288,7 @@ TEST(include_model_binary_invalid)
         unsigned char bytes[24];
         size_t count;
     } cases[] = {
-        {{2, 0, 1, 3, 0, 0}, 6},
+        {{3, 0, 1, 3, 0, 0}, 6},
         {{1, 1, 5, 'a', 'b'}, 5},
         {{1, 0, 2, 3, 0, 0}, 6},
         {{1, 0, 1, 7, 0}, 5},
@@ -318,6 +320,35 @@ TEST(include_model_binary_invalid)
         BSScript *script = bsScriptFromModelBinary(args, prefix, "args.bare");
         ASSERT_NULL(script);
     }
+}
+
+
+TEST(include_model_shared)
+{
+    /*
+     * A version 2 model reads its own strings and the shared table's through tagged references:
+     * one local string, then two return statements of variables - the local string, and the
+     * shared table's first - whose names the chunk's names table holds
+     */
+    BSTestModel model = {.size = 0};
+    BS_TEST_MODEL_BYTES(&model, 2, 1, 1, 'x', 2, 3, 1, 4, 1, 3, 1, 4, 2);
+    BSScript *script = bsScriptFromModelBinary(model.bytes, model.size, "test.bare");
+    ASSERT_NOT_NULL(script);
+    BSValue shared;
+    ASSERT_TRUE(bsIncludeSharedString(0, &shared));
+    ASSERT_INT_EQ(script->code.nameCount, 2);
+    ASSERT_STR_EQ(bsStringData(script->code.names[0]), "x");
+    ASSERT_STR_EQ(bsStringData(script->code.names[1]), bsStringData(shared));
+    bsScriptRelease(script);
+
+    /* A shared reference past the table, and a version past 2 */
+    BSTestModel past = {.size = 0};
+    BS_TEST_MODEL_BYTES(&past, 2, 0, 1, 3, 1, 4, 0x82, 0x80, 0x80, 0x01);
+    bsTestModelInvalid(&past, 0);
+    BSTestModel version = {.size = 0};
+    BS_TEST_MODEL_BYTES(&version, 3, 0, 0);
+    bsTestModelInvalid(&version, 1);
+    ASSERT_FALSE(bsIncludeSharedString(1000000, &shared));
 }
 
 

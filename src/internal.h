@@ -46,6 +46,9 @@ unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t
 /* Compiled bundled include, cached after the first load. Returns an owned script reference. */
 BSScript *bsIncludeScript(const char *name);
 
+/* A bundled model's shared string, interned and borrowed; false past the table */
+bool bsIncludeSharedString(size_t index, BSValue *string);
+
 
 /* Free a regex value whose reference count reached zero (regex.c) */
 void bsRegexDestroy(BSValue value);

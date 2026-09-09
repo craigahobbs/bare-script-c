@@ -280,7 +280,12 @@ the tree holds one statement.
 
 The encoding, written by `bin/includeSource.bare` and read by `bsScriptFromModelBinary` in
 `model.c`: a version byte; a string table - every name, literal, operator, and label once, so the
-reader interns each once and a use costs one reference; then the statements. Counts, lengths,
+reader interns each once and a use costs one reference; then the statements. The strings two or
+more of the optional includes share - `arrayLength`, the operators, the generated labels, about a
+thousand in all - are bundled once in a shared table, ordered by use, and a version 2 model refers
+to them through references whose low bit says shared; the table is inflated and its strings
+interned, each on first use, when a thread first loads such a model, while the parser and linter
+that every run loads keep self-contained version 1 models. Counts, lengths,
 indexes, and line numbers are LEB128 varints, a string a table index, a statement a kind byte and
 its members, an expression a tag byte and its members, with an integer a zigzag varint and any
 other number its shortest text. The models are deflated as gzip streams and embedded as

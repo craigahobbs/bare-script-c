@@ -1789,6 +1789,7 @@ typedef struct BSModelReader {
     BSAst *ast;
     BSValue *strings;
     size_t stringCount;
+    bool shared;         /* version 2: a reference's low bit says shared table, the rest the index */
     bool failed;
 } BSModelReader;
 
@@ -1824,6 +1825,17 @@ static BSValue bsModelString(BSModelReader *reader)
     uint64_t index = bsModelVarint(reader);
     if (index == 0) {
         return bsNull();
+    }
+    if (reader->shared) {
+        BSValue string;
+        if ((index & 1) == 0) {
+            if (bsIncludeSharedString((size_t) ((index - 2) >> 1), &string)) {
+                return string;
+            }
+            reader->failed = true;
+            return bsNull();
+        }
+        index = (index + 1) >> 1;
     }
     if (index > reader->stringCount) {
         reader->failed = true;
@@ -2019,12 +2031,13 @@ static uint32_t bsModelStatement(BSModelReader *reader, int depth)
 BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const char *scriptName)
 {
     bsModelKeysInit();
-    BSModelReader reader = {data, size, 0, NULL, NULL, 0, false};
-    uint8_t version = bsModelByte(&reader);
+    BSModelReader reader = {data, size, 0, NULL, NULL, 0, false, false};
+    unsigned version = bsModelByte(&reader);
+    reader.shared = version == 2;
 
     /* The string table, interned - each string takes at least a byte, which bounds the count */
     uint64_t stringCount = bsModelVarint(&reader);
-    if (version != 1 || stringCount > size) {
+    if ((version != 1 && version != 2) || stringCount > size) {
         reader.failed = true;
     }
     if (!reader.failed) {
@@ -2060,7 +2073,7 @@ BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const 
             bsEmitStatement(&e, &ast, node);
         }
     }
-    decoded = decoded && reader.offset == size;
+    decoded = decoded && !reader.failed && reader.offset == size;
     bsAstFree(&ast);
     for (size_t ix = 0; ix < reader.stringCount; ix++) {
         bsRelease(reader.strings[ix]);

@@ -12,10 +12,14 @@
 # unit tests decode every bundled model with the runtime's inflater and decoder, so the models are
 # not verified here.
 #
-# The binary model encoding (src/model.c, bsScriptFromModelBinary, reads it): a version byte, 1;
-# the string table - a count, then each string as a length and its UTF-8 bytes; the statements -
+# The binary model encoding (src/model.c, bsScriptFromModelBinary, reads it): a version byte, 1 or
+# 2; the string table - a count, then each string as a length and its UTF-8 bytes; the statements -
 # a count, then each. Counts, lengths, indexes, and line numbers are unsigned LEB128 varints; a
-# string is referred to by its table index plus one, zero meaning none. A statement is a kind byte
+# string is referred to by its table index plus one, zero meaning none. A version 2 model also
+# refers to the shared string table - the strings two or more of the includes use, bundled once and
+# ordered by use - through references whose low bit, after the one for none, says shared, the rest
+# the index; the parser and linter, which the runtime loads at startup, keep the self-contained
+# version 1. A statement is a kind byte
 # (1 expr, 2 jump, 3 return, 4 label, 5 function, 6 include), its line number, then its members:
 # expr - the name assigned or none, the expression; jump - the label, the condition or none;
 # return - the expression or none; label - the name; function - the name, a flags byte (1: the
@@ -45,8 +49,16 @@ function includeSourceVarint(bytes, value):
 endfunction
 
 
-# A string's table index plus one, adding it to the table on first use
+# A string's reference: its table index plus one, adding it to the table on first use, or, under
+# a shared table, the tagged form of its shared or local index
 function includeSourceString(encoder, text):
+    shared = objectGet(encoder, 'shared')
+    if shared != null:
+        sharedIndex = objectGet(shared, text)
+        if sharedIndex != null:
+            return 2 * sharedIndex + 2
+        endif
+    endif
     stringIndex = objectGet(encoder, 'stringIndex')
     index = objectGet(stringIndex, text)
     if index == null:
@@ -55,7 +67,7 @@ function includeSourceString(encoder, text):
         index = arrayLength(strings)
         objectSet(stringIndex, text, index)
     endif
-    return index
+    return if(shared != null, 2 * index - 1, index)
 endfunction
 
 
@@ -162,23 +174,36 @@ endfunction
 
 
 # Encode a script model as the binary model's bytes
-function includeSourceEncode(model):
-    encoder = {'body': [], 'strings': [], 'stringIndex': {}}
+# Encode a model's statements; "shared" maps a shared string to its index, or is null
+function includeSourceEncoder(model, shared):
+    encoder = {'body': [], 'strings': [], 'stringIndex': {}, 'shared': shared}
     statements = objectGet(model, 'statements')
     includeSourceVarint(objectGet(encoder, 'body'), arrayLength(statements))
     for statement in statements:
         includeSourceStatement(encoder, statement)
     endfor
+    return encoder
+endfunction
 
-    # The version, the string table, then the statements
-    bytes = [1]
-    strings = objectGet(encoder, 'strings')
+
+# A string table's bytes - the count, then each string's length and bytes
+function includeSourceStringTable(strings):
+    bytes = []
     includeSourceVarint(bytes, arrayLength(strings))
     for text in strings:
         textBytes = stringEncode(text)
         includeSourceVarint(bytes, arrayLength(textBytes))
         arrayExtend(bytes, textBytes)
     endfor
+    return bytes
+endfunction
+
+
+# The version, the string table, then the statements
+function includeSourceEncode(model, shared):
+    encoder = includeSourceEncoder(model, shared)
+    bytes = [if(shared != null, 2, 1)]
+    arrayExtend(bytes, includeSourceStringTable(objectGet(encoder, 'strings')))
     arrayExtend(bytes, objectGet(encoder, 'body'))
     return bytes
 endfunction
@@ -488,6 +513,28 @@ endfunction
 includeSourceRequired = ['barescriptParser.bare', 'barescriptLint.bare']
 
 
+# Sort strings by use count, most used first, then by text
+function includeSourceUseCompare(uses, a, b):
+    difference = objectGet(uses, b) - objectGet(uses, a)
+    return if(difference != 0, difference, if(a < b, -1, if(a > b, 1, 0)))
+endfunction
+
+
+# Bytes as lines of C hex literals, 18 per line
+function includeSourceHexLines(bytes, hex):
+    lines = []
+    lineParts = []
+    for byte, ixByte in bytes:
+        arrayPush(lineParts, arrayGet(hex, byte))
+        if arrayLength(lineParts) == 18 || ixByte == arrayLength(bytes) - 1:
+            arrayPush(lines, '    ' + arrayJoin(lineParts, ', '))
+            lineParts = []
+        endif
+    endfor
+    return lines
+endfunction
+
+
 async function main():
     files = jsonParse(systemGlobalGet('vFiles', '[]'))
     outputC = systemGlobalGet('vOutputC')
@@ -546,47 +593,71 @@ async function main():
         endfor
     endfor
 
-    # Each include library script
-    accessors = []
-    registry = []
-    stubs = []
-    totalSource = 0
-    totalEncoded = 0
-    for file, ixFile in files:
-        includeName = stringSlice(file, stringLastIndexOf(file, '/') + 1)
-        baseName = stringSlice(includeName, 0, stringLength(includeName) - 5)
-        exportName = stringUpper(stringCharAt(baseName, 0)) + stringSlice(baseName, 1)
-        macroName = stringUpper(baseName)
-
-        # Parse the include script into its model
+    # Parse every include script into its model
+    models = []
+    for file in files:
         text = systemFetch(file)
         if text == null:
             systemLog('error: failed to read "' + file + '"')
             return 1
         endif
+        includeName = stringSlice(file, stringLastIndexOf(file, '/') + 1)
         parseResult = barescriptParseScriptEx(text, 1, includeName)
         if objectHas(parseResult, 'error'):
             systemLog(objectGet(objectGet(parseResult, 'error'), 'message'))
             return 1
         endif
-        model = objectGet(parseResult, 'result')
+        arrayPush(models, {'name': includeName, 'text': text, 'model': objectGet(parseResult, 'result')})
+    endfor
 
-        # Encode the model, compress it, and emit the bytes as a C initializer, 18 per line
-        compressed = includeSourceGzip(includeSourceEncode(model))
-        totalSource = totalSource + stringLength(text)
+    # The shared string table: every string two or more of the optional includes use, the most used
+    # first so the common references are short
+    uses = {}
+    for entry in models:
+        if arrayIndexOf(includeSourceRequired, objectGet(entry, 'name')) == -1:
+            for text in objectGet(includeSourceEncoder(objectGet(entry, 'model'), null), 'strings'):
+                objectSet(uses, text, objectGet(uses, text, 0) + 1)
+            endfor
+        endif
+    endfor
+    sharedStrings = []
+    for text in objectKeys(uses):
+        if objectGet(uses, text) >= 2:
+            arrayPush(sharedStrings, text)
+        endif
+    endfor
+    arraySort(sharedStrings, systemPartial(includeSourceUseCompare, uses))
+    shared = {}
+    for text, ixText in sharedStrings:
+        objectSet(shared, text, ixText)
+    endfor
+    sharedCompressed = includeSourceGzip(includeSourceStringTable(sharedStrings))
+    arrayPush(sourceParts, '\n\n/* The shared string table - ' + arrayLength(sharedStrings) + ' strings */\n' + \
+        'static const unsigned char bsIncludeSourceDataShared[] = {\n' + \
+        arrayJoin(includeSourceHexLines(sharedCompressed, hex), ',\n') + '\n};\n' + \
+        'const BSIncludeSource bsIncludeSourceShared = {"shared", bsIncludeSourceDataShared, sizeof(bsIncludeSourceDataShared)};\n')
+
+    # Each include library script
+    accessors = []
+    registry = []
+    stubs = []
+    totalSource = 0
+    totalEncoded = arrayLength(sharedCompressed)
+    for entry, ixFile in models:
+        includeName = objectGet(entry, 'name')
+        baseName = stringSlice(includeName, 0, stringLength(includeName) - 5)
+        exportName = stringUpper(stringCharAt(baseName, 0)) + stringSlice(baseName, 1)
+        macroName = stringUpper(baseName)
+
+        # Encode the model - a required include self-contained - compress it, and emit the bytes
+        # as a C initializer
+        required = arrayIndexOf(includeSourceRequired, includeName) != -1
+        compressed = includeSourceGzip(includeSourceEncode(objectGet(entry, 'model'), if(required, null, shared)))
+        totalSource = totalSource + stringLength(objectGet(entry, 'text'))
         totalEncoded = totalEncoded + arrayLength(compressed)
-        lines = []
-        lineParts = []
-        for byte, ixByte in compressed:
-            arrayPush(lineParts, arrayGet(hex, byte))
-            if arrayLength(lineParts) == 18 || ixByte == arrayLength(compressed) - 1:
-                arrayPush(lines, '    ' + arrayJoin(lineParts, ', '))
-                lineParts = []
-            endif
-        endfor
+        lines = includeSourceHexLines(compressed, hex)
 
         # The data, compiled out by its macro unless the include is required
-        required = arrayIndexOf(includeSourceRequired, includeName) != -1
         arrayPush(sourceParts, '\n\n/* ' + includeName + ' */\n' + \
             if(required, '', '#ifndef NO_BARESCRIPT_INCLUDE_' + macroName + '\n') + \
             'static const unsigned char bsIncludeSourceData' + exportName + '[] = {\n' + \
@@ -617,6 +688,8 @@ async function main():
         '} BSIncludeSource;\n\n' + \
         '/* The bundled include library registry, in name order */\n' + \
         'extern BSIncludeSource bsIncludeSources[BS_INCLUDE_COUNT];\n\n' + \
+        '/* The shared string table - the strings the optional includes\' models refer to in common */\n' + \
+        'extern const BSIncludeSource bsIncludeSourceShared;\n\n' + \
         "/* A bundled include library stub accessor - returns its include's inflated binary script model and its size */\n" + \
         'typedef const unsigned char *(*BSIncludeSourceFn)(size_t *size);\n\n' + \
         '/* The bundled include library stub accessors, in registry order */\n' + \
