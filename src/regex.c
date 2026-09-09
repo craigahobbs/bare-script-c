@@ -194,10 +194,9 @@ static inline unsigned rxLowestBit64(uint64_t mask)
 
 
 typedef struct RxInst RxInst;
-struct BSRegex;
 typedef struct RxCompiler RxCompiler;
 static void rxEmitProgram(RxCompiler *compiler);
-static void rxProgramFree(struct BSRegex *regex);
+static void rxProgramFree(BSRegex *regex);
 
 struct BSRegex {
     int32_t refcount;
@@ -239,7 +238,7 @@ static RxNode *rxSimpleAtom(RxNode *alt)
 }
 
 
-typedef struct RxCompiler {
+struct RxCompiler {
     const char *pattern;
     size_t size;
     size_t offset;
@@ -279,13 +278,24 @@ typedef struct RxCompiler {
         struct RxPathEntry *entries;
         size_t count;
     } groupPaths[BS_REGEX_GROUPS_MAX]; /* a named group's path */
-} RxCompiler;
+};
 
 
 /* The word characters - a name's characters, and "\\w" */
 static bool rxIsWordCode(uint32_t ch)
 {
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
+}
+
+
+/* Whether a run of word characters closed by '>' begins at "ix" - the run ends at "*end" */
+static bool rxNameRun(const char *pattern, size_t size, size_t ix, size_t *end)
+{
+    *end = ix;
+    while (*end < size && rxIsWordCode((unsigned char) pattern[*end])) {
+        (*end)++;
+    }
+    return *end != ix && *end < size && pattern[*end] == '>';
 }
 
 
@@ -297,15 +307,8 @@ static bool rxIsTranslated(const char *pattern, size_t size, size_t ix)
     }
     bool named = (pattern[ix] == '(' && pattern[ix + 1] == '?' && pattern[ix + 2] == '<');
     bool backref = (pattern[ix] == '\\' && pattern[ix + 1] == 'k' && pattern[ix + 2] == '<');
-    if (!named && !backref) {
-        return false;
-    }
-    size_t nameIx = ix + 3;
-    size_t end = nameIx;
-    while (end < size && rxIsWordCode((unsigned char) pattern[end])) {
-        end++;
-    }
-    return end != nameIx && end < size && pattern[end] == '>';
+    size_t end;
+    return (named || backref) && rxNameRun(pattern, size, ix + 3, &end);
 }
 
 
@@ -737,11 +740,8 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
                 if (!rxParseName(compiler, &name)) {
                     /* A name of word characters that begins with a digit is one Python's port translates,
                        so its "re" reports the name; any other failure is an unknown extension */
-                    size_t nameEnd = nameOffset;
-                    while (nameEnd < compiler->size && rxIsWordCode((unsigned char) compiler->pattern[nameEnd])) {
-                        nameEnd++;
-                    }
-                    if (nameEnd > nameOffset && nameEnd < compiler->size && compiler->pattern[nameEnd] == '>') {
+                    size_t nameEnd;
+                    if (rxNameRun(compiler->pattern, compiler->size, nameOffset, &nameEnd)) {
                         rxError(compiler, nameOffset, "bad character in group name '%.*s'",
                                 (int) (nameEnd - nameOffset), compiler->pattern + nameOffset);
                     } else {
@@ -1430,7 +1430,6 @@ typedef struct RxAlt {
 } RxAlt;
 
 
-
 /* A backtrack entry - what to try next when the current path fails */
 typedef enum {
     RX_BT_SPLIT,            /* resume at pc, pos */
@@ -1646,9 +1645,8 @@ static BS_NOINLINE void rxClassFinish(RxClass *cls, unsigned flags)
     }
 
     /* The predefined classes' members below 128, then the ranges' - as bits, then negated as a whole */
-    static const uint64_t digits = 0x03FF000000000000u;                 /* 0-9 */
+    static const uint64_t digits = 0x03FF000000000000u;                 /* 0-9 - the word class's low word too */
     static const uint64_t spaces = 0x0000000100003E00u;                 /* \t \n \v \f \r and the space */
-    static const uint64_t wordLow = 0x03FF000000000000u;                /* 0-9 */
     static const uint64_t wordHigh = 0x07FFFFFE87FFFFFEu;               /* A-Z _ a-z */
     uint64_t bits[2] = {0, 0};
     unsigned classes = cls->classes;
@@ -1660,11 +1658,11 @@ static BS_NOINLINE void rxClassFinish(RxClass *cls, unsigned flags)
         bits[1] = ~(uint64_t) 0;
     }
     if ((classes & RX_CLASS_WORD) != 0) {
-        bits[0] |= wordLow;
+        bits[0] |= digits;
         bits[1] |= wordHigh;
     }
     if ((classes & RX_CLASS_NOTWORD) != 0) {
-        bits[0] |= ~wordLow;
+        bits[0] |= ~digits;
         bits[1] |= ~wordHigh;
     }
     if ((classes & RX_CLASS_SPACE) != 0) {
@@ -1782,9 +1780,6 @@ static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
         rxFirstCompute(node->u.alt.branches[ixBranch], flags, &firsts[ixBranch]);
         usable = usable || !firsts[ixBranch].any;
     }
-    alt->firsts = NULL;
-    alt->index = NULL;
-    alt->narrow = NULL;
     if (!usable) {
         free(firsts);
         return;
@@ -2251,7 +2246,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
                     goto backtrack;
                 }
                 if (ix + 1 < count) {
-                    rxBtPush(state, RX_BT_ALT_INDEX, pc, pos, (uint32_t) (ix + 1));
+                    rxBtPush(state, RX_BT_ALT_INDEX, pc, pos, ix + 1);
                 }
                 pc = alt->branchPcs[ix];
             }
@@ -2410,7 +2405,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
                     goto backtrack;
                 }
                 if (min < max) {
-                    rxBtPush(state, RX_BT_LAZY, next, end, (uint32_t) pos);
+                    rxBtPush(state, RX_BT_LAZY, next, end, pos);
                 }
                 pos = end;
                 pc = next;
@@ -2463,7 +2458,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
                 goto backtrack;
             }
             if (end > stop) {
-                rxBtPush(state, RX_BT_GIVEBACK, next, end, (uint32_t) stop);
+                rxBtPush(state, RX_BT_GIVEBACK, next, end, stop);
             }
             pos = end;
             pc = next;
@@ -2537,7 +2532,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
                     goto backtrack;
                 }
                 if (min < max) {
-                    rxBtPush(state, RX_BT_LAZY_BACK, next, end, (uint32_t) pos);
+                    rxBtPush(state, RX_BT_LAZY_BACK, next, end, pos);
                 }
                 pos = end;
                 pc = next;
@@ -2552,7 +2547,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
             }
             size_t stop = pos - min;
             if (end < stop) {
-                rxBtPush(state, RX_BT_GIVEBACK_BACK, next, end, (uint32_t) stop);
+                rxBtPush(state, RX_BT_GIVEBACK_BACK, next, end, stop);
             }
             pos = end;
             pc = next;
@@ -2626,7 +2621,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
                 pc = alt->branchPcs[ix];
                 pos = bt->pos;
                 if (ix + 1 < count) {
-                    bt->aux = (uint32_t) (ix + 1);
+                    bt->aux = ix + 1;
                     break;
                 }
                 state->btCount--;
@@ -2781,12 +2776,12 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
      */
     memset(match->matched, 0, sizeof(match->matched));
     match->groupCount = compiled->groupCount;
-    size_t last = compiled->anchored ? start : subject->length;
+    size_t length = subject->length;
+    size_t last = compiled->anchored ? start : length;
     bool found = false;
     for (size_t pos = start; pos <= last && !found; pos++) {
         /* Skip positions whose code point cannot begin a match */
         if (!compiled->first.any) {
-            size_t length = subject->length;
             if (subject->codes != NULL) {
                 const uint32_t *codes = subject->codes;
                 while (pos < length && !rxFirstHas(&compiled->first, codes[pos])) {

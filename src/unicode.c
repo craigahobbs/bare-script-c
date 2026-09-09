@@ -34,7 +34,7 @@ typedef struct BSCaseRange32 {
 
 /* A full mapping of more than one code point, zero-padded - every one within the Basic Multilingual Plane */
 typedef struct BSCaseSpecial {
-    uint16_t code;
+    uint16_t first;
     uint16_t mapped[3];
 } BSCaseSpecial;
 
@@ -1351,20 +1351,13 @@ static bool bsCodeRangeHas(const BSCodeRange16 *bmp, size_t bmpCount, const BSCo
 static size_t bsCaseMapFull(const BSCaseSpecial *specials, size_t specialCount, bool upper, uint32_t code,
                             uint32_t *mapped)
 {
-    size_t low = 0;
-    size_t high = code < 0x10000 ? specialCount : 0;
-    while (low < high) {
-        size_t mid = (low + high) / 2;
-        if (specials[mid].code < code) {
-            low = mid + 1;
-        } else {
-            high = mid;
-        }
-    }
-    if (low < specialCount && specials[low].code == code) {
+    size_t low;
+    BS_TABLE_FIND(specials, code < 0x10000 ? specialCount : 0, code, low);
+    if (low != 0 && specials[low - 1].first == code) {
+        const uint16_t *special = specials[low - 1].mapped;
         size_t count = 0;
-        while (count < 3 && specials[low].mapped[count] != 0) {
-            mapped[count] = specials[low].mapped[count];
+        while (count < 3 && special[count] != 0) {
+            mapped[count] = special[count];
             count++;
         }
         return count;

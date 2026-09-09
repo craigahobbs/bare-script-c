@@ -739,7 +739,7 @@ BS_RAW_FN(bsFnMathPi, bsNumber(3.141592653589793))
 
 static const BSArgModel mathLnArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GT, 0, 0, 0, 0}};
 
-BS_LIBRARY_FN(bsFnMathLn, mathLnArgs, bsNull(), bsNumber(log(values[0].u.number)))
+BS_LIBRARY_FN(bsFnMathLn, mathLnArgs, bsNull(), bsNumber(log(BS_MATH_X)))
 
 
 static const BSArgModel mathLogArgs[] = {
@@ -803,7 +803,7 @@ BS_OUT_FN(bsFnMathRound, mathRoundArgs, double, bsNumberRound(values[0].u.number
 
 static const BSArgModel mathSqrtArgs[] = {{"x", BS_ARG_NUMBER, BS_ARG_GTE, 0, 0, 0, 0}};
 
-BS_LIBRARY_FN(bsFnMathSqrt, mathSqrtArgs, bsNull(), bsNumber(sqrt(values[0].u.number)))
+BS_LIBRARY_FN(bsFnMathSqrt, mathSqrtArgs, bsNull(), bsNumber(sqrt(BS_MATH_X)))
 
 
 /*
@@ -1002,9 +1002,8 @@ static BSValue bsFnObjectNew(const BSValue *args, size_t argCount, BSOptions *op
     for (size_t ix = 0; ix < argCount; ix += 2) {
         BSValue key = args[ix];
         if (key.type != BS_STRING) {
-            bsArgsError(options, "keyValues", key);
             bsRelease(result);
-            return bsNull();
+            return bsArgFail(options, "keyValues", key, bsNull());
         }
         bsObjectSetString(result, key, bsRetain(ix + 1 < argCount ? args[ix + 1] : bsNull()));
     }
@@ -1413,8 +1412,7 @@ static BSValue bsFnStringFromCharCode(const BSValue *args, size_t argCount, BSOp
         if (code.type != BS_NUMBER || trunc(code.u.number) != code.u.number || code.u.number < 0 ||
             code.u.number > 0x10FFFF) {
             bsSBFree(&sb);
-            bsArgsError(options, "charCodes", code);
-            return bsNull();
+            return bsArgFail(options, "charCodes", code, bsNull());
         }
         bsSBAppend(&sb, utf8, bsUTF8Encode((uint32_t) code.u.number, utf8));
     }
