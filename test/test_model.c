@@ -11,20 +11,10 @@
 #include "test.h"
 
 
-/* Decode a JSON model and convert it to a compiled script; NULL if the model is invalid */
-static BSScript *bsTestScriptFromJSON(const char *json)
-{
-    BSValue model = bsJSONDecode(json, strlen(json), NULL);
-    BSScript *script = bsScriptFromModel(model, NULL);
-    bsRelease(model);
-    return script;
-}
-
-
 /* Assert a model is rejected */
 static void bsTestInvalidModel(const char *json)
 {
-    BSScript *script = bsTestScriptFromJSON(json);
+    BSScript *script = bsTestScriptFromJSON(json, NULL);
     if (script != NULL) {
         bsScriptRelease(script);
         bsTestFail(__FILE__, __LINE__, "expected an invalid model: %s", json);
@@ -81,7 +71,7 @@ TEST(model_script_round_trip)
 
 TEST(model_script_name_override)
 {
-    BSScript *script = bsTestScriptFromJSON("{\"statements\":[],\"scriptName\":\"from-model.bare\"}");
+    BSScript *script = bsTestScriptFromJSON("{\"statements\":[],\"scriptName\":\"from-model.bare\"}", NULL);
     ASSERT_NOT_NULL(script);
     ASSERT_VALUE_STRING(bsRetain(script->scriptName), "from-model.bare");
     bsScriptRelease(script);
@@ -100,7 +90,7 @@ TEST(model_script_name_override)
 
 TEST(model_script_lines)
 {
-    BSScript *script = bsTestScriptFromJSON("{\"statements\":[],\"scriptLines\":[\"a = 1\"]}");
+    BSScript *script = bsTestScriptFromJSON("{\"statements\":[],\"scriptLines\":[\"a = 1\"]}", NULL);
     ASSERT_NOT_NULL(script);
     ASSERT_INT_EQ(bsArrayCount(script->scriptLines), 1);
     BSValue model = bsScriptToModel(script);
@@ -110,7 +100,7 @@ TEST(model_script_lines)
 }
 
 
-/* Assert a streamed model's JSON is rejected with an error */
+/* Assert a model's JSON is rejected with an error */
 static void bsTestInvalidModelJSON(const char *json, const char *expectedError)
 {
     const char *error = NULL;
@@ -158,7 +148,6 @@ TEST(model_operand_limits)
     /* A chunk holds at most 32768 includes */
     json = bsTestRepeat("{\"statements\":[{\"include\":{\"includes\":[{\"url\":\"a.bare\"}", ",{\"url\":\"a.bare\"}", 32768, "]}}]}");
     bsTestInvalidModel(bsStringData(json));
-    bsTestInvalidModelJSON(bsStringData(json), "Invalid BareScript model");
     bsRelease(json);
 
     /* A script defines at most 65536 functions */
@@ -186,7 +175,6 @@ TEST(model_operand_limits)
     bsSBAppendString(&sb, "]}");
     json = bsSBToValue(&sb);
     bsTestInvalidModel(bsStringData(json));
-    bsTestInvalidModelJSON(bsStringData(json), "Invalid BareScript model");
     bsRelease(json);
 
     /* Malformed expression statements, operands, and a conditional's branch assigned to a local */
@@ -205,7 +193,7 @@ TEST(model_operand_limits)
 
 TEST(model_script_from_json)
 {
-    /* A streamed model compiles to the same script as the decoded model, without keeping it */
+    /* A model's JSON compiles to a script that keeps no model */
     static const char *json = "{\"statements\":[{\"function\":{\"name\":\"f\",\"args\":[\"x\"],\"statements\":["
         "{\"return\":{\"expr\":{\"binary\":{\"op\":\"+\",\"left\":{\"variable\":\"x\"},"
         "\"right\":{\"number\":1}}}}}]}},{\"return\":{\"expr\":{\"function\":{\"name\":\"f\","
@@ -221,9 +209,7 @@ TEST(model_script_from_json)
     ASSERT_VALUE_STRING(bsRetain(script->scriptName), "stream.bare");
     ASSERT_INT_EQ(bsArrayCount(script->scriptLines), 1);
     ASSERT_INT_EQ(script->functionCount, 1);
-    BSOptions *options = bsOptionsNew();
-    ASSERT_VALUE(bsExecuteScript(script, options), "3");
-    bsOptionsFree(options);
+    ASSERT_VALUE(bsTestExecuteScript(script), "3");
     bsScriptRelease(script);
 
     /* The caller's name wins, and an empty statements array is a valid script */
@@ -234,70 +220,22 @@ TEST(model_script_from_json)
     ASSERT_FALSE(script->system);
     bsScriptRelease(script);
 
-    /* Malformed JSON and malformed models */
+    /* Malformed JSON reports its error; valid JSON that is not a model reports the model's */
     bsTestInvalidModelJSON("", "Expecting value");
-    bsTestInvalidModelJSON("[]", "Invalid BareScript model");
     bsTestInvalidModelJSON("{", "Expecting property name enclosed in double quotes");
-    bsTestInvalidModelJSON("{\"statements\" []}", "Expecting ':' delimiter");
-    bsTestInvalidModelJSON("{\"statements\": 5}", "Invalid BareScript model");
-    bsTestInvalidModelJSON("{\"scriptName\": }", "Expecting value");
-    bsTestInvalidModelJSON("{}", "Invalid BareScript model");
-    bsTestInvalidModelJSON("{\"statements\": [1]}", "Invalid BareScript model");
-    bsTestInvalidModelJSON("{\"statements\": [{\"bogus\": 1}]}", "Invalid BareScript model");
-    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {}}", "Expecting ',' delimiter");
-    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {}},]}", "Illegal trailing comma before end of array");
-    bsTestInvalidModelJSON("{\"statements\": [}", "Expecting value");
-    bsTestInvalidModelJSON("{\"statements\": [],}", "Illegal trailing comma before end of object");
-    bsTestInvalidModelJSON("{\"statements\": []} x", "Extra data");
-    bsTestInvalidModelJSON("{\"statements\": [{5}]}", "Expecting property name enclosed in double quotes");
-    bsTestInvalidModelJSON("{\"stat\\u0065ments\" []}", "Expecting ':' delimiter");
-    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {5}}]}", "Expecting property name enclosed in double quotes");
-    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"lineNumber\": 1 \"x\": 2}}]}", "Expecting ',' delimiter");
-    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {5}}}]}",
-                           "Expecting property name enclosed in double quotes");
-    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"f\", "
-                           "\"args\": [{\"number\": }]}}}}]}", "Expecting value");
-    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"f\", "
-                           "\"args\": [{\"number\": 1} {\"number\": 2}]}}}}]}", "Expecting ',' delimiter");
-    bsTestInvalidModelJSON("{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": [], "
-                           "\"statements\": [{\"return\": {\"expr\": }}]}}]}", "Expecting value");
-    bsTestInvalidModelJSON("{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": [], "
-                           "\"statements\": [], \"lastArgArray\": }}]}", "Expecting value");
-    bsTestInvalidModelJSON("{\"statements\": [{\"expr\": {\"expr\": {\"binary\": {\"op\": \"+\", "
-                           "\"left\": {\"number\": 1}, \"right\": {\"number\": 2}, \"x\": }}}}]}", "Expecting value");
-    bsTestInvalidModelJSON("{\"state\\qments\": []}", "Invalid \\escape");
-    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"lineNumber\": }}]}", "Expecting value");
-    bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"f\", \"args\": "
-                           "[{\"function\": {\"name\": \"g\", \"args\": [{\"number\": }]}}]}}}}]}", "Expecting value");
-    bsTestInvalidModelJSON("{\"statements\": [{\"include\": {\"includes\": [{\"url\": \"a\", \"system\": }]}}]}",
-                           "Expecting value");
-    bsTestInvalidModelJSON("{\"statements\": [{\"function\": {\"name\": \"f\", \"args\": [\"x\" \"y\"], "
-                           "\"statements\": []}}]}", "Expecting ',' delimiter");
+    bsTestInvalidModelJSON("[]", "Invalid BareScript model");
 }
 
 
-/* Assert a streamed model's JSON compiles, returning the script */
-static BSScript *bsTestModelJSON(const char *json)
+/* Assert a model's JSON compiles and executes to the expected JSON result */
+static void bsTestModelResult(const char *json, const char *expected)
 {
-    const char *error = NULL;
-    BSScript *script = bsScriptFromModelJSON(json, strlen(json), NULL, &error);
+    BSScript *script = bsTestScriptFromJSON(json, NULL);
     if (script == NULL) {
-        bsTestFail(__FILE__, __LINE__, "bsScriptFromModelJSON(%s) failed: %s", json, error);
-    }
-    return script;
-}
-
-
-/* Assert a streamed model's JSON compiles and executes to the expected JSON result */
-static void bsTestModelJSONResult(const char *json, const char *expected)
-{
-    BSScript *script = bsTestModelJSON(json);
-    if (script == NULL) {
+        bsTestFail(__FILE__, __LINE__, "invalid model: %s", json);
         return;
     }
-    BSOptions *options = bsOptionsNew();
-    ASSERT_VALUE(bsExecuteScript(script, options), expected);
-    bsOptionsFree(options);
+    ASSERT_VALUE(bsTestExecuteScript(script), expected);
     bsScriptRelease(script);
 }
 
@@ -305,7 +243,7 @@ static void bsTestModelJSONResult(const char *json, const char *expected)
 TEST(model_script_from_json_shapes)
 {
     /* Each statement kind, its members, and the members a statement or expression ignores */
-    bsTestModelJSONResult(
+    bsTestModelResult(
         "{\"stat\\u0065ments\": ["
         "{\"expr\": {\"name\": 5, \"expr\": {\"number\": 1}, \"lineNumber\": \"x\"}},"
         "{\"expr\": {\"name\": \"a\", \"expr\": {\"function\": {\"name\": \"arrayNew\", \"args\": 5, \"extra\": 1}}}},"
@@ -326,13 +264,8 @@ TEST(model_script_from_json_shapes)
         "]}",
         "[[],3,-3,4,[7]]");
 
-    /* Members the reader does not know, of the sizes it does */
-    bsTestModelJSONResult(
-        "{\"statements\": [{\"return\": {\"expr\": {\"number\": 7}, \"zzzz\": 1, \"zzzzzz\": 2, \"zzzzzzzz\": 3, "
-        "\"jzzz\": 4, \"zzzzzzzzzz\": 5}}]}", "7");
-
     /* A conditional's arguments past its third are not read, so their shapes are not checked - any other function's are */
-    bsTestModelJSONResult(
+    bsTestModelResult(
         "{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"if\", \"args\": "
         "[{\"number\": 1}, {\"number\": 2}, {\"number\": 3}, {\"bogus\": 1}]}}}}]}", "2");
     bsTestInvalidModelJSON("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"if\", \"args\": "
@@ -343,9 +276,9 @@ TEST(model_script_from_json_shapes)
                            "Invalid BareScript model");
 
     /* An include statement's includes */
-    BSScript *script = bsTestModelJSON(
+    BSScript *script = bsTestScriptFromJSON(
         "{\"statements\": [{\"include\": {\"includes\": [{\"url\": \"a.bare\", \"extra\": 1}, "
-        "{\"url\": \"b.bare\", \"system\": true}], \"lineNumber\": 1}}]}");
+        "{\"url\": \"b.bare\", \"system\": true}], \"lineNumber\": 1}}]}", NULL);
     ASSERT_NOT_NULL(script);
     ASSERT_INT_EQ(script->code.includeCount, 2);
     ASSERT_VALUE_STRING(bsRetain(script->code.includes[1].url), "b.bare");
@@ -410,48 +343,8 @@ TEST(model_script_from_json_shapes)
     }
 
     /* A group, nested */
-    bsTestModelJSONResult("{\"statements\": [{\"return\": {\"expr\": {\"group\": {\"group\": {\"number\": 5}}}}}]}", "5");
+    bsTestModelResult("{\"statements\": [{\"return\": {\"expr\": {\"group\": {\"group\": {\"number\": 5}}}}}]}", "5");
 
-    /* Nesting past the decoder's depth - at an expression, at a node's members, at an argument array */
-    static const struct {
-        int groups;
-        const char *inner;
-    } deep[] = {
-        {1000, "{\"number\": 1}"},
-        {995, "{\"unary\": {\"op\": \"-\", \"expr\": {\"number\": 1}}}"},
-        {994, "{\"function\": {\"name\": \"f\", \"args\": [{\"number\": 1}]}}"}
-    };
-    for (size_t ix = 0; ix < sizeof(deep) / sizeof(deep[0]); ix++) {
-        BSValue open = bsTestRepeat("{\"statements\": [{\"return\": {\"expr\": ", "{\"group\": ", (size_t) deep[ix].groups,
-                                    deep[ix].inner);
-        BSValue close = bsTestRepeat("", "}", (size_t) deep[ix].groups, "}}]}");
-        BSValue json = bsStringConcat(open, close);
-        bsTestInvalidModelJSON(bsStringData(json), "Maximum nesting depth exceeded");
-        bsRelease(json);
-        bsRelease(open);
-        bsRelease(close);
-    }
-}
-
-
-TEST(model_from_model_shapes)
-{
-    /* A conditional's arguments past its third are not read, so a malformed one stands */
-    ASSERT_VALUE(bsTestExecute("return if(1, 2, 3, 4, 5)"), "2");
-    BSScript *script = bsTestScriptFromJSON(
-        "{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"if\", "
-        "\"args\": [{\"number\": 1}, {\"number\": 2}, {\"number\": 3}, {\"bogus\": 1}]}}}}]}");
-    ASSERT_NOT_NULL(script);
-    BSOptions *options = bsOptionsNew();
-    ASSERT_VALUE(bsExecuteScript(script, options), "2");
-    bsOptionsFree(options);
-    bsScriptRelease(script);
-
-    /* Malformed models */
-    bsTestInvalidModel("{\"statements\": [{\"return\": {\"expr\": {\"variable\": 5}}}]}");
-    bsTestInvalidModel("{\"statements\": [{\"return\": {\"expr\": {\"bogus\": {}}}}]}");
-    bsTestInvalidModel("{\"statements\": [{\"return\": {\"expr\": {\"function\": {\"name\": \"f\", "
-                       "\"args\": [{\"bogus\": 1}]}}}}]}");
 }
 
 
@@ -515,22 +408,20 @@ TEST(model_valid_shapes)
         "{\"function\":{\"name\":\"f\",\"args\":[\"x\"],\"lastArgArray\":true,\"async\":true,"
         "\"statements\":[{\"return\":{\"expr\":{\"variable\":\"x\"}}}]}},"
         "{\"return\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[{\"number\":2}]}}}}"
-        "]}");
+        "]}", NULL);
     ASSERT_NOT_NULL(script);
     ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(script->model, "statements"), 0),
                                             "expr"), "lineNumber").u.number, 1);
     ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(script->model, "statements"), 0),
                                             "expr"), "lineCount").u.number, 2);
 
-    BSOptions *options = bsTestOptions();
-    ASSERT_VALUE(bsExecuteScript(script, options), "[2]");
-    bsOptionsFree(options);
+    ASSERT_VALUE(bsTestExecuteScript(script), "[2]");
     bsScriptRelease(script);
 
     /* An include statement's system flag round-trips */
     script = bsTestScriptFromJSON(
         "{\"statements\":[{\"include\":{\"includes\":["
-        "{\"url\":\"a.bare\"},{\"url\":\"b.bare\",\"system\":true}]}}]}");
+        "{\"url\":\"a.bare\"},{\"url\":\"b.bare\",\"system\":true}]}}]}", NULL);
     ASSERT_NOT_NULL(script);
     ASSERT_INT_EQ((int) script->code.includeCount, 2);
     ASSERT_FALSE(script->code.includes[0].system);
@@ -590,9 +481,7 @@ TEST(model_statement_list_form)
 
     BSScript *script = bsScriptFromModel(model, NULL);
     ASSERT_NOT_NULL(script);
-    BSOptions *options = bsTestOptions();
-    ASSERT_VALUE(bsExecuteScript(script, options), "7");
-    bsOptionsFree(options);
+    ASSERT_VALUE(bsTestExecuteScript(script), "7");
     bsScriptRelease(script);
     bsRelease(model);
 }

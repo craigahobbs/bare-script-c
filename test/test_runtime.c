@@ -232,7 +232,7 @@ TEST(runtime_functions)
     ASSERT_VALUE(bsTestExecute("function regexMatch(r, s):\n    return 'ov'\nendfunction\n"
                                "return regexMatch(regexNew('a'), 'a')"), "\"ov\"");
 
-    /* CALL3 retains borrowed args when a later argument is effectful */
+    /* A call's borrowed arguments survive a later argument's side effects */
     ASSERT_VALUE(bsTestExecute("o = {'k': 1}\nfunction mut(obj):\n    objectSet(obj, 'k', 9)\n"
                                "    return 'k'\nendfunction\nreturn objectGet(o, mut(o), 0)"), "9");
     ASSERT_VALUE(bsTestExecute("o = {}\nfunction val():\n    objectSet(o, 'a', 1)\n    return 2\n"
@@ -252,7 +252,7 @@ TEST(runtime_functions)
     ASSERT_VALUE(bsTestExecute("function f():\n    i = 0\n    loop:\n    i = i + 1\n"
                                "    jumpif (i < 3) loop\n    return i\nendfunction\nreturn f()"), "3");
 
-    /* More locals than the inline slot buffer (32) allocate a heap slot array */
+    /* A function with many locals */
     {
         char text[4096];
         size_t n = 0;
@@ -269,6 +269,7 @@ TEST(runtime_functions)
 TEST(runtime_builtin_if)
 {
     ASSERT_VALUE(bsTestExecute("return if(true, 1, 2)"), "1");
+    ASSERT_VALUE(bsTestExecute("return if(1, 2, 3, 4, 5)"), "2");
     ASSERT_VALUE(bsTestExecute("return if(false, 1, 2)"), "2");
     ASSERT_VALUE(bsTestExecute("return if(true, 1)"), "1");
     ASSERT_VALUE(bsTestExecute("return if(false, 1)"), "null");
@@ -288,14 +289,12 @@ TEST(runtime_errors)
     static const char *zeroLine =
         "{\"scriptName\":\"z.bare\",\"statements\":[{\"expr\":{\"expr\":{\"function\":"
         "{\"name\":\"nope\",\"args\":[]}}}}]}";
-    BSValue zeroModel = bsJSONDecode(zeroLine, strlen(zeroLine), NULL);
-    BSScript *zeroScript = bsScriptFromModel(zeroModel, "z.bare");
+    BSScript *zeroScript = bsTestScriptFromJSON(zeroLine, "z.bare");
     BSOptions *zeroOptions = bsTestOptions();
     ASSERT_VALUE(bsExecuteScript(zeroScript, zeroOptions), "null");
     ASSERT_STR_EQ(bsErrorGet(zeroOptions), "z.bare: Undefined function \"nope\"");
     bsOptionsFree(zeroOptions);
     bsScriptRelease(zeroScript);
-    bsRelease(zeroModel);
     ASSERT_VALUE(bsTestExecute("jump nowhere"), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Unknown jump label \"nowhere\"");
     ASSERT_VALUE(bsTestExecute("a = 1\nundefinedFunc()"), "null");
@@ -811,9 +810,7 @@ TEST(runtime_coverage_forgotten_model_mismatch)
     BSOptions *options = bsTestCoverageOptions(&coverage, true);
     static const char *json = "{\"statements\":[{\"expr\":{\"name\":\"a\",\"expr\":{\"number\":1},\"lineNumber\":1}}],"
         "\"scriptLines\":[\"a = 1\",\"b = 2\"]}";
-    BSValue model = bsJSONDecode(json, strlen(json), NULL);
-    BSScript *script = bsScriptFromModel(model, "mismatch.bare");
-    bsRelease(model);
+    BSScript *script = bsTestScriptFromJSON(json, "mismatch.bare");
     ASSERT_NOT_NULL(script);
     bsScriptForgetModel(script);
     bsRelease(bsExecuteScript(script, options));
@@ -898,9 +895,7 @@ TEST(runtime_coverage_cache)
     static const char *highModel =
         "{\"scriptName\":\"high.bare\",\"statements\":[{\"expr\":{\"name\":\"a\","
         "\"expr\":{\"number\":1},\"lineNumber\":40}}]}";
-    BSValue model = bsJSONDecode(highModel, strlen(highModel), NULL);
-    script = bsScriptFromModel(model, "high.bare");
-    bsRelease(model);
+    script = bsTestScriptFromJSON(highModel, "high.bare");
     bsRelease(bsExecuteScript(script, options));
     ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "high.bare", "40"), 1);
     bsScriptRelease(script);
@@ -911,9 +906,7 @@ TEST(runtime_coverage_cache)
     static const char *zeroModel =
         "{\"scriptName\":\"zero.bare\",\"statements\":[{\"expr\":{\"name\":\"a\","
         "\"expr\":{\"number\":1}}}]}";
-    model = bsJSONDecode(zeroModel, strlen(zeroModel), NULL);
-    script = bsScriptFromModel(model, "zero.bare");
-    bsRelease(model);
+    script = bsTestScriptFromJSON(zeroModel, "zero.bare");
     bsRelease(bsExecuteScript(script, options));
     ASSERT_FALSE(bsObjectHas(coverage, "scripts"));
     bsScriptRelease(script);
@@ -952,7 +945,7 @@ TEST(runtime_eval_borrow)
         "function g(x, y):\n    return x + y\nendfunction\n"
         "s = 'a'\nreturn g(s, 'z')"), "\"az\"");
 
-    /* More than eight arguments allocate the argument buffer */
+    /* A call with many arguments */
     ASSERT_VALUE(bsTestExecute(
         "function g(a, b, c, d, e, f, g, h, i, j):\n    return a + j\nendfunction\n"
         "return g(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)"), "11");
@@ -989,11 +982,11 @@ TEST(runtime_duplicate_arguments)
 
 TEST(runtime_many_arguments)
 {
-    /* A function with more arguments than the inline argument buffer */
+    /* A function with many arguments */
     ASSERT_VALUE(bsTestExecute("function g(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11):\n"
                                "    return a11\nendfunction\nreturn g(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)"), "11");
 
-    /* Enough values on the stack that LOAD_NULL / LOAD_TRUE / DUP / a 0-arg CALL grow it */
+    /* Deeply nested calls with many arguments */
     ASSERT_VALUE(bsTestExecute(
         "function g(a, b, c, d, e, f, g, h, i):\n    return i\nendfunction\n"
         "return g(null, null, null, null, null, null, null, null, null)"), "null");

@@ -616,11 +616,7 @@ TEST(regex_coverage_gaps)
     ASSERT_VALUE_STRING(bsTestMatch("^$", "", BS_REGEX_MULTILINE), "");
     ASSERT_VALUE_STRING(bsTestMatch("a$", "ab", BS_REGEX_MULTILINE), "null");
     ASSERT_VALUE_STRING(bsTestMatch("^b", "ab", BS_REGEX_MULTILINE), "null");
-}
 
-
-TEST(regex_coverage_gaps2)
-{
     /* An invalid escape as a character class range's high bound */
     bsTestRegexError("[a-\\x4G]", "incomplete escape \\x4 at position 3");
 
@@ -639,11 +635,7 @@ TEST(regex_coverage_gaps2)
     /* A lazy non-simple repeat with a zero minimum tries its continuation first */
     ASSERT_VALUE_STRING(bsTestMatch("x(?:ab)*?y", "xaby", 0), "xaby");
     ASSERT_VALUE_STRING(bsTestMatch("(?:ab)??c", "abc", 0), "abc");
-}
 
-
-TEST(regex_final_coverage)
-{
     /* A greedy simple repeat that matches zero times and whose continuation fails */
     ASSERT_VALUE_STRING(bsTestMatch("a*b", "c", 0), "null");
     ASSERT_VALUE_STRING(bsTestMatch("a*$", "b", 0), "");

@@ -194,6 +194,24 @@ BSValue bsTestExecute(const char *text)
 }
 
 
+BSValue bsTestExecuteScript(BSScript *script)
+{
+    BSOptions *options = bsTestOptions();
+    BSValue result = bsExecuteScript(script, options);
+    bsOptionsFree(options);
+    return result;
+}
+
+
+BSScript *bsTestScriptFromJSON(const char *json, const char *scriptName)
+{
+    BSValue model = bsJSONDecode(json, strlen(json), NULL);
+    BSScript *script = bsScriptFromModel(model, scriptName);
+    bsRelease(model);
+    return script;
+}
+
+
 /*
  * Temporary files
  */

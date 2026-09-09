@@ -160,7 +160,7 @@ static void bsTestModelStrings(BSTestModel *model, const char *const *strings, s
     }
 }
 
-/* A sequence of bytes, each less than 128 - single-byte varints included - from a NUL-terminated list */
+/* Append bytes as they are */
 static void bsTestModelBytes(BSTestModel *model, const unsigned char *bytes, size_t count)
 {
     memcpy(model->bytes + model->size, bytes, count);
@@ -180,9 +180,7 @@ static void bsTestModelResult(const BSTestModel *model, const char *expected)
         bsTestFail(__FILE__, __LINE__, "the model did not decode");
         return;
     }
-    BSOptions *options = bsOptionsNew();
-    ASSERT_VALUE(bsExecuteScript(script, options), expected);
-    bsOptionsFree(options);
+    ASSERT_VALUE(bsTestExecuteScript(script), expected);
     bsScriptRelease(script);
 }
 

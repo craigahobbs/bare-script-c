@@ -258,8 +258,7 @@ async function main():
         exportName = stringUpper(stringCharAt(baseName, 0)) + stringSlice(baseName, 1)
         macroName = stringUpper(baseName)
 
-        # Parse the include script into its model, dropping the script lines - a system include's
-        # lines are unused at runtime
+        # Parse the include script into its model
         text = systemFetch(file)
         if text == null:
             systemLog('error: failed to read "' + file + '"')
@@ -271,7 +270,6 @@ async function main():
             return 1
         endif
         model = objectGet(parseResult, 'result')
-        objectDelete(model, 'scriptLines')
 
         # Encode the model, compress it at gzip level 9 (max), and emit the bytes as a C initializer, 18 per line
         compressed = gzipCompress(includeSourceEncode(model), 9)

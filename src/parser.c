@@ -42,8 +42,8 @@ static BSValue bsBootstrapGlobals(BSBootstrap *bootstrap)
     }
 
     /*
-     * The bundled model is JSON, so it loads without a parser - which is what makes it possible
-     * for the parser itself to be a BareScript script. The compiled script is cached.
+     * The bundled model loads without a parser - which is what makes it possible for the parser
+     * itself to be a BareScript script. The compiled script is cached.
      */
     BSScript *script = bsIncludeScript(bootstrap->includeName);
     if (script == NULL) {

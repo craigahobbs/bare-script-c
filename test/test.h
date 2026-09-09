@@ -159,6 +159,12 @@ BSValue bsTestExecuteOptions(const char *text, BSOptions *options);
 /* Create test options with a capturing log function */
 BSOptions *bsTestOptions(void);
 
+/* Execute a compiled script with capturing test options and return its owned result */
+BSValue bsTestExecuteScript(BSScript *script);
+
+/* Decode a JSON model and compile it to a script named "scriptName" (NULL keeps the model's); NULL if invalid */
+BSScript *bsTestScriptFromJSON(const char *json, const char *scriptName);
+
 /* Get the captured log text of the most recent bsTestExecute or bsTestOptions log function */
 const char *bsTestLogText(void);
 

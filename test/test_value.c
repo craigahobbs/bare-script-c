@@ -12,6 +12,10 @@
 #include "test.h"
 
 
+/* A key longer than the sixty-four byte limit of the intern table is never interned */
+static const char *const bsTestLongKey = "a key longer than the sixty-four byte limit of the intern table is never interned";
+
+
 TEST(value_null)
 {
     BSValue value = bsNull();
@@ -454,22 +458,22 @@ TEST(value_object_delete_all)
     BSValue object = bsObjectNew();
     char key[16];
     for (int ix = 0; ix < 200; ix++) {
-        snprintf(key, sizeof(key), "treap%d", ix);
+        snprintf(key, sizeof(key), "key%d", ix);
         BSValue keyValue = bsStringNew(key);
         bsObjectSetString(object, keyValue, bsNumber(ix));
         bsRelease(keyValue);
     }
     ASSERT_INT_EQ(bsObjectCount(object), 200);
     for (int ix = 0; ix < 200; ix += 2) {
-        snprintf(key, sizeof(key), "treap%d", ix);
+        snprintf(key, sizeof(key), "key%d", ix);
         ASSERT_TRUE(bsObjectDelete(object, key));
     }
     for (int ix = 199; ix > 0; ix -= 2) {
-        snprintf(key, sizeof(key), "treap%d", ix);
+        snprintf(key, sizeof(key), "key%d", ix);
         ASSERT_TRUE(bsObjectDelete(object, key));
     }
     ASSERT_INT_EQ(bsObjectCount(object), 0);
-    ASSERT_FALSE(bsObjectDelete(object, "treap0"));
+    ASSERT_FALSE(bsObjectDelete(object, "key0"));
     bsRelease(object);
 }
 
@@ -541,16 +545,15 @@ TEST(value_object_intern)
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "\xc3\xa9").u.number, 5);
 
     /* A key longer than the intern limit still round-trips, on both small and large objects */
-    const char *longKey = "a key longer than the sixty-four byte limit of the intern table is never interned";
     BSValue small = bsObjectNew();
-    bsObjectSet(small, longKey, bsNumber(1));
-    ASSERT_TRUE(bsObjectHas(small, longKey));
+    bsObjectSet(small, bsTestLongKey, bsNumber(1));
+    ASSERT_TRUE(bsObjectHas(small, bsTestLongKey));
     bsRelease(small);
-    bsObjectSet(object, longKey, bsNumber(70));
-    ASSERT_TRUE(bsObjectHas(object, longKey));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, longKey).u.number, 70);
-    ASSERT_TRUE(bsObjectDelete(object, longKey));
-    ASSERT_FALSE(bsObjectHas(object, longKey));
+    bsObjectSet(object, bsTestLongKey, bsNumber(70));
+    ASSERT_TRUE(bsObjectHas(object, bsTestLongKey));
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, bsTestLongKey).u.number, 70);
+    ASSERT_TRUE(bsObjectDelete(object, bsTestLongKey));
+    ASSERT_FALSE(bsObjectHas(object, bsTestLongKey));
     bsRelease(object);
 }
 
@@ -564,11 +567,10 @@ TEST(value_object_small_update)
     bsObjectSet(object, "c", bsNumber(0));
     bsObjectSet(object, "d", bsNumber(0));
     bsObjectSet(object, "e", bsNumber(0));
-    const char *longKey = "a key longer than the sixty-four byte limit of the intern table is never interned";
-    BSValue key = bsStringNew(longKey);
+    BSValue key = bsStringNew(bsTestLongKey);
     bsObjectSetString(object, key, bsNumber(1));
     bsObjectSetString(object, key, bsNumber(2));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, longKey).u.number, 2);
+    ASSERT_DOUBLE_EQ(bsObjectGet(object, bsTestLongKey).u.number, 2);
     bsObjectSet(object, "a", bsNumber(9));
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "a").u.number, 9);
     bsRelease(key);
@@ -1050,7 +1052,7 @@ TEST(value_object_index)
     ASSERT_DOUBLE_EQ(bsObjectGet(object, "k8").u.number, 8);
 
     /* An ordinary key past the threshold is found by content */
-    BSValue longKey = bsStringNew("a key longer than the sixty-four byte limit of the intern table is never interned");
+    BSValue longKey = bsStringNew(bsTestLongKey);
     bsObjectSetString(object, longKey, bsNumber(1));
     ASSERT_INT_EQ(bsObjectCount(object), 40);
     ASSERT_DOUBLE_EQ(bsObjectGetString(object, longKey).u.number, 1);
