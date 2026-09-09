@@ -1788,28 +1788,6 @@ static BS_NOINLINE void bsObjectEntriesGrow(BSObject *object)
 }
 
 
-/* Append an entry for a key known to be absent. Takes ownership of "item" and retains "key". */
-static void bsObjectEntryAdd(BSObject *object, BSValue key, BSValue item)
-{
-    if (object->count == object->capacity) {
-        bsObjectEntriesGrow(object);
-    }
-    uint32_t ix = object->count++;
-    BSObjectEntry *entry = &object->entries[ix];
-    entry->key = bsRetainInline(key).u.string;
-    entry->value = item;
-    object->generation++;
-    if ((entry->key->flags & BS_STR_INTERNED) == 0) {
-        object->generation |= BS_OBJECT_ORDINARY;
-    }
-    if (object->index != NULL) {
-        bsObjectIndexPut(object->index, bsStringHash(entry->key), ix);
-    } else if (object->count > BS_OBJECT_LINEAR) {
-        bsObjectIndexBuild(object);
-    }
-}
-
-
 BSValue bsObjectNewCapacity(size_t count)
 {
     BSValue value = bsObjectNew();
@@ -1847,35 +1825,46 @@ static void bsObjectEntriesFree(BSObject *object)
 }
 
 
+/* Append a key known to be absent. Takes ownership of "item" and retains "key". */
 void bsObjectAppend(BSValue value, BSValue key, BSValue item)
 {
-    bsObjectEntryAdd(value.u.object, key, item);
+    BSObject *object = value.u.object;
+    if (object->count == object->capacity) {
+        bsObjectEntriesGrow(object);
+    }
+    uint32_t ix = object->count++;
+    BSObjectEntry *entry = &object->entries[ix];
+    entry->key = bsRetainInline(key).u.string;
+    entry->value = item;
+    object->generation++;
+    if ((entry->key->flags & BS_STR_INTERNED) == 0) {
+        object->generation |= BS_OBJECT_ORDINARY;
+    }
+    if (object->index != NULL) {
+        bsObjectIndexPut(object->index, bsStringHash(entry->key), ix);
+    } else if (object->count > BS_OBJECT_LINEAR) {
+        bsObjectIndexBuild(object);
+    }
 }
 
 
-/* Insert or update a key. Takes ownership of "item"; retains "key" if an entry is added. */
-static void bsObjectInsert(BSObject *object, BSValue key, BSValue item)
+void bsObjectSetString(BSValue value, BSValue key, BSValue item)
 {
+    BSObject *object = value.u.object;
     BSObjectEntry *entry = bsObjectFind(object, key.u.string, key.u.string->data, key.u.string->size);
     if (entry != NULL) {
         bsReleaseInline(entry->value);
         entry->value = item;
         return;
     }
-    bsObjectEntryAdd(object, key, item);
-}
-
-
-void bsObjectSetString(BSValue value, BSValue key, BSValue item)
-{
-    bsObjectInsert(value.u.object, key, item);
+    bsObjectAppend(value, key, item);
 }
 
 
 void bsObjectSet(BSValue value, const char *key, BSValue item)
 {
     BSValue keyValue = bsStringIntern(key, strlen(key));
-    bsObjectInsert(value.u.object, keyValue, item);
+    bsObjectSetString(value, keyValue, item);
     bsReleaseInline(keyValue);
 }
 
@@ -2082,7 +2071,7 @@ void bsObjectAssign(BSValue dest, BSValue src)
     const BSObject *source = src.u.object;
     for (size_t ix = 0; ix < source->count; ix++) {
         const BSObjectEntry *entry = &source->entries[ix];
-        bsObjectInsert(dest.u.object, bsStringTake(entry->key), bsRetainInline(entry->value));
+        bsObjectSetString(dest, bsStringTake(entry->key), bsRetainInline(entry->value));
     }
 }
 
@@ -2093,7 +2082,7 @@ BSValue bsObjectCopy(BSValue value)
     BSValue copy = bsObjectNewCapacity(count);
     for (size_t ix = 0; ix < count; ix++) {
         const BSObjectEntry *entry = &value.u.object->entries[ix];
-        bsObjectEntryAdd(copy.u.object, bsStringTake(entry->key), bsRetainInline(entry->value));
+        bsObjectAppend(copy, bsStringTake(entry->key), bsRetainInline(entry->value));
     }
     return copy;
 }
