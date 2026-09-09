@@ -20,11 +20,8 @@ static void bsTestInvalidModelJSON(const char *json, const char *expectedError)
     if (script != NULL) {
         bsScriptRelease(script);
         bsTestFail(__FILE__, __LINE__, "expected an invalid model: %s", json);
-    } else if (error == NULL || strcmp(error, expectedError) != 0) {
-        bsTestFail(__FILE__, __LINE__, "%s: error \"%s\", expected \"%s\"", json, error != NULL ? error : "(none)", expectedError);
-    } else {
-        bsTestPass();
     }
+    bsTestAssertEqual(__FILE__, __LINE__, json, error, expectedError);
 }
 
 

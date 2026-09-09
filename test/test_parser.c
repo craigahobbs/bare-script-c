@@ -56,12 +56,18 @@ TEST(parser_forget_model)
 }
 
 
+/* Assert that an owned string value contains "needle" and release it */
+static void bsTestContainsValue(BSValue result, const char *needle)
+{
+    ASSERT_STR_CONTAINS(bsStringData(result), needle);
+    bsRelease(result);
+}
+
+
 /* Assert that a script's parse result - its model JSON or its error message - contains "needle" */
 static void bsTestParseContains(const char *text, const char *needle)
 {
-    BSValue result = bsTestParse(text);
-    ASSERT_STR_CONTAINS(bsStringData(result), needle);
-    bsRelease(result);
+    bsTestContainsValue(bsTestParse(text), needle);
 }
 
 
@@ -86,9 +92,7 @@ static BSValue bsTestParseExpr(const char *text, bool arrayLiterals)
 /* The expression form of bsTestParseContains */
 static void bsTestParseExprContains(const char *text, const char *needle)
 {
-    BSValue result = bsTestParseExpr(text, false);
-    ASSERT_STR_CONTAINS(bsStringData(result), needle);
-    bsRelease(result);
+    bsTestContainsValue(bsTestParseExpr(text, false), needle);
 }
 
 
