@@ -355,22 +355,22 @@ unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t
         if (type == 1) {
             bsInflateFixedCodes(&literals, &distances);
         } else if (type != 2 || !bsInflateDynamicCodes(&bits, &literals, &distances)) {
-            free(out);
-            return NULL;
+            goto fail;
         }
         outLen = bsInflateCodes(&bits, out, outLen, isize, &literals, &distances);
         if (outLen == SIZE_MAX) {
-            free(out);
-            return NULL;
+            goto fail;
         }
     } while (final == 0);
     if (outLen != isize) {
-        free(out);
-        return NULL;
+        goto fail;
     }
     out[isize] = '\0';
     *size = isize;
     return out;
+fail:
+    free(out);
+    return NULL;
 }
 
 
