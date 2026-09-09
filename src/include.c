@@ -260,8 +260,9 @@ static bool bsInflateDynamicCodes(BSBits *bits, BSHuffman *literals, BSHuffman *
     distanceCount += 1;
     codeCount += 4;
 
-    /* The code length code, then the two codes' lengths under it, with the run-length symbols */
-    unsigned char lengths[286 + 30];
+    /* The code length code, then the two codes' lengths under it, with the run-length symbols -
+     * sized for the most the header can name: 286 literal-length codes and 32 distance codes */
+    unsigned char lengths[286 + 32];
     memset(lengths, 0, 19);
     for (int ix = 0; ix < codeCount; ix++) {
         int length = bsGetBits(bits, 3);
