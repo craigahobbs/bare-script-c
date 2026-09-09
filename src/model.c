@@ -1846,7 +1846,7 @@ static uint32_t bsModelExpr(BSModelReader *reader, int depth, bool required)
     case 2: {
         BSValue text = bsModelString(reader);
         double number;
-        if (text.type != BS_STRING || !bsNumberParse(bsStringData(text), bsStringSize(text), &number)) {
+        if (text.type != BS_STRING || !bsNumberParse(bsStringSpan(text), bsStringSize(text), &number)) {
             reader->failed = true;
             return 0;
         }

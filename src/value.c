@@ -1309,7 +1309,7 @@ void bsSBAppendFormat(BSStringBuilder *sb, const char *format, ...)
     va_start(args, format);
     BSValue text = bsStringNewVFormat(format, args);
     va_end(args);
-    bsSBAppend(sb, bsStringData(text), bsStringSize(text));
+    bsSBAppend(sb, bsStringSpan(text), bsStringSize(text));
     bsReleaseInline(text);
 }
 

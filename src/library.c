@@ -417,7 +417,7 @@ static BSValue bsFnArrayJoin(const BSValue *args, size_t argCount, BSOptions *op
     size_t count = bsArrayCount(values[0]);
     for (size_t ix = 0; ix < count; ix++) {
         if (ix != 0) {
-            bsSBAppend(&sb, bsStringData(values[1]), bsStringSize(values[1]));
+            bsSBAppend(&sb, bsStringSpan(values[1]), bsStringSize(values[1]));
         }
         bsSBAppendValue(&sb, bsArrayGet(values[0], ix));
     }
@@ -645,7 +645,7 @@ static BSValue bsFnDatetimeISOFormat(const BSValue *args, size_t argCount, BSOpt
 
 
 BS_OUT_FN(bsFnDatetimeISOParse, stringArgs, int64_t,
-          bsDatetimeParse(bsStringData(values[0]), bsStringSize(values[0]), &out), bsDatetime(out))
+          bsDatetimeParse(bsStringSpan(values[0]), bsStringSize(values[0]), &out), bsDatetime(out))
 
 
 static const BSArgModel datetimeNewArgs[] = {
@@ -678,11 +678,10 @@ static BSValue bsFnJSONParse(const BSValue *args, size_t argCount, BSOptions *op
     BS_ARGS(stringArgs, bsNull());
     const char *error = NULL;
     size_t errorOffset = 0;
-    BSValue result = bsJSONDecodeEx(bsStringData(values[0]), bsStringSize(values[0]), &error,
-                                    &errorOffset);
+    const char *text = bsStringSpan(values[0]);
+    BSValue result = bsJSONDecodeEx(text, bsStringSize(values[0]), &error, &errorOffset);
     if (error != NULL) {
         /* Report the decoder's error and its position, as the reference implementations do */
-        const char *text = bsStringData(values[0]);
         size_t line = 1;
         size_t column = 1;
         for (size_t ix = 0; ix < errorOffset; ix++) {
@@ -825,7 +824,7 @@ BS_LIBRARY_FN(bsFnMathSqrt, mathSqrtArgs, bsNull(), bsNumber(sqrt(BS_MATH_X)))
 
 
 BS_OUT_FN(bsFnNumberParseFloat, stringArgs, double,
-          bsNumberParse(bsStringData(values[0]), bsStringSize(values[0]), &out), bsNumber(out))
+          bsNumberParse(bsStringSpan(values[0]), bsStringSize(values[0]), &out), bsNumber(out))
 
 
 static const BSArgModel numberParseIntArgs[] = {
@@ -834,7 +833,7 @@ static const BSArgModel numberParseIntArgs[] = {
 };
 
 BS_OUT_FN(bsFnNumberParseInt, numberParseIntArgs, double,
-          bsIntegerParse(bsStringData(values[0]), bsStringSize(values[0]), (int) values[1].u.number, &out),
+          bsIntegerParse(bsStringSpan(values[0]), bsStringSize(values[0]), (int) values[1].u.number, &out),
           bsNumber(out))
 
 
@@ -858,7 +857,7 @@ static BSValue bsFnNumberToFixed(const BSValue *args, size_t argCount, BSOptions
     }
 
     /* Trim a trailing fraction of only zeroes, along with the decimal point */
-    const char *text = bsStringData(result);
+    const char *text = bsStringSpan(result);
     size_t size = bsStringSize(result);
     const char *point = memchr(text, '.', size);
     if (point != NULL) {
@@ -1157,7 +1156,7 @@ static BSValue bsFnRegexNew(const BSValue *args, size_t argCount, BSOptions *opt
     BS_ARGS(regexNewArgs, bsNull());
     unsigned flags = 0;
     if (values[1].type == BS_STRING) {
-        const char *flagText = bsStringData(values[1]);
+        const char *flagText = bsStringSpan(values[1]);
         for (size_t ix = 0; ix < bsStringSize(values[1]); ix++) {
             unsigned flag = flagText[ix] == 'i' ? BS_REGEX_IGNORECASE : flagText[ix] == 'm' ? BS_REGEX_MULTILINE :
                 flagText[ix] == 's' ? BS_REGEX_DOTALL : 0;
@@ -1241,7 +1240,7 @@ static void bsRegexExpand(BSStringBuilder *sb, BSValue regex, BSValue string, co
                 for (size_t group = 1; group < match->groupCount; group++) {
                     BSValue name = bsRegexGroupNameValue(regex, group);
                     if (match->matched[group] && name.type == BS_STRING && bsStringSize(name) == end - ix - 2 &&
-                        memcmp(bsStringData(name), substr + ix + 2, end - ix - 2) == 0) {
+                        memcmp(bsStringSpan(name), substr + ix + 2, end - ix - 2) == 0) {
                         bsSBAppendSlice(sb, string, match->groups[group].begin, match->groups[group].end);
                         break;
                     }
@@ -1274,7 +1273,7 @@ static BSValue bsFnRegexReplace(const BSValue *args, size_t argCount, BSOptions 
     BSRegexMatch match;
     while (position <= subject.length && bsRegexSearch(values[0], &subject, position, &match)) {
         bsSBAppendSlice(&sb, values[1], position, match.begin);
-        bsRegexExpand(&sb, values[0], values[1], &match, bsStringData(values[2]), bsStringSize(values[2]));
+        bsRegexExpand(&sb, values[0], values[1], &match, bsStringSpan(values[2]), bsStringSize(values[2]));
         if (match.end > match.begin) {
             position = match.end;
         } else {
@@ -1396,7 +1395,7 @@ static BSValue bsFnStringEncode(const BSValue *args, size_t argCount, BSOptions 
 {
     BS_ARGS(stringArgs, bsNull());
     size_t size = bsStringSize(values[0]);
-    const char *text = bsStringData(values[0]);
+    const char *text = bsStringSpan(values[0]);
     BSValue result = bsArrayNewCapacity(size);
     for (size_t ix = 0; ix < size; ix++) {
         bsArrayPush(result, bsNumber((unsigned char) text[ix]));
@@ -1538,10 +1537,12 @@ static BSValue bsFnStringRepeat(const BSValue *args, size_t argCount, BSOptions 
 {
     BS_ARGS(stringRepeatArgs, bsNull());
     size_t count = (size_t) values[1].u.number;
+    const char *text = bsStringSpan(values[0]);
+    size_t size = bsStringSize(values[0]);
     BSStringBuilder sb;
     bsSBInit(&sb);
     for (size_t ix = 0; ix < count; ix++) {
-        bsSBAppend(&sb, bsStringData(values[0]), bsStringSize(values[0]));
+        bsSBAppend(&sb, text, size);
     }
     return bsSBToValue(&sb);
 }

@@ -2867,7 +2867,7 @@ BSValue bsRegexEscape(BSValue string)
         ['.'] = 1, ['*'] = 1, ['+'] = 1, ['?'] = 1, ['^'] = 1, ['$'] = 1, ['{'] = 1, ['}'] = 1,
         ['('] = 1, [')'] = 1, ['|'] = 1, ['['] = 1, [']'] = 1, ['\\'] = 1
     };
-    const char *data = bsStringData(string);
+    const char *data = bsStringSpan(string);
     size_t size = bsStringSize(string);
     size_t escaped = size;
     for (size_t ix = 0; ix < size; ix++) {

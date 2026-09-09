@@ -1450,7 +1450,7 @@ size_t bsUnicodeCanonMembers(uint32_t canon, uint32_t *members)
 
 BSValue bsStringToCase(BSValue string, bool upper)
 {
-    const char *text = bsStringData(string);
+    const char *text = bsStringSpan(string);
     size_t size = bsStringSize(string);
     BSStringBuilder sb;
     bsSBInit(&sb);

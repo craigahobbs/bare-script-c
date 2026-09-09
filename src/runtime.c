@@ -483,7 +483,7 @@ static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
 static BSValue bsIntrinsicParseInt(BSValue string)
 {
     double number;
-    return bsIntegerParse(bsStringData(string), bsStringSize(string), 10, &number) ? bsNumber(number) : bsNull();
+    return bsIntegerParse(bsStringSpan(string), bsStringSize(string), 10, &number) ? bsNumber(number) : bsNull();
 }
 
 BSValue bsGlobalSetValue(BSOptions *options, BSValue name, BSValue value)
