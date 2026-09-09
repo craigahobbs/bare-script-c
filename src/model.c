@@ -16,52 +16,6 @@
 #include "internal.h"
 
 
-/*
- * Finish a cached system include's chunk
- *
- * A system script is never statement-counted or coverage-recorded, so its STMT markers only cost
- * dispatch: they are stripped in place, with jump targets remapped and each statement's start
- * index kept in coverPcs for error line numbers. Data words (call operands, a trap's line) are
- * never STMT and never jumps; a comparison jump's target is the data word that follows it.
- */
-static void bsCodeStripStatements(BSCode *code)
-{
-    size_t count = code->count;
-    BSInst *inst = code->inst;
-    uint32_t *map = bsAlloc(count * sizeof(uint32_t));
-    size_t stripped = 0;
-    for (size_t pc = 0; pc < count; pc++) {
-        BSInst word = inst[pc];
-        map[pc] = (uint32_t) stripped;
-        if (word.op == BS_OP_STMT) {
-            code->coverPcs[word.a] = (uint32_t) stripped;
-        } else {
-            inst[stripped++] = word;
-        }
-    }
-    for (size_t pc = 0; pc < stripped; pc++) {
-        uint8_t op = inst[pc].op;
-        if (op == BS_OP_JUMP || op == BS_OP_JUMP_FALSE || op == BS_OP_JUMP_TRUE) {
-            inst[pc].w = map[inst[pc].w];
-        } else if (op >= BS_OP_JUMP_EQ && op <= BS_OP_JUMP_GE) {
-            pc++;
-            inst[pc].w = map[inst[pc].w];
-        }
-    }
-    free(map);
-    code->count = stripped;
-}
-
-
-void bsScriptDropModel(BSScript *script)
-{
-    bsScriptForgetModel(script);
-    bsCodeStripStatements(&script->code);
-    for (size_t ix = 0; ix < script->functionCount; ix++) {
-        bsCodeStripStatements(&script->functions[ix]->code);
-    }
-}
-
 
 void bsScriptForgetModel(BSScript *script)
 {
@@ -1426,7 +1380,10 @@ static void bsEmitCover(BSEmit *e, const BSNode *node)
     e->cover[e->coverCount] = node->model;
     e->coverLines[e->coverCount] = node->line;
     e->coverPcs[e->coverCount] = (uint32_t) e->count;
-    bsEmitInst(e, BS_OP_STMT, (uint16_t) e->coverCount, 0, 0);
+    if (!e->script->system) {
+        /* A system script is never statement-counted or coverage-recorded, so it has no markers */
+        bsEmitInst(e, BS_OP_STMT, (uint16_t) e->coverCount, 0, 0);
+    }
     e->coverCount++;
 }
 
@@ -2107,8 +2064,10 @@ BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const 
     }
     decoded = decoded && !reader.failed;
 
-    /* Each statement is read, emitted, and dropped from the arena before the next */
+    /* Each statement is read, emitted, and dropped from the arena before the next - with no
+       statement markers, the binary models being the bundled library's, which is system code */
     BSScript *script = bsScriptNew();
+    script->system = true;
     size_t functionCap = 0;
     BSEmit e;
     bsEmitInit(&e, script, &functionCap);

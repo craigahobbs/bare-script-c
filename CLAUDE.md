@@ -114,9 +114,9 @@ object's value slot validated by the object's *structural* `generation` (bumped 
 added or removed - an in-place update does not move slots); an `objectGet` or `objectSet` site's
 cache also remembers the entry index its key was last found at, checked against the entry's key
 before the object is scanned. Runtime errors are checked after each
-call, not per statement; line numbers come from `coverPcs` on demand. Bundled (system) includes
-have their `STMT` instructions stripped by `bsScriptDropModel`, so never assume a `STMT` precedes
-every statement in a cached include's code.
+call, not per statement; line numbers come from `coverPcs` on demand. A system script - a bundled
+include - is emitted without `STMT` instructions, so never assume a `STMT` precedes every
+statement in a cached include's code.
 
 ### The bundled include library
 

@@ -2830,17 +2830,31 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
 
 BSValue bsRegexEscape(BSValue string)
 {
-    static const char *special = ".*+?^${}()|[]\\";
+    /* The characters escaped: . * + ? ^ $ { } ( ) | [ ] and the backslash */
+    static const unsigned char special[256] = {
+        ['.'] = 1, ['*'] = 1, ['+'] = 1, ['?'] = 1, ['^'] = 1, ['$'] = 1, ['{'] = 1, ['}'] = 1,
+        ['('] = 1, [')'] = 1, ['|'] = 1, ['['] = 1, [']'] = 1, ['\\'] = 1
+    };
     const char *data = bsStringData(string);
     size_t size = bsStringSize(string);
+    size_t escaped = size;
+    for (size_t ix = 0; ix < size; ix++) {
+        escaped += special[(unsigned char) data[ix]];
+    }
+    if (escaped == size) {
+        return bsRetain(string);
+    }
     BSStringBuilder sb;
     bsSBInit(&sb);
+    bsSBReserve(&sb, escaped);
+    char *out = sb.data;
     for (size_t ix = 0; ix < size; ix++) {
         char ch = data[ix];
-        if (ch != '\0' && strchr(special, ch) != NULL) {
-            bsSBAppendChar(&sb, '\\');
+        if (special[(unsigned char) ch]) {
+            *out++ = '\\';
         }
-        bsSBAppendChar(&sb, ch);
+        *out++ = ch;
     }
+    sb.size = escaped;
     return bsSBToValue(&sb);
 }

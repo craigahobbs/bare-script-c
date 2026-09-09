@@ -238,8 +238,8 @@ invalidates other sites. Under GNU C the interpreter dispatches through a label 
 branch per opcode. A runtime error is detected at entry, after each call, and at the statements
 that raise one; the statement's line number is found from a per-chunk table only when an error
 message needs it. Bundled include scripts - the parser, the linter, and the library - are never
-statement-counted or coverage-recorded, so their statement markers are stripped from the code
-stream when the cached script is finished.
+statement-counted or coverage-recorded, so the emitter writes no statement markers into their
+code.
 
 When `__barescriptCoverage` is enabled, each compiled script keeps a line-indexed array of
 pointers into the coverage object's per-line counts, so a loop increments a number instead of

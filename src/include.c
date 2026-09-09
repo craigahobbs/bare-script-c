@@ -295,8 +295,6 @@ BSScript *bsIncludeScript(const char *name)
     if (script == NULL) {
         return NULL; /* GCOV_EXCL_LINE - bundled models always convert */
     }
-    script->system = true;
-    bsScriptDropModel(script);
     bsIncludeScripts[ix] = bsScriptRetain(script);
     return script;
 }
