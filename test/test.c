@@ -24,7 +24,6 @@ static BSTestCase *bsTestTail = NULL;
 /* The current test's state */
 static jmp_buf bsTestJump;
 static const BSTestCase *bsTestCurrent = NULL;
-static bool bsTestRunning = false;
 static bool bsTestFailed = false;
 static size_t bsTestAssertions = 0;
 
@@ -62,30 +61,17 @@ void bsTestFail(const char *file, int line, const char *format, ...)
     va_end(args);
 
     /* Report it now, under the test's line, or collect it for the end of a quiet run */
-    const char *name = bsTestCurrent != NULL ? bsTestCurrent->name : "(none)";
     if (bsTestQuiet) {
         putchar('F');
         fflush(stdout);
         bsSBAppendFormat(&bsTestFailText,
                          "======================================================================\n"
-                         "FAIL: %s\n    %s:%d: %s\n", name, file, line, bsStringData(message));
+                         "FAIL: %s\n    %s:%d: %s\n", bsTestCurrent->name, file, line, bsStringData(message));
     } else {
         printf("FAIL\n    %s:%d: %s\n", file, line, bsStringData(message));
     }
     bsRelease(message);
-
-    if (bsTestRunning) {
-        longjmp(bsTestJump, 1);
-    }
-}
-
-
-static bool bsTestStringEqual(const char *actual, const char *expected)
-{
-    if (actual == NULL || expected == NULL) {
-        return actual == expected;
-    }
-    return strcmp(actual, expected) == 0;
+    longjmp(bsTestJump, 1);
 }
 
 
@@ -112,7 +98,8 @@ void bsTestAssertContains(const char *file, int line, const char *subject, const
 
 void bsTestAssertEqual(const char *file, int line, const char *subject, const char *actual, const char *expected)
 {
-    if (!bsTestStringEqual(actual, expected)) {
+    bool equal = actual == NULL || expected == NULL ? actual == expected : strcmp(actual, expected) == 0;
+    if (!equal) {
         bsTestFail(file, line, "%s\n    actual:   %s\n    expected: %s", subject, actual != NULL ? actual : "(null)",
                    expected != NULL ? expected : "(null)");
     } else {
@@ -315,11 +302,9 @@ int bsTestRun(const char *filter, bool quiet)
         fflush(stdout);
 
         double testBegin = bsTestNow();
-        bsTestRunning = true;
         if (setjmp(bsTestJump) == 0) {
             testCase->fn();
         }
-        bsTestRunning = false;
         if (bsTestFailed) {
             failCount++;
         } else if (quiet) {

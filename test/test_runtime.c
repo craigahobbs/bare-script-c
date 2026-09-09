@@ -1124,7 +1124,7 @@ TEST(runtime_function_error)
     BSOptions *options = bsOptionsNew();
     bsFunctionError(options, "first %d", 1);
     bsFunctionError(options, "second %d", 2);
-    ASSERT_VALUE_STRING(bsRetain(options->argsError), "first 1");
+    ASSERT_VALUE_STRING_KEEP(options->argsError, "first 1");
     bsOptionsFree(options);
 
     /* A NULL options is a no-op */

@@ -63,7 +63,7 @@ TEST(model_script_round_trip)
     ASSERT_INT_EQ(bsValueCompare(model, model2), 0);
 
     /* The script name and the system flag survive the round trip */
-    ASSERT_VALUE_STRING(bsRetain(script2->scriptName), "round.bare");
+    ASSERT_VALUE_STRING_KEEP(script2->scriptName, "round.bare");
     script->system = true;
     BSValue systemModel = bsScriptToModel(script);
     BSScript *script3 = bsScriptFromModel(systemModel, NULL);
@@ -82,12 +82,12 @@ TEST(model_script_name_override)
 {
     BSScript *script = bsTestScriptFromJSON("{\"statements\":[],\"scriptName\":\"from-model.bare\"}", NULL);
     ASSERT_NOT_NULL(script);
-    ASSERT_VALUE_STRING(bsRetain(script->scriptName), "from-model.bare");
+    ASSERT_VALUE_STRING_KEEP(script->scriptName, "from-model.bare");
     bsScriptRelease(script);
 
     BSValue model = bsJSONDecode("{\"statements\":[]}", 17, NULL);
     BSScript *named = bsScriptFromModel(model, "override.bare");
-    ASSERT_VALUE_STRING(bsRetain(named->scriptName), "override.bare");
+    ASSERT_VALUE_STRING_KEEP(named->scriptName, "override.bare");
     bsScriptRelease(named);
 
     BSScript *unnamed = bsScriptFromModel(model, NULL);
@@ -199,7 +199,7 @@ TEST(model_script_from_json)
     ASSERT_INT_EQ(script->model.type, BS_NULL);
     ASSERT_NULL(script->code.cover);
     ASSERT_TRUE(script->system);
-    ASSERT_VALUE_STRING(bsRetain(script->scriptName), "stream.bare");
+    ASSERT_VALUE_STRING_KEEP(script->scriptName, "stream.bare");
     ASSERT_INT_EQ(bsArrayCount(script->scriptLines), 1);
     ASSERT_INT_EQ(script->functionCount, 1);
     ASSERT_VALUE(bsTestExecuteScript(script), "3");
@@ -209,7 +209,7 @@ TEST(model_script_from_json)
     static const char *named = "{\"statements\": [], \"scriptName\": \"model\"}";
     script = bsScriptFromModelJSON(named, strlen(named), "caller.bare", NULL);
     ASSERT_NOT_NULL(script);
-    ASSERT_VALUE_STRING(bsRetain(script->scriptName), "caller.bare");
+    ASSERT_VALUE_STRING_KEEP(script->scriptName, "caller.bare");
     ASSERT_FALSE(script->system);
     bsScriptRelease(script);
 
@@ -274,7 +274,7 @@ TEST(model_script_from_json_shapes)
         "{\"url\": \"b.bare\", \"system\": true}], \"lineNumber\": 1}}]}", NULL);
     ASSERT_NOT_NULL(script);
     ASSERT_INT_EQ(script->code.includeCount, 2);
-    ASSERT_VALUE_STRING(bsRetain(script->code.includes[1].url), "b.bare");
+    ASSERT_VALUE_STRING_KEEP(script->code.includes[1].url, "b.bare");
     ASSERT_TRUE(script->code.includes[1].system);
     ASSERT_FALSE(script->code.includes[0].system);
     bsScriptRelease(script);

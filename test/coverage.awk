@@ -66,8 +66,9 @@ FNR == 1 {
 END {
     totalCovered = 0
     totalMissed = 0
+    rule = sprintf("%-24s %8s %8s %9s\n", "------------------------", "--------", "--------", "---------")
     printf "%-24s %8s %8s %9s\n", "File", "Lines", "Missed", "Coverage"
-    printf "%-24s %8s %8s %9s\n", "------------------------", "--------", "--------", "---------"
+    printf "%s", rule
     for (ix = 0; ix < fileCount; ix++) {
         file = files[ix]
         lines = covered[file] + missed[file]
@@ -82,7 +83,7 @@ END {
         }
     }
     totalLines = totalCovered + totalMissed
-    printf "%-24s %8s %8s %9s\n", "------------------------", "--------", "--------", "---------"
+    printf "%s", rule
     if (totalLines == 0) {
         print "ERROR: no coverage data"
         exit 1

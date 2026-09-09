@@ -423,7 +423,7 @@ TEST(parser_no_script_name)
     /* A parse error without a script name */
     script = bsParseScript("a = 1 +", 7, 1, NULL, &error);
     ASSERT_NULL(script);
-    ASSERT_VALUE_STRING(bsRetain(error.message), ":1: Syntax error\na = 1 +\n       ^\n");
+    ASSERT_VALUE_STRING_KEEP(error.message, ":1: Syntax error\na = 1 +\n       ^\n");
     bsParserErrorFree(&error);
 
     /* A parse error with no error output */
@@ -604,13 +604,13 @@ TEST(parser_bootstrap_errors)
     /* Reported against the script being parsed, not against the parser */
     BSParserError error = {0};
     ASSERT_NULL(bsParseExpression(bsStringData(text), bsStringSize(text), 0, "deep.bare", false, &error));
-    ASSERT_VALUE_STRING(bsRetain(error.message), "deep.bare: Maximum expression depth exceeded\n");
-    ASSERT_VALUE_STRING(bsRetain(error.error), "Maximum expression depth exceeded");
+    ASSERT_VALUE_STRING_KEEP(error.message, "deep.bare: Maximum expression depth exceeded\n");
+    ASSERT_VALUE_STRING_KEEP(error.error, "Maximum expression depth exceeded");
     bsParserErrorFree(&error);
 
     /* Without a script name the message has no location */
     ASSERT_NULL(bsParseExpression(bsStringData(text), bsStringSize(text), 0, NULL, false, &error));
-    ASSERT_VALUE_STRING(bsRetain(error.message), "Maximum expression depth exceeded\n");
+    ASSERT_VALUE_STRING_KEEP(error.message, "Maximum expression depth exceeded\n");
     ASSERT_INT_EQ(error.scriptName.type, BS_NULL);
     bsParserErrorFree(&error);
 

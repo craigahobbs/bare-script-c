@@ -175,7 +175,7 @@ static void bsTestModelBytes(BSTestModel *model, const unsigned char *bytes, siz
         bsTestModelBytes((model), bytes, sizeof(bytes)); \
     } while (0)
 
-static void bsTestModelResult(const BSTestModel *model, const char *expected)
+static void bsTestBinaryModelResult(const BSTestModel *model, const char *expected)
 {
     BSScript *script = bsScriptFromModelBinary(model->bytes, model->size, "test.bare");
     if (script == NULL) {
@@ -235,7 +235,7 @@ TEST(include_model_binary)
     BS_TEST_MODEL_BYTES(&model, 2, 11, 17, 0);
     BS_TEST_MODEL_BYTES(&model, 4, 12, 17);
     BS_TEST_MODEL_BYTES(&model, 3, 13, 8, 5, 16, 2, 4, 13, 4, 14);
-    bsTestModelResult(&model, "[\"small\",1.5]");
+    bsTestBinaryModelResult(&model, "[\"small\",1.5]");
 
     /* A negative integer, an unnamed expression statement, and zero line numbers */
     static const char *const negative[] = {"-"};
@@ -243,7 +243,7 @@ TEST(include_model_binary)
     bsTestModelByte(&model, 1);
     bsTestModelStrings(&model, negative, 1);
     BS_TEST_MODEL_BYTES(&model, 2, 1, 0, 0, 6, 1, 1, 6, 1, 20, 3, 0, 1, 13);
-    bsTestModelResult(&model, "-7");
+    bsTestBinaryModelResult(&model, "-7");
 
     /* An include statement */
     static const char *const includes[] = {"args.bare", "systemType", "argsParse"};
@@ -251,7 +251,7 @@ TEST(include_model_binary)
     bsTestModelByte(&model, 1);
     bsTestModelStrings(&model, includes, 3);
     BS_TEST_MODEL_BYTES(&model, 2, 6, 1, 1, 1, 1, 3, 2, 5, 2, 1, 4, 3);
-    bsTestModelResult(&model, "\"function\"");
+    bsTestBinaryModelResult(&model, "\"function\"");
 
     /* An expression at the nesting limit fails, one just inside it does not - the statement is at
        depth one, its expression at two, so the literal inside 997 groups is at depth 999 */
@@ -263,7 +263,7 @@ TEST(include_model_binary)
         }
         BS_TEST_MODEL_BYTES(&model, 1, 2);
         if (groups == 997) {
-            bsTestModelResult(&model, "1");
+            bsTestBinaryModelResult(&model, "1");
         } else {
             bsTestModelInvalid(&model, 0);
         }

@@ -97,6 +97,10 @@ void bsTestPass(void);
 #define ASSERT_VALUE_STRING(value, expectedString) \
     bsTestAssertValueString(__FILE__, __LINE__, #value, (value), (expectedString))
 
+/* Assert a value's string representation - the value is not released */
+#define ASSERT_VALUE_STRING_KEEP(value, expectedString) \
+    bsTestAssertValueString(__FILE__, __LINE__, #value, bsRetain(value), (expectedString))
+
 
 void bsTestCheck(const char *file, int line, bool ok, const char *message);
 void bsTestAssertContains(const char *file, int line, const char *subject, const char *haystack, const char *needle,

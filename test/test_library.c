@@ -718,7 +718,7 @@ TEST(library_lookup)
 
 TEST(library_too_many_arguments)
 {
-    /* Every library function reports its documented error value when given too many arguments */
+    /* Every library function reports its documented error value given too many arguments or one of the wrong type */
     bsTestExpr("systemType(1, 2)", "null");
     bsTestExpr("systemBoolean(1, 2)", "null");
     bsTestExpr("systemCompare(1, 2, 3)", "null");

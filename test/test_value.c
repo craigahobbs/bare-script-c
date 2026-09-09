@@ -250,7 +250,6 @@ TEST(value_string_unicode)
     ASSERT_INT_EQ(bsStringOffset(value, 99), 11);
     ASSERT_INT_EQ(bsStringOffset(value, 4), 10);
     ASSERT_INT_EQ(bsStringOffset(value, 1), 1);
-    ASSERT_INT_EQ(bsStringOffset(value, 1), 1);
     ASSERT_INT_EQ(bsStringCodePoint(value, 0), 'a');
     ASSERT_INT_EQ(bsStringCodePoint(value, 1), 0xE9);
     ASSERT_INT_EQ(bsStringCodePoint(value, 3), 0x1F600);
@@ -777,8 +776,8 @@ TEST(value_object_large)
     /* Sorted iteration returns the keys in order */
     BSValue keys = bsObjectKeysSorted(object);
     ASSERT_INT_EQ(bsArrayCount(keys), 401);
-    ASSERT_VALUE_STRING(bsRetain(bsArrayGet(keys, 0)), "k000");
-    ASSERT_VALUE_STRING(bsRetain(bsArrayGet(keys, 400)), "k400");
+    ASSERT_VALUE_STRING_KEEP(bsArrayGet(keys, 0), "k000");
+    ASSERT_VALUE_STRING_KEEP(bsArrayGet(keys, 400), "k400");
     bsRelease(keys);
 
     /* Delete every key */
@@ -1057,9 +1056,10 @@ TEST(value_function)
 {
     BSValue function = bsFunctionNew("test", bsTestFunctionFn, NULL, NULL);
     ASSERT_STR_EQ(bsValueTypeString(function), "function");
-    ASSERT_VALUE_STRING(bsRetain(function), "<function>");
+    ASSERT_VALUE_STRING_KEEP(function, "<function>");
     ASSERT_VALUE_KEEP(function, "\"<function>\"");
     ASSERT_TRUE(bsValueBoolean(function));
+    ASSERT_INT_EQ(bsValueCompare(function, function), 1);
 
     BSValue args[1] = {bsNumber(7)};
     BSOptions *options = bsOptionsNew();
@@ -1086,7 +1086,7 @@ TEST(value_regex)
     BSValue regex = bsRegexNew("a+", 2, 0, error, sizeof(error));
     ASSERT_STR_EQ(error, "");
     ASSERT_STR_EQ(bsValueTypeString(regex), "regex");
-    ASSERT_VALUE_STRING(bsRetain(regex), "<regex>");
+    ASSERT_VALUE_STRING_KEEP(regex, "<regex>");
     ASSERT_VALUE_KEEP(regex, "null");
     ASSERT_TRUE(bsValueBoolean(regex));
     bsRetain(regex);

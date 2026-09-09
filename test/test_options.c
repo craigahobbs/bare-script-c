@@ -294,16 +294,23 @@ static bool bsTestHTTPRequest(pid_t *child, BSFetchRequest *request, const char 
 }
 
 
-TEST(options_fetch_http_get)
+/* Serve one HTTP response, fetch it, and check the fetch's result */
+static void bsTestHTTPExpect(const char *status, const char *body, const char *expectedJSON)
 {
     pid_t child = 0;
     BSFetchRequest request;
-    if (!bsTestHTTPRequest(&child, &request, "200 OK", "hello from http")) {
+    if (!bsTestHTTPRequest(&child, &request, status, body)) {
         return;
     }
     BSValue response = bsTestFetch(bsFetchHTTP, &request);
     bsTestHTTPWait(child);
-    ASSERT_VALUE(response, "\"hello from http\"");
+    ASSERT_VALUE(response, expectedJSON);
+}
+
+
+TEST(options_fetch_http_get)
+{
+    bsTestHTTPExpect("200 OK", "hello from http", "\"hello from http\"");
 }
 
 
@@ -329,20 +336,10 @@ TEST(options_fetch_http_post)
 TEST(options_fetch_http_empty_and_error)
 {
     /* An empty response body */
-    pid_t child = 0;
-    BSFetchRequest request;
-    if (!bsTestHTTPRequest(&child, &request, "200 OK", "")) {
-        return;
-    }
-    BSValue response = bsTestFetch(bsFetchHTTP, &request);
-    bsTestHTTPWait(child);
-    ASSERT_VALUE(response, "\"\"");
+    bsTestHTTPExpect("200 OK", "", "\"\"");
 
     /* A non-200 status is a failed fetch */
-    bsTestHTTPRequest(&child, &request, "404 Not Found", "missing");
-    response = bsTestFetch(bsFetchHTTP, &request);
-    bsTestHTTPWait(child);
-    ASSERT_VALUE(response, "null");
+    bsTestHTTPExpect("404 Not Found", "missing", "null");
 }
 
 
