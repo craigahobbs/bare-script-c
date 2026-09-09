@@ -196,7 +196,6 @@ static inline unsigned rxLowestBit64(uint64_t mask)
 typedef struct RxInst RxInst;
 typedef struct RxCompiler RxCompiler;
 static void rxEmitProgram(RxCompiler *compiler);
-static void rxProgramFree(BSRegex *regex);
 
 struct BSRegex {
     int32_t refcount;
@@ -219,7 +218,7 @@ struct BSRegex {
 
 
 /*
- * Compile
+ * Parse
  */
 
 
@@ -250,6 +249,8 @@ struct RxCompiler {
     size_t errorSize;
     bool failed;
     BSValue groupNames[BS_REGEX_GROUPS_MAX];
+    bool named;       /* some group is named */
+    bool sharedNames; /* two groups share a name - on alternation branches that never match together */
     struct RxBackref {
         int group;
         size_t offset;
@@ -329,6 +330,13 @@ static size_t rxErrorPosition(const RxCompiler *compiler, size_t position)
         }
     }
     return translated;
+}
+
+
+/* The byte at the parse point, or -1 at the pattern's end */
+static inline int rxPeek(const RxCompiler *compiler)
+{
+    return compiler->offset < compiler->size ? (unsigned char) compiler->pattern[compiler->offset] : -1;
 }
 
 
@@ -472,8 +480,7 @@ static size_t rxDigits(RxCompiler *compiler, int *count)
 {
     size_t digits = 0;
     *count = 0;
-    while (compiler->offset < compiler->size && compiler->pattern[compiler->offset] >= '0' &&
-           compiler->pattern[compiler->offset] <= '9') {
+    while (rxPeek(compiler) >= '0' && rxPeek(compiler) <= '9') {
         int digit = compiler->pattern[compiler->offset] - '0';
         *count = *count > (INT_MAX - 9) / 10 ? INT_MAX : *count * 10 + digit;
         compiler->offset++;
@@ -540,8 +547,7 @@ static unsigned rxEscape(RxCompiler *compiler, uint32_t *literal)
         return 0;
     case 'c':
         /* A control escape, "\cA"; before anything but a letter, the "\" is itself the literal */
-        if (compiler->offset < compiler->size &&
-            ((compiler->pattern[compiler->offset] | 0x20) >= 'a' && (compiler->pattern[compiler->offset] | 0x20) <= 'z')) {
+        if ((rxPeek(compiler) | 0x20) >= 'a' && (rxPeek(compiler) | 0x20) <= 'z') {
             *literal = (uint32_t) (compiler->pattern[compiler->offset++] & 0x1F);
             return 0;
         }
@@ -590,7 +596,7 @@ static bool rxClassBound(RxCompiler *compiler, uint32_t *code, unsigned *classes
 static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
 {
     RxNode *node = rxNodeNew(compiler, RX_CLASS);
-    if (compiler->offset < compiler->size && compiler->pattern[compiler->offset] == '^') {
+    if (rxPeek(compiler) == '^') {
         node->u.cls.negate = true;
         compiler->offset++;
     }
@@ -682,15 +688,19 @@ static bool rxMightBothParticipate(const struct RxPathEntry *a, size_t aCount, c
 /* Record a named group's alternation path, rejecting a name it shares with a group it could match alongside */
 static bool rxGroupNameRegister(RxCompiler *compiler, size_t group, size_t nameOffset)
 {
+    compiler->named = true;
     for (size_t other = 1; other < group; other++) {
-        if (compiler->groupNames[other].type == BS_STRING &&
-            bsValueCompare(compiler->groupNames[other], compiler->groupNames[group]) == 0 &&
-            rxMightBothParticipate(compiler->groupPaths[other].entries, compiler->groupPaths[other].count,
+        if (compiler->groupNames[other].type != BS_STRING ||
+            bsValueCompare(compiler->groupNames[other], compiler->groupNames[group]) != 0) {
+            continue;
+        }
+        if (rxMightBothParticipate(compiler->groupPaths[other].entries, compiler->groupPaths[other].count,
                                    compiler->path, compiler->pathCount)) {
             rxError(compiler, nameOffset, "redefinition of group name '%s' as group %zu; was group %zu",
                     bsStringData(compiler->groupNames[group]), group, other);
             return false;
         }
+        compiler->sharedNames = true;
     }
     size_t size = compiler->pathCount * sizeof(struct RxPathEntry);
     compiler->groupPaths[group].entries = memcpy(bsAlloc(size), compiler->path, size);
@@ -711,7 +721,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         bool negate = false;
         BSValue name = bsNull();
         size_t nameOffset = 0;
-        if (compiler->offset < compiler->size && compiler->pattern[compiler->offset] == '?') {
+        if (rxPeek(compiler) == '?') {
             size_t extensionOffset = compiler->offset;
             compiler->offset++;
             if (compiler->offset >= compiler->size) {
@@ -725,9 +735,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
             } else if (extension == '=' || extension == '!') {
                 kind = RX_LOOKAHEAD;
                 negate = (extension == '!');
-            } else if (extension == '<' && compiler->offset < compiler->size &&
-                       (compiler->pattern[compiler->offset] == '=' ||
-                        compiler->pattern[compiler->offset] == '!')) {
+            } else if (extension == '<' && (rxPeek(compiler) == '=' || rxPeek(compiler) == '!')) {
                 kind = RX_LOOKBEHIND;
                 negate = (compiler->pattern[compiler->offset] == '!');
                 compiler->offset++;
@@ -776,7 +784,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
         if (sub == NULL) {
             return NULL;
         }
-        if (compiler->offset >= compiler->size || compiler->pattern[compiler->offset] != ')') {
+        if (rxPeek(compiler) != ')') {
             rxError(compiler, groupOffset, "missing ), unterminated subpattern");
             return NULL;
         }
@@ -924,13 +932,13 @@ static bool rxMatchQuantifier(RxCompiler *compiler, int *min, int *max, size_t *
         return false;
     }
     *max = *min;
-    if (compiler->offset < compiler->size && compiler->pattern[compiler->offset] == ',') {
+    if (rxPeek(compiler) == ',') {
         compiler->offset++;
         if (rxDigits(compiler, max) == 0) {
             *max = -1;
         }
     }
-    if (compiler->offset >= compiler->size || compiler->pattern[compiler->offset] != '}') {
+    if (rxPeek(compiler) != '}') {
         compiler->offset = save;
         return false;
     }
@@ -982,7 +990,7 @@ static RxNode *rxParseSequence(RxCompiler *compiler)
             }
 
             bool greedy = true;
-            if (compiler->offset < compiler->size && compiler->pattern[compiler->offset] == '?') {
+            if (rxPeek(compiler) == '?') {
                 greedy = false;
                 compiler->offset++;
             }
@@ -1024,7 +1032,7 @@ static RxNode *rxParseAlternation(RxCompiler *compiler)
         }
         BS_GROW(branches, count, capacity, 8);
         branches[count++] = branch;
-        if (compiler->offset >= compiler->size || compiler->pattern[compiler->offset] != '|') {
+        if (rxPeek(compiler) != '|') {
             break;
         }
         compiler->offset++;
@@ -1147,26 +1155,22 @@ static bool rxFirstSet(const RxNode *node, unsigned flags, RxFirstSet *set)
 }
 
 
-/* A node chain's first set - unusable if the chain can match the empty string */
-static void rxFirstCompute(const RxNode *node, unsigned flags, RxFirstSet *set)
+/*
+ * A node chain's first set, followed by "follow" - the set of code points that can begin what comes
+ * after it - or NULL when unknown. Returns false when the set is unusable: the chain can match the
+ * empty string with an unknown follow, or begins with anything.
+ */
+static bool rxFirstCompute(const RxNode *node, const RxFirstSet *follow, unsigned flags, RxFirstSet *set)
 {
     memset(set, 0, sizeof(*set));
     if (rxFirstSet(node, flags, set)) {
-        set->any = true;
-    }
-}
-
-
-static void bsRegexFree(BSRegex *regex)
-{
-    rxProgramFree(regex);
-    if (regex->groupNames != NULL) {
-        for (size_t ix = 0; ix < regex->groupCount; ix++) {
-            bsRelease(regex->groupNames[ix]);
+        if (follow == NULL || follow->any) {
+            set->any = true;
+        } else {
+            rxFirstUnion(set, follow);
         }
-        free(regex->groupNames);
     }
-    free(regex);
+    return !set->any;
 }
 
 
@@ -1203,164 +1207,8 @@ static void rxCompilerFree(RxCompiler *compiler)
 }
 
 
-BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char *error,
-                   size_t errorSize)
-{
-    if (error != NULL && errorSize != 0) {
-        error[0] = '\0';
-    }
-    BSRegex *regex = bsAlloc(sizeof(BSRegex));
-    memset(regex, 0, sizeof(*regex));
-    regex->refcount = 1;
-    regex->groupCount = 1;
-
-    RxCompiler compiler;
-    memset(&compiler, 0, sizeof(compiler));
-    compiler.pattern = pattern;
-    compiler.size = patternSize;
-    compiler.flags = flags;
-    compiler.regex = regex;
-    compiler.error = error;
-    compiler.errorSize = errorSize;
-    compiler.root = rxParseAlternation(&compiler);
-
-    /* A numbered backreference may precede its group, as in JavaScript, but the group must exist */
-    for (size_t ix = 0; !compiler.failed && ix < compiler.backrefCount; ix++) {
-        if ((size_t) compiler.backrefs[ix].group >= regex->groupCount) {
-            rxError(&compiler, compiler.backrefs[ix].offset, "invalid group reference %d", compiler.backrefs[ix].group);
-        }
-    }
-
-    /* A named backreference may precede its group too, and a name shared across the branches of an
-       alternation refers to whichever group took part */
-    for (size_t ix = 0; !compiler.failed && ix < compiler.namedRefCount; ix++) {
-        RxNode *node = compiler.namedRefs[ix].node;
-        uint32_t groups[BS_REGEX_GROUPS_MAX];
-        size_t count = 0;
-        for (size_t group = 1; group < regex->groupCount; group++) {
-            if (compiler.groupNames[group].type == BS_STRING &&
-                bsValueCompare(compiler.groupNames[group], node->u.backref.name) == 0) {
-                groups[count++] = (uint32_t) group;
-            }
-        }
-        if (count == 0) {
-            rxError(&compiler, compiler.namedRefs[ix].offset, "unknown group name '%s'", bsStringData(node->u.backref.name));
-        } else {
-            node->u.backref.group = groups[0];
-            if (count > 1) {
-                node->u.backref.groups = memcpy(bsAlloc(count * sizeof(uint32_t)), groups, count * sizeof(uint32_t));
-                node->u.backref.count = count;
-            }
-        }
-    }
-    if (!compiler.failed && compiler.offset != patternSize) {
-        rxError(&compiler, compiler.offset, "unbalanced parenthesis");
-    }
-    if (compiler.failed) {
-        for (size_t ix = 0; ix < regex->groupCount; ix++) {
-            bsRelease(compiler.groupNames[ix]);
-        }
-        rxCompilerFree(&compiler);
-        bsRegexFree(regex);
-        return bsNull();
-    }
-
-    /*
-     * A pattern whose every alternative begins with "^" can only match at the search start, so
-     * the scan over later positions is skipped. Multi-line patterns still scan, since "^" also
-     * matches after a newline. The parser's patterns are all anchored, so this is the
-     * difference between a linear and a quadratic scan over every line it parses.
-     */
-    if ((flags & BS_REGEX_MULTILINE) == 0) {
-        regex->anchored = true;
-        for (size_t ix = 0; ix < compiler.root->u.alt.count; ix++) {
-            const RxNode *branch = compiler.root->u.alt.branches[ix];
-            if (branch == NULL || branch->kind != RX_BOL) {
-                regex->anchored = false;
-                break;
-            }
-        }
-    }
-
-    /* The set of code points a match can begin with, for the search scan - by byte for an ASCII subject */
-    rxFirstCompute(compiler.root, flags, &regex->first);
-    regex->firstByte = -1;
-    if (!regex->first.any) {
-        int firstCount = 0;
-        for (unsigned word = 0; word < 4; word++) {
-            for (uint64_t bits = regex->first.bits[word]; bits != 0; bits &= bits - 1) {
-                unsigned code = word * 64 + rxLowestBit64(bits);
-                regex->firstBytes[code] = 1;
-                regex->firstByte = firstCount++ == 0 ? (int) code : -1;
-            }
-        }
-    }
-
-    rxEmitProgram(&compiler);
-    rxCompilerFree(&compiler);
-
-    /* Keep named-group strings only; unnamed patterns store no name array */
-    bool named = false;
-    for (size_t ix = 0; ix < regex->groupCount; ix++) {
-        if (compiler.groupNames[ix].type == BS_STRING) {
-            named = true;
-            break;
-        }
-    }
-    if (named) {
-        regex->groupNames = bsAlloc(regex->groupCount * sizeof(BSValue));
-        memcpy(regex->groupNames, compiler.groupNames, regex->groupCount * sizeof(BSValue));
-        regex->uniqueNames = true;
-        for (size_t ix = 0; ix < regex->groupCount && regex->uniqueNames; ix++) {
-            for (size_t jx = 0; jx < ix; jx++) {
-                if (regex->groupNames[ix].type == BS_STRING && regex->groupNames[jx].type == BS_STRING &&
-                    bsValueCompare(regex->groupNames[ix], regex->groupNames[jx]) == 0) {
-                    regex->uniqueNames = false;
-                }
-            }
-        }
-    }
-
-    return (BSValue) {.type = BS_REGEX, .u.regex = regex};
-}
-
-
-/* Called once the shared refcount reaches zero - see bsReleaseInline */
-void bsRegexDestroy(BSValue value)
-{
-    bsRegexFree(value.u.regex);
-}
-
-
-bool bsRegexGroupNamesUnique(BSValue regex)
-{
-    return regex.u.regex->uniqueNames;
-}
-
-
-bool bsRegexGroupsNamed(BSValue regex)
-{
-    return regex.u.regex->groupNames != NULL;
-}
-
-
-BSValue bsRegexGroupNameValue(BSValue regex, size_t group)
-{
-    BSValue *names = regex.u.regex->groupNames;
-    if (names == NULL || group >= regex.u.regex->groupCount) {
-        return bsNull();
-    }
-    return names[group];
-}
-
-
 /*
- * Match
- */
-
-
-/*
- * The program matcher
+ * The program
  *
  * A pattern compiles to a linear program that one loop runs with an explicit backtrack stack, so
  * matching costs no C recursion beyond one call per lookaround body: a node's alternatives, a
@@ -1432,42 +1280,6 @@ typedef struct RxAlt {
 } RxAlt;
 
 
-/* A backtrack entry - what to try next when the current path fails */
-typedef enum {
-    RX_BT_SPLIT,            /* resume at pc, pos */
-    RX_BT_REPEAT_BODY,      /* enter the body of the repeat loop at pc */
-    RX_BT_ALT_MASK,         /* the alternation at pc; aux: the alternatives still to try */
-    RX_BT_ALT_INDEX,        /* the alternation at pc; aux: the next alternative to try */
-    RX_BT_GIVEBACK,         /* the simple repeat before pc, greedy: give back to aux */
-    RX_BT_LAZY,             /* the simple repeat before pc, lazy: take one more; aux: the start */
-    RX_BT_GIVEBACK_BACK,    /* the same two, for a repeat matching backward */
-    RX_BT_LAZY_BACK
-} RxBtKind;
-
-typedef struct RxBacktrack {
-    uint32_t kind;
-    uint32_t pc;
-    uint32_t pos;
-    uint32_t trail;
-    uint64_t aux;
-} RxBacktrack;
-
-/*
- * The backtrack stack's limit, in entries - a memory guard. A push past it is dropped and the step
- * budget exhausted, so the run gives up at its next choice point or backtrack, the only places the
- * dropped entry could have mattered. Every choice point charges the step budget before it pushes,
- * so the budget trips first; the guard only bounds a run whose simple repeats push more than the
- * budget allows.
- */
-#define RX_BACKTRACK_MAX 1000000
-
-
-/* A counted repeat's state - the iterations taken and the current iteration's start */
-typedef struct RxRepeat {
-    size_t count;
-    size_t start;
-} RxRepeat;
-
 /* The capture groups within a counted repeat's body - [first, end) - which every iteration begins unset */
 typedef struct RxRepeatGroups {
     uint32_t first;
@@ -1480,115 +1292,6 @@ typedef struct RxRepeatGroups {
     bool hasFollow;
     RxFirstSet follow;
 } RxRepeatGroups;
-
-/* A trail entry restoring a repeat counter rather than a capture - the slot is in the low bits */
-#define RX_TRAIL_REPEAT 0x80000000u
-
-/*
- * A trail entry
- *
- * Every capture group and repeat counter write records its previous value, so backtracking - and
- * in particular lookaround, which can write many groups before failing - restores state in time
- * proportional to what actually changed rather than copying the whole capture array.
- */
-typedef struct RxTrailEntry {
-    uint32_t group;
-    BSRegexSpan span; /* for a repeat: begin is the count, end the start */
-    bool matched;
-} RxTrailEntry;
-
-
-typedef struct RxState {
-    const uint32_t *codes;
-    const unsigned char *bytes;
-    size_t length;
-    BSRegexMatch *match;
-    size_t end;
-    long steps;
-    RxTrailEntry *trail;
-    size_t trailCount;
-    size_t trailCapacity;
-    const RxInst *prog;
-    const RxClass *classes;
-    const RxAlt *alts;
-    RxBacktrack *bt;
-    size_t btCount;
-    size_t btCapacity;
-    RxRepeat *repeats;
-    const RxRepeatGroups *repeatGroups;
-    const uint32_t *backrefGroups;
-} RxState;
-
-
-/*
- * The thread's match scratch - the trail, the backtrack stack, and the repeat counters - kept
- * from one search to the next at the largest size a search has needed, so a search allocates
- * nothing and carries no stack frame of its own. A search never re-enters the matcher.
- */
-typedef struct RxScratch {
-    RxTrailEntry *trail;
-    size_t trailCapacity;
-    RxBacktrack *bt;
-    size_t btCapacity;
-    RxRepeat *repeats;
-    size_t repeatCapacity;
-} RxScratch;
-
-static _Thread_local RxScratch bsRxScratch;
-
-#define RX_TRAIL_INITIAL 64
-#define RX_BACKTRACK_INITIAL 128
-
-
-void bsRegexScratchFree(void)
-{
-    free(bsRxScratch.trail);
-    free(bsRxScratch.bt);
-    free(bsRxScratch.repeats);
-    memset(&bsRxScratch, 0, sizeof(bsRxScratch));
-}
-
-
-static inline uint32_t rxCode(const RxState *state, size_t pos)
-{
-    return state->codes != NULL ? state->codes[pos] : (uint32_t) state->bytes[pos];
-}
-
-
-/* The next trail entry, to be filled in */
-static inline RxTrailEntry *rxTrailNext(RxState *state)
-{
-    if (state->trailCount == state->trailCapacity) {
-        state->trailCapacity *= 2;
-        state->trail = bsRealloc(state->trail, state->trailCapacity * sizeof(RxTrailEntry));
-    }
-    return &state->trail[state->trailCount++];
-}
-
-
-static void rxTrailPush(RxState *state, size_t group)
-{
-    RxTrailEntry *entry = rxTrailNext(state);
-    entry->group = (uint32_t) group;
-    entry->span = state->match->groups[group];
-    entry->matched = state->match->matched[group];
-}
-
-
-static void rxTrailUnwind(RxState *state, size_t mark)
-{
-    while (state->trailCount > mark) {
-        RxTrailEntry *entry = &state->trail[--state->trailCount];
-        if ((entry->group & RX_TRAIL_REPEAT) != 0) {
-            uint32_t slot = entry->group & ~RX_TRAIL_REPEAT;
-            state->repeats[slot].count = entry->span.begin;
-            state->repeats[slot].start = entry->span.end;
-        } else {
-            state->match->groups[entry->group] = entry->span;
-            state->match->matched[entry->group] = entry->matched;
-        }
-    }
-}
 
 
 static bool rxClassMatchOne(const RxClass *cls, uint32_t ch)
@@ -1706,6 +1409,11 @@ static inline bool rxClassMatch(const RxClass *cls, uint32_t ch)
 }
 
 
+/*
+ * Emit
+ */
+
+
 typedef struct RxEmit {
     RxInst *inst;
     size_t count;
@@ -1786,8 +1494,7 @@ static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
     RxFirstSet *firsts = bsAlloc(count * sizeof(RxFirstSet));
     bool usable = false;
     for (size_t ixBranch = 0; ixBranch < count; ixBranch++) {
-        rxFirstCompute(node->u.alt.branches[ixBranch], flags, &firsts[ixBranch]);
-        usable = usable || !firsts[ixBranch].any;
+        usable |= rxFirstCompute(node->u.alt.branches[ixBranch], NULL, flags, &firsts[ixBranch]);
     }
     if (!usable) {
         free(firsts);
@@ -1832,23 +1539,6 @@ static void rxEmitAltFirsts(RxAlt *alt, const RxNode *node, unsigned flags)
 
 
 static void rxEmitChain(RxEmit *e, RxNode *node, const RxFirstSet *follow);
-
-/*
- * The follow set of a node whose chain continues with "rest" and, past the chain's end, with
- * "follow" - NULL when unknown. Returns false when the set is unusable: unknown, or the rest can
- * match the empty string with an unknown follow, or begins with anything.
- */
-static bool rxFollowCompute(const RxNode *rest, const RxFirstSet *follow, unsigned flags, RxFirstSet *set)
-{
-    memset(set, 0, sizeof(*set));
-    if (rxFirstSet(rest, flags, set)) {
-        if (follow == NULL || follow->any) {
-            return false;
-        }
-        rxFirstUnion(set, follow);
-    }
-    return !set->any;
-}
 
 /* Emit one node, "follow" being the set of code points that can begin what comes after it, or NULL */
 static void rxEmitNode(RxEmit *e, RxNode *node, const RxFirstSet *follow)
@@ -2013,7 +1703,7 @@ static void rxEmitChain(RxEmit *e, RxNode *node, const RxFirstSet *follow)
                nodes that hold a repeat with a counter, the only ones that consult it */
             RxFirstSet nodeFollow;
             bool usable = (node->kind == RX_REPEAT || node->kind == RX_GROUP || node->kind == RX_ALT) &&
-                rxFollowCompute(node->next, follow, e->flags, &nodeFollow);
+                rxFirstCompute(node->next, follow, e->flags, &nodeFollow);
             rxEmitNode(e, node, usable ? &nodeFollow : NULL);
         }
         return;
@@ -2029,25 +1719,6 @@ static void rxEmitChain(RxEmit *e, RxNode *node, const RxFirstSet *follow)
         rxEmitNode(e, nodes[--count], NULL);
     }
     free(nodes);
-}
-
-
-static void rxProgramFree(BSRegex *regex)
-{
-    for (size_t ix = 0; ix < regex->classCount; ix++) {
-        free(regex->classes[ix].ranges);
-    }
-    free(regex->classes);
-    for (size_t ix = 0; ix < regex->altCount; ix++) {
-        free(regex->alts[ix].branchPcs);
-        free(regex->alts[ix].firsts);
-        free(regex->alts[ix].index);
-        free(regex->alts[ix].narrow);
-    }
-    free(regex->alts);
-    free(regex->repeatGroups);
-    free(regex->backrefGroups);
-    free(regex->prog);
 }
 
 
@@ -2070,6 +1741,328 @@ static void rxEmitProgram(RxCompiler *compiler)
 }
 
 
+static void bsRegexFree(BSRegex *regex)
+{
+    for (size_t ix = 0; ix < regex->classCount; ix++) {
+        free(regex->classes[ix].ranges);
+    }
+    free(regex->classes);
+    for (size_t ix = 0; ix < regex->altCount; ix++) {
+        free(regex->alts[ix].branchPcs);
+        free(regex->alts[ix].firsts);
+        free(regex->alts[ix].index);
+        free(regex->alts[ix].narrow);
+    }
+    free(regex->alts);
+    free(regex->repeatGroups);
+    free(regex->backrefGroups);
+    free(regex->prog);
+    if (regex->groupNames != NULL) {
+        for (size_t ix = 0; ix < regex->groupCount; ix++) {
+            bsRelease(regex->groupNames[ix]);
+        }
+        free(regex->groupNames);
+    }
+    free(regex);
+}
+
+
+BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char *error,
+                   size_t errorSize)
+{
+    if (error != NULL && errorSize != 0) {
+        error[0] = '\0';
+    }
+    BSRegex *regex = bsAlloc(sizeof(BSRegex));
+    memset(regex, 0, sizeof(*regex));
+    regex->refcount = 1;
+    regex->groupCount = 1;
+
+    RxCompiler compiler;
+    memset(&compiler, 0, sizeof(compiler));
+    compiler.pattern = pattern;
+    compiler.size = patternSize;
+    compiler.flags = flags;
+    compiler.regex = regex;
+    compiler.error = error;
+    compiler.errorSize = errorSize;
+    compiler.root = rxParseAlternation(&compiler);
+
+    /* A numbered backreference may precede its group, as in JavaScript, but the group must exist */
+    for (size_t ix = 0; !compiler.failed && ix < compiler.backrefCount; ix++) {
+        if ((size_t) compiler.backrefs[ix].group >= regex->groupCount) {
+            rxError(&compiler, compiler.backrefs[ix].offset, "invalid group reference %d", compiler.backrefs[ix].group);
+        }
+    }
+
+    /* A named backreference may precede its group too, and a name shared across the branches of an
+       alternation refers to whichever group took part */
+    for (size_t ix = 0; !compiler.failed && ix < compiler.namedRefCount; ix++) {
+        RxNode *node = compiler.namedRefs[ix].node;
+        uint32_t groups[BS_REGEX_GROUPS_MAX];
+        size_t count = 0;
+        for (size_t group = 1; group < regex->groupCount; group++) {
+            if (compiler.groupNames[group].type == BS_STRING &&
+                bsValueCompare(compiler.groupNames[group], node->u.backref.name) == 0) {
+                groups[count++] = (uint32_t) group;
+            }
+        }
+        if (count == 0) {
+            rxError(&compiler, compiler.namedRefs[ix].offset, "unknown group name '%s'", bsStringData(node->u.backref.name));
+        } else {
+            node->u.backref.group = groups[0];
+            if (count > 1) {
+                node->u.backref.groups = memcpy(bsAlloc(count * sizeof(uint32_t)), groups, count * sizeof(uint32_t));
+                node->u.backref.count = count;
+            }
+        }
+    }
+    if (!compiler.failed && compiler.offset != patternSize) {
+        rxError(&compiler, compiler.offset, "unbalanced parenthesis");
+    }
+    if (compiler.failed) {
+        for (size_t ix = 0; ix < regex->groupCount; ix++) {
+            bsRelease(compiler.groupNames[ix]);
+        }
+        rxCompilerFree(&compiler);
+        bsRegexFree(regex);
+        return bsNull();
+    }
+
+    /*
+     * A pattern whose every alternative begins with "^" can only match at the search start, so
+     * the scan over later positions is skipped. Multi-line patterns still scan, since "^" also
+     * matches after a newline. The parser's patterns are all anchored, so this is the
+     * difference between a linear and a quadratic scan over every line it parses.
+     */
+    if ((flags & BS_REGEX_MULTILINE) == 0) {
+        regex->anchored = true;
+        for (size_t ix = 0; ix < compiler.root->u.alt.count; ix++) {
+            const RxNode *branch = compiler.root->u.alt.branches[ix];
+            if (branch == NULL || branch->kind != RX_BOL) {
+                regex->anchored = false;
+                break;
+            }
+        }
+    }
+
+    /* The set of code points a match can begin with, for the search scan - by byte for an ASCII subject */
+    rxFirstCompute(compiler.root, NULL, flags, &regex->first);
+    regex->firstByte = -1;
+    if (!regex->first.any) {
+        int firstCount = 0;
+        for (unsigned word = 0; word < 4; word++) {
+            for (uint64_t bits = regex->first.bits[word]; bits != 0; bits &= bits - 1) {
+                unsigned code = word * 64 + rxLowestBit64(bits);
+                regex->firstBytes[code] = 1;
+                regex->firstByte = firstCount++ == 0 ? (int) code : -1;
+            }
+        }
+    }
+
+    rxEmitProgram(&compiler);
+    rxCompilerFree(&compiler);
+
+    /* Keep named-group strings only; unnamed patterns store no name array */
+    if (compiler.named) {
+        size_t size = regex->groupCount * sizeof(BSValue);
+        regex->groupNames = memcpy(bsAlloc(size), compiler.groupNames, size);
+        regex->uniqueNames = !compiler.sharedNames;
+    }
+
+    return (BSValue) {.type = BS_REGEX, .u.regex = regex};
+}
+
+
+/* Called once the shared refcount reaches zero - see bsReleaseInline */
+void bsRegexDestroy(BSValue value)
+{
+    bsRegexFree(value.u.regex);
+}
+
+
+bool bsRegexGroupNamesUnique(BSValue regex)
+{
+    return regex.u.regex->uniqueNames;
+}
+
+
+bool bsRegexGroupsNamed(BSValue regex)
+{
+    return regex.u.regex->groupNames != NULL;
+}
+
+
+BSValue bsRegexGroupNameValue(BSValue regex, size_t group)
+{
+    BSValue *names = regex.u.regex->groupNames;
+    if (names == NULL || group >= regex.u.regex->groupCount) {
+        return bsNull();
+    }
+    return names[group];
+}
+
+
+/*
+ * Match
+ */
+
+
+/* A backtrack entry - what to try next when the current path fails */
+typedef enum {
+    RX_BT_SPLIT,            /* resume at pc, pos */
+    RX_BT_REPEAT_BODY,      /* enter the body of the repeat loop at pc */
+    RX_BT_ALT_MASK,         /* the alternation at pc; aux: the alternatives still to try */
+    RX_BT_ALT_INDEX,        /* the alternation at pc; aux: the next alternative to try */
+    RX_BT_GIVEBACK,         /* the simple repeat before pc, greedy: give back to aux */
+    RX_BT_LAZY,             /* the simple repeat before pc, lazy: take one more; aux: the start */
+    RX_BT_GIVEBACK_BACK,    /* the same two, for a repeat matching backward */
+    RX_BT_LAZY_BACK
+} RxBtKind;
+
+typedef struct RxBacktrack {
+    uint32_t kind;
+    uint32_t pc;
+    uint32_t pos;
+    uint32_t trail;
+    uint64_t aux;
+} RxBacktrack;
+
+/*
+ * The backtrack stack's limit, in entries - a memory guard. A push past it is dropped and the step
+ * budget exhausted, so the run gives up at its next choice point or backtrack, the only places the
+ * dropped entry could have mattered. Every choice point charges the step budget before it pushes,
+ * so the budget trips first; the guard only bounds a run whose simple repeats push more than the
+ * budget allows.
+ */
+#define RX_BACKTRACK_MAX 1000000
+
+
+/* A counted repeat's state - the iterations taken and the current iteration's start */
+typedef struct RxRepeat {
+    size_t count;
+    size_t start;
+} RxRepeat;
+
+/* A trail entry restoring a repeat counter rather than a capture - the slot is in the low bits */
+#define RX_TRAIL_REPEAT 0x80000000u
+
+/*
+ * A trail entry
+ *
+ * Every capture group and repeat counter write records its previous value, so backtracking - and
+ * in particular lookaround, which can write many groups before failing - restores state in time
+ * proportional to what actually changed rather than copying the whole capture array.
+ */
+typedef struct RxTrailEntry {
+    uint32_t group;
+    BSRegexSpan span; /* for a repeat: begin is the count, end the start */
+    bool matched;
+} RxTrailEntry;
+
+
+typedef struct RxState {
+    const uint32_t *codes;
+    const unsigned char *bytes;
+    size_t length;
+    BSRegexMatch *match;
+    size_t end;
+    long steps;
+    RxTrailEntry *trail;
+    size_t trailCount;
+    size_t trailCapacity;
+    const RxInst *prog;
+    const RxClass *classes;
+    const RxAlt *alts;
+    RxBacktrack *bt;
+    size_t btCount;
+    size_t btCapacity;
+    RxRepeat *repeats;
+    const RxRepeatGroups *repeatGroups;
+    const uint32_t *backrefGroups;
+} RxState;
+
+
+/*
+ * The thread's match scratch - the trail, the backtrack stack, and the repeat counters - kept
+ * from one search to the next at the largest size a search has needed, so a search allocates
+ * nothing and carries no stack frame of its own. A search never re-enters the matcher.
+ */
+typedef struct RxScratch {
+    RxTrailEntry *trail;
+    size_t trailCapacity;
+    RxBacktrack *bt;
+    size_t btCapacity;
+    RxRepeat *repeats;
+    size_t repeatCapacity;
+} RxScratch;
+
+static _Thread_local RxScratch bsRxScratch;
+
+#define RX_TRAIL_INITIAL 64
+#define RX_BACKTRACK_INITIAL 128
+
+
+void bsRegexScratchFree(void)
+{
+    free(bsRxScratch.trail);
+    free(bsRxScratch.bt);
+    free(bsRxScratch.repeats);
+    memset(&bsRxScratch, 0, sizeof(bsRxScratch));
+}
+
+
+static inline uint32_t rxCode(const RxState *state, size_t pos)
+{
+    return state->codes != NULL ? state->codes[pos] : (uint32_t) state->bytes[pos];
+}
+
+
+/* The next trail entry, to be filled in */
+static inline RxTrailEntry *rxTrailNext(RxState *state)
+{
+    if (state->trailCount == state->trailCapacity) {
+        state->trailCapacity *= 2;
+        state->trail = bsRealloc(state->trail, state->trailCapacity * sizeof(RxTrailEntry));
+    }
+    return &state->trail[state->trailCount++];
+}
+
+
+static void rxTrailPush(RxState *state, size_t group)
+{
+    RxTrailEntry *entry = rxTrailNext(state);
+    entry->group = (uint32_t) group;
+    entry->span = state->match->groups[group];
+    entry->matched = state->match->matched[group];
+}
+
+
+static void rxTrailPushRepeat(RxState *state, uint32_t slot)
+{
+    RxTrailEntry *entry = rxTrailNext(state);
+    entry->group = slot | RX_TRAIL_REPEAT;
+    entry->span.begin = state->repeats[slot].count;
+    entry->span.end = state->repeats[slot].start;
+}
+
+
+static void rxTrailUnwind(RxState *state, size_t mark)
+{
+    while (state->trailCount > mark) {
+        RxTrailEntry *entry = &state->trail[--state->trailCount];
+        if ((entry->group & RX_TRAIL_REPEAT) != 0) {
+            uint32_t slot = entry->group & ~RX_TRAIL_REPEAT;
+            state->repeats[slot].count = entry->span.begin;
+            state->repeats[slot].start = entry->span.end;
+        } else {
+            state->match->groups[entry->group] = entry->span;
+            state->match->matched[entry->group] = entry->matched;
+        }
+    }
+}
+
+
 static void rxBtPush(RxState *state, uint32_t kind, uint32_t pc, size_t pos, uint64_t aux)
 {
     if (state->btCount == state->btCapacity) {
@@ -2088,15 +2081,6 @@ static void rxBtPush(RxState *state, uint32_t kind, uint32_t pc, size_t pos, uin
     entry->pos = (uint32_t) pos;
     entry->trail = (uint32_t) state->trailCount;
     entry->aux = aux;
-}
-
-
-static void rxTrailPushRepeat(RxState *state, uint32_t slot)
-{
-    RxTrailEntry *entry = rxTrailNext(state);
-    entry->group = slot | RX_TRAIL_REPEAT;
-    entry->span.begin = state->repeats[slot].count;
-    entry->span.end = state->repeats[slot].start;
 }
 
 
