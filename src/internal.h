@@ -241,6 +241,15 @@ static inline int bsHexValue(char ch)
     return value > 15 ? -1 : value;
 }
 
+/* The offset past the decimal digits at "ix" */
+static inline size_t bsSkipDigits(const char *text, size_t size, size_t ix)
+{
+    while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
+        ix++;
+    }
+    return ix;
+}
+
 /*
  * The Unicode spaces - JavaScript's WhiteSpace and LineTerminator sets: the ASCII spaces, U+00A0,
  * U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, and U+FEFF. The regex \s class,

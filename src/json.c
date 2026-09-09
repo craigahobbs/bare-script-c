@@ -552,14 +552,6 @@ static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
 }
 
 
-static void bsJSONScanDigits(const char *text, size_t size, size_t *ix)
-{
-    while (*ix < size && text[*ix] >= '0' && text[*ix] <= '9') {
-        (*ix)++;
-    }
-}
-
-
 /*
  * Decode a number
  *
@@ -583,13 +575,12 @@ static bool bsJSONDecodeNumber(BSJSONParser *parser, BSValue *result)
     if (text[ix] == '0') {
         ix++;
     } else if (text[ix] >= '1' && text[ix] <= '9') {
-        bsJSONScanDigits(text, size, &ix);
+        ix = bsSkipDigits(text, size, ix);
     } else {
         return bsJSONError(parser, "Expecting value", begin);
     }
     if (ix + 1 < size && text[ix] == '.' && text[ix + 1] >= '0' && text[ix + 1] <= '9') {
-        ix += 2;
-        bsJSONScanDigits(text, size, &ix);
+        ix = bsSkipDigits(text, size, ix + 2);
     }
     if (ix < size && (text[ix] == 'e' || text[ix] == 'E')) {
         size_t save = ix;
@@ -598,7 +589,7 @@ static bool bsJSONDecodeNumber(BSJSONParser *parser, BSValue *result)
             ix++;
         }
         if (ix < size && text[ix] >= '0' && text[ix] <= '9') {
-            bsJSONScanDigits(text, size, &ix);
+            ix = bsSkipDigits(text, size, ix);
         } else {
             ix = save;
         }

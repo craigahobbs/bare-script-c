@@ -498,18 +498,14 @@ bool bsNumberParse(const char *text, size_t size, double *result)
     if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
         ix++;
     }
-    size_t integerDigits = 0;
-    while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
-        ix++;
-        integerDigits++;
-    }
+    size_t start = ix;
+    ix = bsSkipDigits(text, size, ix);
+    size_t integerDigits = ix - start;
     size_t fractionDigits = 0;
     if (ix < size && text[ix] == '.') {
-        ix++;
-        while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
-            ix++;
-            fractionDigits++;
-        }
+        start = ++ix;
+        ix = bsSkipDigits(text, size, ix);
+        fractionDigits = ix - start;
     }
     if (integerDigits == 0 && fractionDigits == 0) {
         return false;
@@ -519,12 +515,9 @@ bool bsNumberParse(const char *text, size_t size, double *result)
         if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
             ix++;
         }
-        size_t exponentDigits = 0;
-        while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
-            ix++;
-            exponentDigits++;
-        }
-        if (exponentDigits == 0) {
+        start = ix;
+        ix = bsSkipDigits(text, size, ix);
+        if (ix == start) {
             return false;
         }
     }
@@ -2399,9 +2392,7 @@ bool bsDatetimeParse(const char *text, size_t size, int64_t *result)
     if (ix < size && text[ix] == '.') {
         ix++;
         size_t fractionBegin = ix;
-        while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
-            ix++;
-        }
+        ix = bsSkipDigits(text, size, ix);
         size_t fractionSize = ix - fractionBegin;
         if (fractionSize < 1 || fractionSize > 6) {
             return false;
