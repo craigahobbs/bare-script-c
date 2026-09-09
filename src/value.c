@@ -257,7 +257,7 @@ size_t bsUTF8Length(const char *data, size_t size)
  * touches several of them computes the thread-local address once.
  */
 #define BS_STRING_POOL_CLASSES 5
-#define BS_ARRAY_BUF_CLASS_COUNT 4
+#define BS_ARRAY_BUF_CLASS_COUNT 6
 #define BS_ENTRY_POOL_CLASS_COUNT 2
 
 typedef struct {
@@ -810,16 +810,35 @@ BSValue bsSBToValue(BSStringBuilder *sb)
 
 #define BS_ARRAY_POOL_MAX 16384
 
-/* Recycle common array value buffers so JSON arrays are not two mallocs every time */
+/*
+ * Recycle common array value buffers so JSON arrays are not two mallocs every time. A small array
+ * born at its size - an array literal, an object's keys - is rounded up to a pool class, so a
+ * two-element literal is a pool hit rather than a malloc and a free.
+ */
 #define BS_ARRAY_BUF_POOL_MAX 64
 
 /* The pool class of a buffer capacity, or -1 for a capacity the pool does not hold */
 static int bsArrayBufClassIndex(size_t capacity)
 {
-    return capacity == 8 ? 0 : capacity == 16 ? 1 : capacity == 32 ? 2 : capacity == 64 ? 3 : -1;
+    switch (capacity) {
+    case 2: return 0;
+    case 4: return 1;
+    case 8: return 2;
+    case 16: return 3;
+    case 32: return 4;
+    case 64: return 5;
+    default: return -1;
+    }
 }
 
-static BSValue *bsArrayBufAlloc(size_t capacity)
+/* A new array's buffer capacity: a small size rounded up to its pool class */
+static size_t bsArrayBufCapacity(size_t capacity)
+{
+    return capacity == 0 || capacity >= 8 ? capacity : capacity <= 2 ? 2 : capacity <= 4 ? 4 : 8;
+}
+
+/* The pool paths stay out of line: inlined, they bulk every array-building site in the interpreter loop */
+static BS_NOINLINE BSValue *bsArrayBufAlloc(size_t capacity)
 {
     int classIndex = bsArrayBufClassIndex(capacity);
     if (classIndex >= 0 && bsTS.arrayBufPool[classIndex] != NULL) {
@@ -831,7 +850,7 @@ static BSValue *bsArrayBufAlloc(size_t capacity)
     return bsAlloc(capacity * sizeof(BSValue));
 }
 
-static void bsArrayBufFree(BSValue *values, size_t capacity)
+static BS_NOINLINE void bsArrayBufFree(BSValue *values, size_t capacity)
 {
     int classIndex = bsArrayBufClassIndex(capacity);
     if (classIndex >= 0 && bsTS.arrayBufPoolCount[classIndex] < BS_ARRAY_BUF_POOL_MAX) {
@@ -869,6 +888,7 @@ static void bsArrayRecycle(BSArray *array)
 BSValue bsArrayNewCapacity(size_t capacity)
 {
     BSArray *array = bsArrayAlloc();
+    capacity = bsArrayBufCapacity(capacity);
     array->refcount = 1;
     array->count = 0;
     array->capacity = capacity;
