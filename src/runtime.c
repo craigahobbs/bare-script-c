@@ -1343,11 +1343,10 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
     /*
      * Statements count against the limit only outside system includes, and coverage records every
      * one: a single compare per STMT sends both an exceeded limit and a recording run to the slow
-     * path, and a run that counts nothing increments a dummy instead of branching.
+     * path. A system script's markers - only a registered system include has any, the bundled
+     * library being emitted without them - take the slow path too, which gives the count back.
      */
-    int64_t uncounted = 0;
-    int64_t *statementCount = countStatements ? &options->statementCount : &uncounted;
-    int64_t statementLimit = !countStatements ? INT64_MAX : hasCoverage ? INT64_MIN :
+    int64_t statementLimit = !countStatements || hasCoverage ? INT64_MIN :
         options->maxStatements > 0 ? options->maxStatements : INT64_MAX;
 
     const BSInst *insts = code->inst;
@@ -1591,16 +1590,19 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             BS_NEXT();
 
         BS_CASE(STMT) {
-            int64_t count = ++*statementCount;
+            int64_t count = ++options->statementCount;
             if (count > statementLimit) {
-                /* The limit is exceeded, or coverage is recording and every statement comes here */
-                if (options->maxStatements > 0 && count > options->maxStatements) {
+                /* The limit is exceeded, coverage is recording, or the script is not counted */
+                if (!countStatements) {
+                    options->statementCount--;
+                } else if (options->maxStatements > 0 && count > options->maxStatements) {
                     bsErrorSetStatement(options, script, code->coverLines[inst->a],
                                         "Exceeded maximum script statements (%lld)",
                                         (long long) options->maxStatements);
                     goto fail;
+                } else {
+                    bsRecordCoverage(script, code, inst->a, coverage);
                 }
-                bsRecordCoverage(script, code, inst->a, coverage);
             }
         }
         BS_NEXT();
