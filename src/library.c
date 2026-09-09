@@ -219,11 +219,11 @@ BSValue bsStringSlice(BSValue string, size_t begin, size_t end)
     const BSString *source = string.u.string;
     if (source->length == source->size) {
         /* An ASCII string's slice is ASCII, at the same offsets */
-        return bsStringNewAscii(source->data + begin, end - begin);
+        return bsStringSliceBytes(string, begin, end - begin, end - begin);
     }
     size_t beginOffset = bsStringOffset(string, begin);
     size_t endOffset = bsStringOffset(string, end);
-    return bsStringNewSize(bsStringData(string) + beginOffset, endOffset - beginOffset);
+    return bsStringSliceBytes(string, beginOffset, endOffset - beginOffset, end - begin);
 }
 
 
@@ -1156,7 +1156,7 @@ static BSValue bsFnRegexNew(const BSValue *args, size_t argCount, BSOptions *opt
         }
     }
     char error[BS_REGEX_ERROR_MAX];
-    BSValue regex = bsRegexNew(bsStringData(values[0]), bsStringSize(values[0]), flags, error,
+    BSValue regex = bsRegexNew(bsStringSpan(values[0]), bsStringSize(values[0]), flags, error,
                                sizeof(error));
     if (regex.type == BS_NULL) {
         bsFunctionError(options, "%s", error);
@@ -1170,7 +1170,7 @@ static void bsSBAppendSlice(BSStringBuilder *sb, BSValue string, size_t begin, s
 {
     size_t beginOffset = bsStringOffset(string, begin);
     size_t endOffset = bsStringOffset(string, end);
-    bsSBAppend(sb, bsStringData(string) + beginOffset, endOffset - beginOffset);
+    bsSBAppend(sb, bsStringSpan(string) + beginOffset, endOffset - beginOffset);
 }
 
 
@@ -1448,7 +1448,7 @@ static const BSArgModel stringIndexOfArgs[] = {
 
 BS_NOINLINE BSValue bsStringIndexOfValue(BSValue string, BSValue search, size_t index)
 {
-    size_t offset = bsMemFind(bsStringData(string), bsStringSize(string), bsStringData(search),
+    size_t offset = bsMemFind(bsStringSpan(string), bsStringSize(string), bsStringSpan(search),
                               bsStringSize(search), bsStringOffset(string, index));
     if (offset == SIZE_MAX) {
         return bsNumber(-1);
@@ -1492,8 +1492,8 @@ static BSValue bsFnStringLastIndexOf(const BSValue *args, size_t argCount, BSOpt
     size_t searchLength = bsStringLength(values[1]);
     size_t windowEnd = index + searchLength;
     size_t endOffset = bsStringOffset(values[0], windowEnd > length ? length : windowEnd);
-    const char *text = bsStringData(values[0]);
-    const char *search = bsStringData(values[1]);
+    const char *text = bsStringSpan(values[0]);
+    const char *search = bsStringSpan(values[1]);
     size_t searchSize = bsStringSize(values[1]);
     if (searchSize > endOffset) {
         return bsNumber(-1);
@@ -1544,21 +1544,21 @@ static const BSArgModel stringReplaceArgs[] = {
 static BSValue bsFnStringReplace(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringReplaceArgs, bsNull());
-    const char *text = bsStringData(values[0]);
+    const char *text = bsStringSpan(values[0]);
     size_t size = bsStringSize(values[0]);
-    const char *substr = bsStringData(values[1]);
+    const char *substr = bsStringSpan(values[1]);
     size_t substrSize = bsStringSize(values[1]);
     BSStringBuilder sb;
     bsSBInit(&sb);
     if (substrSize == 0) {
         /* An empty search string inserts the replacement between every character */
-        bsSBAppend(&sb, bsStringData(values[2]), bsStringSize(values[2]));
+        bsSBAppend(&sb, bsStringSpan(values[2]), bsStringSize(values[2]));
         size_t offset = 0;
         while (offset < size) {
             size_t codeSize;
             bsUTF8Decode(text, size, offset, &codeSize);
             bsSBAppend(&sb, text + offset, codeSize);
-            bsSBAppend(&sb, bsStringData(values[2]), bsStringSize(values[2]));
+            bsSBAppend(&sb, bsStringSpan(values[2]), bsStringSize(values[2]));
             offset += codeSize;
         }
         return bsSBToValue(&sb);
@@ -1572,7 +1572,7 @@ static BSValue bsFnStringReplace(const BSValue *args, size_t argCount, BSOptions
     size_t position = 0;
     while (found != SIZE_MAX) {
         bsSBAppend(&sb, text + position, found - position);
-        bsSBAppend(&sb, bsStringData(values[2]), bsStringSize(values[2]));
+        bsSBAppend(&sb, bsStringSpan(values[2]), bsStringSize(values[2]));
         position = found + substrSize;
         found = bsMemFind(text, size, substr, substrSize, position);
     }
@@ -1607,7 +1607,7 @@ static const BSArgModel stringSplitArgs[] = {
 static BSValue bsFnStringSplit(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringSplitArgs, bsNull());
-    const char *text = bsStringData(values[0]);
+    const char *text = bsStringSpan(values[0]);
     size_t size = bsStringSize(values[0]);
     size_t separatorSize = bsStringSize(values[1]);
     BSValue result = bsArrayNew();
@@ -1626,14 +1626,14 @@ static BSValue bsFnStringSplit(const BSValue *args, size_t argCount, BSOptions *
 
     size_t position = 0;
     while (true) {
-        size_t found = bsMemFind(text, size, bsStringData(values[1]), separatorSize, position);
+        size_t found = bsMemFind(text, size, bsStringSpan(values[1]), separatorSize, position);
         if (found == SIZE_MAX) {
             break;
         }
-        bsArrayPush(result, bsStringNewSize(text + position, found - position));
+        bsArrayPush(result, bsStringSliceBytes(values[0], position, found - position, SIZE_MAX));
         position = found + separatorSize;
     }
-    bsArrayPush(result, bsStringNewSize(text + position, size - position));
+    bsArrayPush(result, bsStringSliceBytes(values[0], position, size - position, SIZE_MAX));
     return result;
 }
 
@@ -1641,9 +1641,8 @@ static BSValue bsFnStringSplit(const BSValue *args, size_t argCount, BSOptions *
 static BSValue bsFnStringSplitLines(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringArgs, bsNull());
-    const char *text = bsStringData(values[0]);
+    const char *text = bsStringSpan(values[0]);
     size_t size = bsStringSize(values[0]);
-    bool ascii = bsStringLength(values[0]) == size;
     BSValue result = bsArrayNew();
     size_t position = 0;
     while (true) {
@@ -1653,9 +1652,7 @@ static BSValue bsFnStringSplitLines(const BSValue *args, size_t argCount, BSOpti
         if (newline != NULL && end > position && text[end - 1] == '\r') {
             end--;
         }
-        /* A line of an ASCII string is ASCII */
-        bsArrayPush(result, ascii ? bsStringNewAscii(text + position, end - position) :
-                    bsStringNewSize(text + position, end - position));
+        bsArrayPush(result, bsStringSliceBytes(values[0], position, end - position, SIZE_MAX));
         if (newline == NULL) {
             return result;
         }
@@ -1671,7 +1668,7 @@ BS_LIBRARY_FN(bsFnStringStartsWith, stringSearchArgs, bsNull(),
 /* Out of line: inlined into the intrinsic switch, these bulk the interpreter loop */
 BS_NOINLINE BSValue bsStringTrimValue(BSValue string)
 {
-    const char *text = bsStringData(string);
+    const char *text = bsStringSpan(string);
     size_t size = bsStringSize(string);
     size_t begin = 0;
     size_t end = size;

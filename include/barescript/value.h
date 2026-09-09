@@ -75,18 +75,22 @@ typedef struct BSValue {
 
 /* String flags - the high bits record the allocation's recycling size class */
 #define BS_STR_INTERNED 0x01u /* the intern table holds a reference */
-#define BS_STR_HASHED   0x02u /* the content hash is computed */
+#define BS_STR_HASHED   0x02u /* the content hash is computed - in "hash", or in the index block's first word */
+#define BS_STR_SLICE    0x04u /* the data is a span of another string's bytes; the storage holds that string */
+#define BS_STR_APART    0x08u /* the data is an allocation of its own, apart from the header */
+#define BS_STR_INDEXED  0x10u /* the slot holds the code point index rather than the hash */
 
 /* An immutable, reference-counted UTF-8 string */
 struct BSString {
     int32_t refcount;
-    uint8_t flags;
+    uint16_t flags;        /* the BS_STR_ bits, and the pool size class above them */
     uint32_t size;         /* bytes */
     uint32_t length;       /* Unicode code points */
-    uint32_t hash;         /* the content hash, once an object lookup needs it */
-    uint32_t capacity;     /* the data bytes the allocation holds, not counting the terminator */
-    uint32_t *index;       /* the non-ASCII code point index - a cursor and sparse offsets - or NULL */
-    char data[];           /* NUL-terminated UTF-8; allocated with the header */
+    union {
+        uint32_t hash;     /* the content hash, once an object lookup needs it */
+        uint32_t *index;   /* the non-ASCII code point index - the hash, a cursor, and sparse offsets - when indexed */
+    };
+    char *data;            /* UTF-8: NUL-terminated in the storage after the header, or a slice's span of its parent's bytes */
 };
 
 
@@ -227,6 +231,7 @@ int bsValueCompare(BSValue left, BSValue right);
  * String values
  */
 
+/* A string's NUL-terminated bytes. A slice sharing its parent's bytes takes a copy of its own first. */
 const char *bsStringData(BSValue value);
 size_t bsStringSize(BSValue value);   /* the size, in bytes */
 size_t bsStringLength(BSValue value); /* the length, in Unicode code points */

@@ -207,7 +207,7 @@ static BSValue bsInternName(BSValue name)
     if ((name.u.string->flags & BS_STR_INTERNED) != 0) {
         return bsRetain(name);
     }
-    return bsStringIntern(bsStringData(name), bsStringSize(name));
+    return bsStringIntern(bsStringSpan(name), bsStringSize(name));
 }
 
 
@@ -467,7 +467,7 @@ static uint32_t bsAstExpr(BSAst *ast, BSValue model)
         /* The conditional reads its first three arguments and no more, so a fourth of any shape stands */
         BSValue args = bsObjectGetString(member, bsKeys.args);
         size_t argCount = bsArrayCount(args);
-        if (argCount > 3 && bsNameIs(bsStringData(name), "if")) {
+        if (argCount > 3 && bsStringIs(name, "if")) {
             argCount = 3;
         }
         uint32_t node = bsAstNode(ast, BS_NODE_CALL);
@@ -1292,7 +1292,7 @@ static void bsEmitCallTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t ds
 /* Whether a call node is the conditional, if(cond, then, else) */
 static bool bsNodeIsIf(const BSAst *ast, const BSNode *node)
 {
-    return bsNameIs(bsStringData(bsNodeText(ast, node)), "if");
+    return bsStringIs(bsNodeText(ast, node), "if");
 }
 
 

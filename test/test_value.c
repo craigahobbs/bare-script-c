@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "test.h"
+#include "../src/internal.h"
 
 
 /* A key longer than the sixty-four byte limit of the intern table is never interned */
@@ -164,6 +165,75 @@ TEST(value_string)
     ASSERT_STR_EQ(bsStringData(bsNumber(1)), "");
     ASSERT_INT_EQ(bsStringSize(bsNumber(1)), 0);
     ASSERT_INT_EQ(bsStringLength(bsNumber(1)), 0);
+}
+
+
+TEST(value_string_slice)
+{
+    /* A long slice shares its parent's bytes; a short one copies; a slice of a slice shares the root */
+    char text[261];
+    for (int ix = 0; ix < 260; ix++) {
+        text[ix] = (char) ('a' + ix % 26);
+    }
+    text[260] = '\0';
+    BSValue parent = bsStringNew(text);
+    BSValue slice = bsStringSliceBytes(parent, 2, 200, 200);
+    ASSERT_TRUE((slice.u.string->flags & BS_STR_SLICE) != 0);
+    ASSERT_TRUE(slice.u.string->data == parent.u.string->data + 2);
+    ASSERT_INT_EQ(parent.u.string->refcount, 2);
+    ASSERT_INT_EQ(bsStringSize(slice), 200);
+    ASSERT_INT_EQ(bsStringLength(slice), 200);
+    BSValue inner = bsStringSliceBytes(slice, 3, 150, SIZE_MAX);
+    ASSERT_TRUE(inner.u.string->data == parent.u.string->data + 5);
+    ASSERT_INT_EQ(parent.u.string->refcount, 3);
+    ASSERT_INT_EQ(slice.u.string->refcount, 1);
+    BSValue copy = bsStringSliceBytes(slice, 3, 10, SIZE_MAX);
+    ASSERT_TRUE((copy.u.string->flags & BS_STR_SLICE) == 0);
+    ASSERT_STR_EQ(bsStringData(copy), "fghijklmno");
+    ASSERT_INT_EQ(parent.u.string->refcount, 3);
+
+    /* bsStringData gives a slice bytes of its own, NUL-terminated, and lets the parent go */
+    const char *data = bsStringData(inner);
+    ASSERT_INT_EQ(strlen(data), 150);
+    ASSERT_TRUE(memcmp(data, text + 5, 150) == 0);
+    ASSERT_TRUE((inner.u.string->flags & BS_STR_SLICE) == 0);
+    ASSERT_TRUE((inner.u.string->flags & BS_STR_APART) != 0);
+    ASSERT_INT_EQ(parent.u.string->refcount, 2);
+    ASSERT_TRUE(bsStringData(inner) == data);
+    bsRelease(inner);
+    bsRelease(copy);
+    bsRelease(slice);
+    ASSERT_INT_EQ(parent.u.string->refcount, 1);
+
+    /* A non-ASCII parent: a slice's code point count, given or counted */
+    BSValue wide = bsTestRepeat("", "\xc3\xa9", 60, "");
+    ASSERT_INT_EQ(bsStringLength(wide), 60);
+    ASSERT_INT_EQ(bsStringSize(wide), 120);
+    BSValue wideSlice = bsStringSliceBytes(wide, 2, 100, SIZE_MAX);
+    ASSERT_TRUE((wideSlice.u.string->flags & BS_STR_SLICE) != 0);
+    ASSERT_INT_EQ(bsStringLength(wideSlice), 50);
+    ASSERT_INT_EQ(bsStringCodePoint(wideSlice, 49), 0xe9);
+    BSValue wideCopy = bsStringSliceBytes(wide, 2, 10, SIZE_MAX);
+    ASSERT_INT_EQ(bsStringLength(wideCopy), 5);
+    BSValue wideKnown = bsStringSliceBytes(wide, 2, 10, 5);
+    ASSERT_INT_EQ(bsStringLength(wideKnown), 5);
+    bsRelease(wideKnown);
+    bsRelease(wideCopy);
+    bsRelease(wideSlice);
+    bsRelease(wide);
+    bsRelease(parent);
+
+    /* Through the library: a slice appended to in place starts a string of its own; split pieces and keys */
+    ASSERT_VALUE(bsTestExecute(
+        "function f():\n    s = stringSlice(stringRepeat('abcdefghij', 20), 2, 150)\n"
+        "    s = s + '!'\n    return [stringLength(s), stringSlice(s, 0, 9), stringSlice(s, 148)]\nendfunction\nreturn f()"),
+        "[149,\"cdefghija\",\"!\"]");
+    ASSERT_VALUE(bsTestExecute(
+        "s = stringRepeat('abcdefghij', 20)\nt = s + '9' + s\n"
+        "return [arrayLength(stringSplit(t, '9')), stringLength(arrayGet(stringSplit(t, '9'), 1)), "
+        "arrayLength(stringSplitLines(s + '\\n' + s)), stringSlice(t, 30) == stringSlice(t, 30), "
+        "objectGet(objectNew(stringSlice(s, 20), 1), stringSlice(s, 20)), stringLength(stringReplace(stringSlice(s, 1), 'z', 'y'))]"),
+        "[2,200,2,true,1,199]");
 }
 
 

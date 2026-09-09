@@ -2703,7 +2703,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
 
 void bsRegexSubjectInit(BSRegexSubject *subject, BSValue string)
 {
-    const char *data = bsStringData(string);
+    const char *data = bsStringSpan(string);
     size_t size = bsStringSize(string);
     size_t length = bsStringLength(string);
     subject->length = length;

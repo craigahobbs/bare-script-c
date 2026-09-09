@@ -289,6 +289,13 @@ static inline bool bsNameIs(const char *name, const char *word)
     return name[0] == word[0] && strcmp(name, word) == 0;
 }
 
+/* The same of a string value, by size and bytes, so a slice is read as it is */
+static inline bool bsStringIs(BSValue value, const char *word)
+{
+    size_t size = strlen(word);
+    return value.u.string->size == size && memcmp(value.u.string->data, word, size) == 0;
+}
+
 /*
  * Append a value's string representation to a string that nothing else references - the caller
  * holds its only reference and has checked that - growing the allocation in place. Returns the
@@ -301,6 +308,36 @@ double bsStrtod(const char *text, size_t size);
 
 /* Allocate a string whose bytes are already known to be ASCII (length == size). */
 BSValue bsStringNewAscii(const char *text, size_t size);
+
+/*
+ * A string of "size" bytes of a string at a byte offset: a short one copies, a longer one shares
+ * the parent's bytes - a slice, which holds the root parent - so the parser's rest-of-the-line
+ * slices and split pieces copy nothing. "length" is the span's code point count, or SIZE_MAX to
+ * count it. A span shorter than BS_STRING_SLICE_MIN is copied: below it the copy costs less than
+ * the parent bookkeeping, and a copy of a line-sized span reuses the blocks the last line freed.
+ */
+#define BS_STRING_SLICE_MIN 96
+BSValue bsStringSliceShare(BSValue parent, size_t offset, size_t size, size_t length);
+
+static inline BSValue bsStringSliceBytes(BSValue parent, size_t offset, size_t size, size_t length)
+{
+    const BSString *source = parent.u.string;
+    if (size >= BS_STRING_SLICE_MIN) {
+        return bsStringSliceShare(parent, offset, size, length);
+    }
+    const char *text = source->data + offset;
+    return length == size || source->length == source->size ? bsStringNewAscii(text, size) :
+        bsStringNewSize(text, size);
+}
+
+/*
+ * A string's bytes for a size-aware reader: a slice's span is not NUL-terminated, and this does
+ * not take the copy bsStringData does to terminate it
+ */
+static inline const char *bsStringSpan(BSValue value)
+{
+    return value.type == BS_STRING ? value.u.string->data : "";
+}
 
 /* Ensure a string builder has room for "size" more bytes, so a reader can fill sb->data + sb->size */
 void bsSBReserve(BSStringBuilder *sb, size_t size);

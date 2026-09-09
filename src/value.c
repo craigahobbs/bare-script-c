@@ -294,45 +294,81 @@ static _Thread_local BSValueState bsTS;
  * knows where the block goes. The free-list link reuses the index pointer.
  */
 #define BS_STRING_POOL_MAX 4096
-#define BS_STR_POOL_SHIFT 4
+#define BS_STR_POOL_SHIFT 8
 static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128, 192};
 
 
-/* Set up a string allocation's header for "size" data bytes; the caller fills them and sets the length */
-static void bsStringInit(BSString *string, size_t size, size_t capacity, uint8_t flags)
+/*
+ * The storage after a string's header: its bytes, or for a slice its parent. A string outside the
+ * pool - a block of its own, or bytes apart from a pooled header - opens its storage with the
+ * capacity of the bytes that follow; a pooled string's capacity is its size class's.
+ */
+#define BS_STRING_STORAGE(string) ((char *) ((string) + 1))
+#define BS_STRING_PARENT(string) (*(BSString **) ((string) + 1))
+#define BS_STRING_HEAP_HEAD 8
+#define BS_STRING_HEAP_CAPACITY(data) (*(uint32_t *) ((data) - BS_STRING_HEAP_HEAD))
+
+/* A string's capacity: none for a slice, its pool class's, or the word its storage opens with */
+static size_t bsStringCapacity(const BSString *string)
+{
+    static const uint8_t classCapacity[BS_STRING_POOL_CLASSES + 1] = {
+        0, 48 - sizeof(BSString) - 1, 64 - sizeof(BSString) - 1, 96 - sizeof(BSString) - 1,
+        128 - sizeof(BSString) - 1, 192 - sizeof(BSString) - 1
+    };
+    uint16_t flags = string->flags;
+    if ((flags & (BS_STR_SLICE | BS_STR_APART)) != 0) {
+        return (flags & BS_STR_SLICE) != 0 ? 0 : BS_STRING_HEAP_CAPACITY(string->data);
+    }
+    unsigned class = flags >> BS_STR_POOL_SHIFT;
+    return class != 0 ? classCapacity[class] : BS_STRING_HEAP_CAPACITY(string->data);
+}
+
+
+/*
+ * Set up a block of its own - past the pool - as a string of "size" data bytes with "capacity" of
+ * them; the caller fills them and sets the length
+ */
+static void bsStringInitHeap(BSString *string, size_t size, size_t capacity)
 {
     string->refcount = 1;
-    string->flags = flags;
+    string->flags = 0;
     string->size = (uint32_t) size;
-    string->capacity = (uint32_t) capacity;
-    string->index = NULL;
+    string->data = BS_STRING_STORAGE(string) + BS_STRING_HEAP_HEAD;
+    BS_STRING_HEAP_CAPACITY(string->data) = (uint32_t) capacity;
     string->data[size] = '\0';
 }
 
-static BSString *bsStringAlloc(size_t size)
+static BS_NOINLINE BSString *bsStringAllocHeap(size_t size)
 {
+    BSString *string = bsAlloc(sizeof(BSString) + BS_STRING_HEAP_HEAD + size + 1);
+    bsStringInitHeap(string, size, size);
+    return string;
+}
+
+/*
+ * A string of "size" data bytes, from its size class's free list. Small enough to inline: a
+ * constant size folds to one class, the class by a table over the total's sixteens.
+ */
+static inline BSString *bsStringAlloc(size_t size)
+{
+    static const uint8_t classOfSixteens[] = {0, 0, 0, 1, 2, 2, 3, 3, 4, 4, 4, 4};
     size_t total = sizeof(BSString) + size + 1;
-    size_t capacity = size;
-    BSString *string = NULL;
-    uint8_t flags = 0;
-    for (unsigned ix = 0; ix < BS_STRING_POOL_CLASSES; ix++) {
-        if (total <= bsStringPoolSize[ix]) {
-            flags = (uint8_t) ((ix + 1) << BS_STR_POOL_SHIFT);
-            capacity = bsStringPoolSize[ix] - sizeof(BSString) - 1;
-            if (bsTS.stringPool[ix] != NULL) {
-                string = bsTS.stringPool[ix];
-                bsTS.stringPool[ix] = (BSString *) string->index;
-                bsTS.stringPoolCount[ix]--;
-            } else {
-                string = bsAlloc(bsStringPoolSize[ix]);
-            }
-            break;
-        }
+    if (total > bsStringPoolSize[BS_STRING_POOL_CLASSES - 1]) {
+        return bsStringAllocHeap(size);
     }
-    if (string == NULL) {
-        string = bsAlloc(total);
+    unsigned ix = classOfSixteens[(total - 1) >> 4];
+    BSString *string = bsTS.stringPool[ix];
+    if (string != NULL) {
+        bsTS.stringPool[ix] = (BSString *) string->index;
+        bsTS.stringPoolCount[ix]--;
+    } else {
+        string = bsAlloc(bsStringPoolSize[ix]);
     }
-    bsStringInit(string, size, capacity, flags);
+    string->refcount = 1;
+    string->flags = (uint16_t) ((ix + 1) << BS_STR_POOL_SHIFT);
+    string->size = (uint32_t) size;
+    string->data = BS_STRING_STORAGE(string);
+    string->data[size] = '\0';
     return string;
 }
 
@@ -361,7 +397,12 @@ static bool bsUtf8IsAscii(const char *data, size_t size)
 
 static void bsStringFree(BSString *string)
 {
-    if (string->index != NULL) {
+    if ((string->flags & BS_STR_SLICE) != 0) {
+        bsReleaseInline(bsStringTake(BS_STRING_PARENT(string)));
+    } else if ((string->flags & BS_STR_APART) != 0) {
+        free(string->data - BS_STRING_HEAP_HEAD);
+    }
+    if ((string->flags & BS_STR_INDEXED) != 0) {
         free(string->index);
     }
     unsigned class = string->flags >> BS_STR_POOL_SHIFT;
@@ -405,6 +446,41 @@ BSValue bsStringNewAscii(const char *text, size_t size)
     memcpy(string->data, text, size);
     string->length = (uint32_t) size;
     return bsStringTake(string);
+}
+
+
+/* The sharing half of bsStringSliceBytes: the span is long enough to slice */
+BSValue bsStringSliceShare(BSValue parent, size_t offset, size_t size, size_t length)
+{
+    BSString *source = parent.u.string;
+    char *text = source->data + offset;
+    if (length == SIZE_MAX) {
+        /* A span of a valid non-ASCII string at code point boundaries is valid itself */
+        length = source->length == source->size ? size : bsUTF8Length(text, size);
+    }
+
+    /* The slice's storage holds the root parent, retained */
+    BSString *root = (source->flags & BS_STR_SLICE) != 0 ? BS_STRING_PARENT(source) : source;
+    BSString *slice = bsStringAlloc(sizeof(BSString *) - 1);
+    slice->flags |= BS_STR_SLICE;
+    slice->size = (uint32_t) size;
+    slice->length = (uint32_t) length;
+    slice->data = text;
+    BS_STRING_PARENT(slice) = bsRetainInline(bsStringTake(root)).u.string;
+    return bsStringTake(slice);
+}
+
+
+/* Give a slice bytes of its own, NUL-terminated, and let its parent go. Out of line: bsStringData is everywhere. */
+static BS_NOINLINE void bsStringFlatten(BSString *string)
+{
+    char *copy = (char *) bsAlloc(BS_STRING_HEAP_HEAD + string->size + 1) + BS_STRING_HEAP_HEAD;
+    BS_STRING_HEAP_CAPACITY(copy) = string->size;
+    memcpy(copy, string->data, string->size);
+    copy[string->size] = '\0';
+    bsReleaseInline(bsStringTake(BS_STRING_PARENT(string)));
+    string->data = copy;
+    string->flags = (uint16_t) ((string->flags & ~BS_STR_SLICE) | BS_STR_APART);
 }
 
 
@@ -550,10 +626,15 @@ BSString *bsStringAppendValue(BSString *string, BSValue value)
     size_t length;
     BSValue text = bsStringBytes(value, buffer, sizeof(buffer), &data, &size, &length);
     size_t newSize = string->size + size;
-    if (newSize > string->capacity) {
+    size_t capacity = bsStringCapacity(string);
+    if (newSize > capacity) {
         size_t total = sizeof(BSString) + newSize + 1;
-        if (total <= 128) {
-            /* Still a pooled size: move up a size class, block for block, with no allocator call */
+        if (total <= 128 || (string->flags & (BS_STR_SLICE | BS_STR_APART)) != 0) {
+            /*
+             * Still a pooled size: move up a size class, block for block, with no allocator call.
+             * A slice or a string with bytes apart from its header has none in its block, so it
+             * starts over too.
+             */
             BSString *grown = bsStringAlloc(newSize);
             memcpy(grown->data, string->data, string->size);
             grown->size = string->size;
@@ -565,29 +646,34 @@ BSString *bsStringAppendValue(BSString *string, BSValue value)
              * Past the pool, a medium string grows to the allocator's own granularity, so a string
              * kept by the thousands carries no slack; a large one doubles, so a string built by
              * repeated appends copies each byte a bounded number of times. A recycled block that
-             * outgrows its size class is freed like any other.
+             * outgrows its size class is freed like any other, its bytes moved past the capacity
+             * word a block of its own opens with.
              */
-            size_t capacity = string->capacity * 2;
+            bool pooled = (string->flags >> BS_STR_POOL_SHIFT) != 0;
+            capacity *= 2;
             if (total <= 256) {
-                capacity = ((total + 15) & ~(size_t) 15) - sizeof(BSString) - 1;
+                capacity = ((total + BS_STRING_HEAP_HEAD + 15) & ~(size_t) 15) - sizeof(BSString) - BS_STRING_HEAP_HEAD - 1;
             }
             while (capacity < newSize) {
                 capacity *= 2;
             }
-            string = bsRealloc(string, sizeof(BSString) + capacity + 1);
-            string->capacity = (uint32_t) capacity;
-            string->flags &= (uint8_t) ((1u << BS_STR_POOL_SHIFT) - 1);
+            string = bsRealloc(string, sizeof(BSString) + BS_STRING_HEAP_HEAD + capacity + 1);
+            string->data = BS_STRING_STORAGE(string) + BS_STRING_HEAP_HEAD;
+            if (pooled) {
+                memmove(string->data, BS_STRING_STORAGE(string), string->size);
+            }
+            BS_STRING_HEAP_CAPACITY(string->data) = (uint32_t) capacity;
+            string->flags &= (uint16_t) ((1u << BS_STR_POOL_SHIFT) - 1);
         }
     }
     memcpy(string->data + string->size, data, size);
     string->size = (uint32_t) newSize;
     string->length += (uint32_t) length;
     string->data[newSize] = '\0';
-    string->flags &= (uint8_t) ~BS_STR_HASHED;
-    if (string->index != NULL) {
+    if ((string->flags & BS_STR_INDEXED) != 0) {
         free(string->index);
-        string->index = NULL;
     }
+    string->flags &= (uint16_t) ~(BS_STR_HASHED | BS_STR_INDEXED);
     bsReleaseInline(text);
     return string;
 }
@@ -595,7 +681,14 @@ BSString *bsStringAppendValue(BSString *string, BSValue value)
 
 const char *bsStringData(BSValue value)
 {
-    return value.type == BS_STRING ? value.u.string->data : "";
+    if (value.type != BS_STRING) {
+        return "";
+    }
+    BSString *string = value.u.string;
+    if ((string->flags & BS_STR_SLICE) != 0) {
+        bsStringFlatten(string);
+    }
+    return string->data;
 }
 
 
@@ -620,13 +713,14 @@ size_t bsStringLength(BSValue value)
  */
 static uint32_t *bsStringIndex(BSString *string)
 {
-    uint32_t *index = string->index;
-    if (index != NULL) {
-        return index;
+    if ((string->flags & BS_STR_INDEXED) != 0) {
+        return string->index + 1;
     }
     size_t length = string->length;
     size_t markCount = length >= 2 * BS_STRING_INDEX_STRIDE ? length / BS_STRING_INDEX_STRIDE + 1 : 0;
-    index = bsAlloc((2 + markCount) * sizeof(uint32_t));
+    uint32_t *block = bsAlloc((3 + markCount) * sizeof(uint32_t));
+    block[0] = string->hash;
+    uint32_t *index = block + 1;
     index[0] = 0;
     index[1] = 0;
     if (markCount != 0) {
@@ -647,7 +741,8 @@ static uint32_t *bsStringIndex(BSString *string)
             }
         }
     }
-    string->index = index;
+    string->index = block;
+    string->flags |= BS_STR_INDEXED;
     return index;
 }
 
@@ -716,7 +811,7 @@ void bsSBInit(BSStringBuilder *sb)
 /* The buffer is the data of a string allocation, so bsSBToValue finishes it in place */
 static BSString *bsSBString(const BSStringBuilder *sb)
 {
-    return sb->data != NULL ? (BSString *) (sb->data - offsetof(BSString, data)) : NULL;
+    return sb->data != NULL ? (BSString *) (sb->data - BS_STRING_HEAP_HEAD - sizeof(BSString)) : NULL;
 }
 
 void bsSBFree(BSStringBuilder *sb)
@@ -733,8 +828,8 @@ void bsSBReserve(BSStringBuilder *sb, size_t size)
         while (capacity < sb->size + size + 1) {
             capacity *= 2;
         }
-        BSString *string = bsRealloc(bsSBString(sb), sizeof(BSString) + capacity);
-        sb->data = string->data;
+        BSString *string = bsRealloc(bsSBString(sb), sizeof(BSString) + BS_STRING_HEAP_HEAD + capacity);
+        sb->data = BS_STRING_STORAGE(string) + BS_STRING_HEAP_HEAD;
         sb->capacity = capacity;
     }
 }
@@ -796,7 +891,7 @@ BSValue bsSBToValue(BSStringBuilder *sb)
         return bsStringNewSize("", 0);
     }
     /* The buffer becomes the string, uncopied; built this way it is freed rather than pooled */
-    bsStringInit(string, sb->size, sb->capacity - 1, 0);
+    bsStringInitHeap(string, sb->size, sb->capacity - 1);
     BSValue value = bsStringFinish(string, sb->size);
     bsSBInit(sb);
     return value;
@@ -1185,11 +1280,12 @@ static BS_NOINLINE uint32_t bsHashBytes(const char *data, size_t size)
 /* A string's content hash, computed once and kept on the string */
 static uint32_t bsStringHash(BSString *string)
 {
+    uint32_t *hash = (string->flags & BS_STR_INDEXED) != 0 ? &string->index[0] : &string->hash;
     if ((string->flags & BS_STR_HASHED) == 0) {
-        string->hash = bsHashBytes(string->data, string->size);
+        *hash = bsHashBytes(string->data, string->size);
         string->flags |= BS_STR_HASHED;
     }
-    return string->hash;
+    return *hash;
 }
 
 

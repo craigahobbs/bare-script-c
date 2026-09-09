@@ -47,8 +47,17 @@ The reference counting rules are uniform:
   it keeps it beyond the call.
 - Container accessors (`bsArrayGet`, `bsObjectGet`) return *borrowed* references.
 
-**Strings** are immutable, reference-counted UTF-8 buffers: a 32-byte header followed by the
-NUL-terminated payload in the same allocation. They cache their code point length, so an
+**Strings** are immutable, reference-counted UTF-8 buffers: a 32-byte header - the reference count,
+flags, byte size, code point length, one slot holding the content hash or, for a non-ASCII string
+that has been indexed, the index block (which then keeps the hash in its first word), and a pointer
+to the bytes - followed, as a rule, by the NUL-terminated payload in the same allocation; a string
+past the pool's size classes opens its storage with the capacity of the bytes that follow, and a
+pooled string's capacity is its class's. A slice of ninety-six bytes or more - `stringSlice`,
+a match group, a split piece, the parser's rest of the line after each token - shares its parent's
+bytes instead: its header, the smallest pool block, points into them and its storage holds the root
+parent, retained, so a slice of a slice shares the same bytes and a parent outlives its slices. A
+slice's span is not NUL-terminated; the size-aware readers take it as it is, and `bsStringData`,
+which promises a C string, gives a slice bytes of its own first. Strings cache their code point length, so an
 all-ASCII string - the common case - indexes by byte. Construction skips the UTF-8 walk when the
 buffer has no high bit. Non-ASCII indexing keeps, in an index block allocated on first use, a
 cursor and, for a string of thirty-two code points or more, a sparse stride-16 offset table.
@@ -59,7 +68,7 @@ delta - stepping by two through the alternating upper/lower blocks - found by bi
 few expanding mappings (ß to `SS`, the ligatures) a sorted special table, and a capital sigma that
 ends a word - a cased code point before it and none after, case-ignorable code points aside -
 lowers to the final sigma. An ASCII string maps byte for byte. The header also caches the
-string's content hash, for object lookups, and records the allocation's capacity: the `+`
+string's content hash, for object lookups, and the allocation's capacity is known: the `+`
 operator appends in place when its left operand is a function local holding the string's only
 reference - so `s = s + piece` in a loop is linear rather than quadratic - growing the allocation
 geometrically

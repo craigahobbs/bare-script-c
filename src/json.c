@@ -40,7 +40,7 @@ static const char *bsJSONEscape(unsigned char ch)
 
 static void bsJSONEncodeString(BSStringBuilder *sb, BSValue value)
 {
-    const char *data = bsStringData(value);
+    const char *data = bsStringSpan(value);
     size_t size = bsStringSize(value);
     bsSBAppendChar(sb, '"');
     size_t begin = 0;
