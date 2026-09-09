@@ -294,8 +294,8 @@ writer with Huffman codes fitted to each model - a dynamic block (RFC 1951, 3.2.
 code when that is smaller - which `gzip.bare` itself, writing fixed codes only, cannot produce;
 the runtime's inflater decodes fixed and dynamic blocks through one table-driven Huffman decoder
 and nothing else, since a stored block is never written. That compresses about 601 KB of include
-library source to about 140 KB - against 159 KB with fixed codes and 204 KB for the same models
-as JSON.
+library source to about 127 KB - against 140 KB with the strings repeated per model, 159 KB with
+fixed codes, and 204 KB for the same models as JSON.
 
 `src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
 fresh clone builds with no bootstrap. `make includes` regenerates them by running
@@ -333,7 +333,7 @@ A compiled-out include keeps its registry entry and stub accessor, which return 
 otherwise. There is no dependency tracking: an include that an included script itself includes has
 to be listed with it - `markdownUp.bare` includes four scripts that include five more - and an
 excluded include is missing from every bundled include that includes it. The parser and linter
-alone make a 286 KB release library, against 470 KB with all thirty-two. A change to `INCLUDE` or
+alone make a 321 KB release library, against 438 KB with all thirty-two. A change to `INCLUDE` or
 `INCLUDE_EXCLUDE` needs a `make clean` first, and the test suites need every include.
 
 
