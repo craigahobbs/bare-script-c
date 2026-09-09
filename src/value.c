@@ -373,7 +373,7 @@ static inline BSString *bsStringAlloc(size_t size)
 }
 
 
-static bool bsUtf8IsAscii(const char *data, size_t size)
+static bool bsUTF8IsAscii(const char *data, size_t size)
 {
     const unsigned char *bytes = (const unsigned char *) data;
     size_t ix = 0;
@@ -432,8 +432,7 @@ static BSValue bsStringShort(const char *text, size_t size)
         string->length = (uint32_t) size;
         *slot = string;
     }
-    string->refcount++;
-    return bsStringTake(string);
+    return bsRetainInline(bsStringTake(string));
 }
 
 
@@ -487,7 +486,7 @@ static BS_NOINLINE void bsStringFlatten(BSString *string)
 /* Complete a string whose bytes are in place: count its code points and note if it is ASCII */
 static BSValue bsStringFinish(BSString *string, size_t size)
 {
-    if (bsUtf8IsAscii(string->data, size)) {
+    if (bsUTF8IsAscii(string->data, size)) {
         string->length = (uint32_t) size;
     } else {
         size_t length = bsUTF8Length(string->data, size);
@@ -552,41 +551,33 @@ BSValue bsStringNewFormat(const char *format, ...)
 
 
 /*
- * Resolve a value to its string bytes, formatting scalars into a caller-supplied buffer
- *
- * Returns an owned string value for the types that need one - a null value when the bytes point at
- * the caller's buffer or at an existing string.
+ * A value's string bytes - "text" is an owned string value for the types that format into a new
+ * string, and null when the bytes point at the caller's buffer or at an existing string
  */
-static BSValue bsStringBytes(BSValue value, char *buffer, size_t bufferSize, const char **data,
-                             size_t *size, size_t *length)
+typedef struct BSStringBytes {
+    const char *data;
+    size_t size;
+    size_t length;
+    BSValue text;
+} BSStringBytes;
+
+/* Resolve a value to its string bytes, formatting a number into a caller-supplied buffer */
+static BSStringBytes bsStringBytes(BSValue value, char *buffer, size_t bufferSize)
 {
     switch (value.type) {
     case BS_STRING:
-        *data = value.u.string->data;
-        *size = value.u.string->size;
-        *length = value.u.string->length;
-        return bsNull();
-    case BS_NUMBER:
-        *size = bsNumberFormat(value.u.number, buffer, bufferSize);
-        *data = buffer;
-        *length = *size;
-        return bsNull();
+        return (BSStringBytes) {value.u.string->data, value.u.string->size, value.u.string->length, bsNull()};
+    case BS_NUMBER: {
+        size_t size = bsNumberFormat(value.u.number, buffer, bufferSize);
+        return (BSStringBytes) {buffer, size, size, bsNull()};
+    }
     case BS_NULL:
-        *data = "null";
-        *size = 4;
-        *length = 4;
-        return bsNull();
+        return (BSStringBytes) {"null", 4, 4, bsNull()};
     case BS_BOOLEAN:
-        *data = value.u.boolean ? "true" : "false";
-        *size = value.u.boolean ? 4 : 5;
-        *length = *size;
-        return bsNull();
+        return value.u.boolean ? (BSStringBytes) {"true", 4, 4, bsNull()} : (BSStringBytes) {"false", 5, 5, bsNull()};
     default: {
         BSValue text = bsValueString(value);
-        *data = text.u.string->data;
-        *size = text.u.string->size;
-        *length = text.u.string->length;
-        return text;
+        return (BSStringBytes) {text.u.string->data, text.u.string->size, text.u.string->length, text};
     }
     }
 }
@@ -596,24 +587,16 @@ BSValue bsStringConcat(BSValue left, BSValue right)
 {
     char leftBuffer[64];
     char rightBuffer[64];
-    const char *leftData;
-    const char *rightData;
-    size_t leftSize;
-    size_t rightSize;
-    size_t leftLength;
-    size_t rightLength;
-    BSValue leftText = bsStringBytes(left, leftBuffer, sizeof(leftBuffer), &leftData, &leftSize,
-                                     &leftLength);
-    BSValue rightText = bsStringBytes(right, rightBuffer, sizeof(rightBuffer), &rightData, &rightSize,
-                                      &rightLength);
+    BSStringBytes leftBytes = bsStringBytes(left, leftBuffer, sizeof(leftBuffer));
+    BSStringBytes rightBytes = bsStringBytes(right, rightBuffer, sizeof(rightBuffer));
 
-    BSString *string = bsStringAlloc(leftSize + rightSize);
-    memcpy(string->data, leftData, leftSize);
-    memcpy(string->data + leftSize, rightData, rightSize);
-    string->length = (uint32_t) (leftLength + rightLength);
+    BSString *string = bsStringAlloc(leftBytes.size + rightBytes.size);
+    memcpy(string->data, leftBytes.data, leftBytes.size);
+    memcpy(string->data + leftBytes.size, rightBytes.data, rightBytes.size);
+    string->length = (uint32_t) (leftBytes.length + rightBytes.length);
 
-    bsReleaseInline(leftText);
-    bsReleaseInline(rightText);
+    bsReleaseInline(leftBytes.text);
+    bsReleaseInline(rightBytes.text);
     return bsStringTake(string);
 }
 
@@ -621,11 +604,8 @@ BSValue bsStringConcat(BSValue left, BSValue right)
 BSString *bsStringAppendValue(BSString *string, BSValue value)
 {
     char buffer[64];
-    const char *data;
-    size_t size;
-    size_t length;
-    BSValue text = bsStringBytes(value, buffer, sizeof(buffer), &data, &size, &length);
-    size_t newSize = string->size + size;
+    BSStringBytes bytes = bsStringBytes(value, buffer, sizeof(buffer));
+    size_t newSize = string->size + bytes.size;
     size_t capacity = bsStringCapacity(string);
     if (newSize > capacity) {
         size_t total = sizeof(BSString) + newSize + 1;
@@ -666,15 +646,15 @@ BSString *bsStringAppendValue(BSString *string, BSValue value)
             string->flags &= (uint16_t) ((1u << BS_STR_POOL_SHIFT) - 1);
         }
     }
-    memcpy(string->data + string->size, data, size);
+    memcpy(string->data + string->size, bytes.data, bytes.size);
     string->size = (uint32_t) newSize;
-    string->length += (uint32_t) length;
+    string->length += (uint32_t) bytes.length;
     string->data[newSize] = '\0';
     if ((string->flags & BS_STR_INDEXED) != 0) {
         free(string->index);
     }
     string->flags &= (uint16_t) ~(BS_STR_HASHED | BS_STR_INDEXED);
-    bsReleaseInline(text);
+    bsReleaseInline(bytes.text);
     return string;
 }
 
@@ -875,12 +855,9 @@ void bsSBAppendFormat(BSStringBuilder *sb, const char *format, ...)
 void bsSBAppendValue(BSStringBuilder *sb, BSValue value)
 {
     char buffer[64];
-    const char *data;
-    size_t size;
-    size_t length;
-    BSValue text = bsStringBytes(value, buffer, sizeof(buffer), &data, &size, &length);
-    bsSBAppend(sb, data, size);
-    bsReleaseInline(text);
+    BSStringBytes bytes = bsStringBytes(value, buffer, sizeof(buffer));
+    bsSBAppend(sb, bytes.data, bytes.size);
+    bsReleaseInline(bytes.text);
 }
 
 
@@ -1348,8 +1325,7 @@ BSValue bsStringIntern(const char *data, size_t size)
     uint32_t hash = bsHashBytes(data, size);
     BSString *found = bsInternLookupHash(data, size, hash);
     if (found != NULL) {
-        found->refcount++;
-        return bsStringTake(found);
+        return bsRetainInline(bsStringTake(found));
     }
     BSValue value = bsStringNewSize(data, size);
     value.u.string->hash = hash;
@@ -1372,8 +1348,7 @@ BSValue bsStringInternExisting(const char *data, size_t size)
     if (size <= BS_INTERN_MAX) {
         BSString *found = bsInternLookupHash(data, size, bsHashBytes(data, size));
         if (found != NULL) {
-            found->refcount++;
-            return bsStringTake(found);
+            return bsRetainInline(bsStringTake(found));
         }
     }
     return bsStringNewSize(data, size);
@@ -1401,7 +1376,7 @@ void bsValueCleanup(void)
             BSString *string = bsTS.internSlots[ix].string;
             if (string != NULL) {
                 string->flags &= (uint8_t) ~BS_STR_INTERNED;
-                bsRelease(bsStringTake(string));
+                bsReleaseInline(bsStringTake(string));
             }
         }
         free(bsTS.internSlots);
@@ -1413,7 +1388,7 @@ void bsValueCleanup(void)
     /* The shared short strings - one still held elsewhere lives on as an ordinary string */
     for (size_t ix = 0; ix < sizeof(bsTS.shortStrings) / sizeof(bsTS.shortStrings[0]); ix++) {
         if (bsTS.shortStrings[ix] != NULL) {
-            bsRelease(bsStringTake(bsTS.shortStrings[ix]));
+            bsReleaseInline(bsStringTake(bsTS.shortStrings[ix]));
             bsTS.shortStrings[ix] = NULL;
         }
     }
@@ -2074,7 +2049,6 @@ size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
         digitCount--;
     }
     /* GCOV_EXCL_STOP */
-    mantissa[digitCount] = '\0';
 
     /* Format per the ECMAScript Number::toString algorithm - "n" is the decimal point position */
     int n = exponent + 1;
@@ -2111,11 +2085,8 @@ size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
             memcpy(text + size, mantissa + 1, (size_t) (k - 1));
             size += (size_t) (k - 1);
         }
-        text[size++] = 'e';
-        text[size++] = (n - 1 >= 0 ? '+' : '-');
-        size += (size_t) snprintf(text + size, sizeof(text) - size, "%d", n - 1 >= 0 ? n - 1 : -(n - 1));
+        size += (size_t) snprintf(text + size, sizeof(text) - size, "e%+d", n - 1);
     }
-    text[size] = '\0';
     return bsNumberEmit(buffer, bufferSize, text, size);
 }
 

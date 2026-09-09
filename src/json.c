@@ -660,7 +660,7 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
 BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t *errorOffset)
 {
     bsModelKeysInit();
-    BSJSONParser parser = {text, size, 0, NULL, 0, NULL, 0, 0, false, {0}, {false}};
+    BSJSONParser parser = {.text = text, .size = size};
     BSValue result;
     bool decoded = bsJSONDecodeValue(&parser, 0, &result);
     if (parser.memo != NULL) {

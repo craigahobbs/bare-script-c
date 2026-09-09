@@ -1280,41 +1280,27 @@ static const BSCasePair bsUnicodeCaseMembers[] = {
     } while (0)
 
 
+/* A code point's mapping by a run: itself plus the run's delta when the run holds it, else itself */
+static uint32_t bsCaseRangeMap(uint32_t code, uint32_t first, uint32_t count, uint32_t step, int32_t delta)
+{
+    uint32_t offset = code - first;
+    return offset < count * step && offset % step == 0 ? (uint32_t) ((int32_t) code + delta) : code;
+}
+
+#define BS_CASE_RANGE_MAP(range, code) bsCaseRangeMap((code), (range)->first, (range)->count, (range)->step, (range)->delta)
+
+
 /* The simple mapping of a code point: itself plus the delta of the run that holds it, or itself */
 static uint32_t bsCaseMap(const BSCaseRange16 *bmp, size_t bmpCount, const BSCaseRange32 *astral, size_t astralCount,
                           uint32_t code)
 {
-    uint32_t first;
-    uint32_t count;
-    uint32_t step;
-    int32_t delta;
     size_t low;
     if (code < 0x10000) {
         BS_TABLE_FIND(bmp, bmpCount, code, low);
-        if (low == 0) {
-            return code;
-        }
-        const BSCaseRange16 *range = &bmp[low - 1];
-        first = range->first;
-        count = range->count;
-        step = range->step;
-        delta = range->delta;
-    } else {
-        BS_TABLE_FIND(astral, astralCount, code, low);
-        if (low == 0) {
-            return code;
-        }
-        const BSCaseRange32 *range = &astral[low - 1];
-        first = range->first;
-        count = range->count;
-        step = range->step;
-        delta = range->delta;
+        return low != 0 ? BS_CASE_RANGE_MAP(&bmp[low - 1], code) : code;
     }
-    uint32_t offset = code - first;
-    if (offset >= count * step || offset % step != 0) {
-        return code;
-    }
-    return (uint32_t) ((int32_t) code + delta);
+    BS_TABLE_FIND(astral, astralCount, code, low);
+    return low != 0 ? BS_CASE_RANGE_MAP(&astral[low - 1], code) : code;
 }
 
 
