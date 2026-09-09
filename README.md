@@ -498,7 +498,7 @@ report footprint, where the CSV fields repeat.
 | ... of which compressed include library | 127 KB |
 | ... of which Unicode case tables        |   8 KB |
 | ... of which code                       | 223 KB |
-| Empty script, resident set              | 2.5 MB |
+| Empty script, resident set              | 2.6 MB |
 | Empty script, peak footprint            | 1.8 MB |
 | `make perf` test, peak                  |   6 MB |
 | Include library test suite, peak        |  33 MB |
