@@ -478,9 +478,9 @@ static BSValue bsRunChunk(const BSCode *code, BSScript *script, BSOptions *optio
  * Returns true with "*result" set to the owned return value when the arguments are the happy-path
  * shape; false means the caller runs the full library function, which validates the arguments and
  * reports the error. The intrinsics with one argument shape - arrayGet, arrayLength, arrayPush,
- * arraySet, objectGet, objectHas, objectSet, stringCharCodeAt, stringLength, stringSlice,
- * systemGlobalSet - have call opcodes of their own, which run them in place; their ids only identify
- * the library function to those opcodes' guard.
+ * arraySet, objectGet, objectHas, objectSet, stringCharCodeAt, stringLength, stringSlice, and the
+ * one-argument math functions - have call opcodes of their own, which run them in place; their ids
+ * only identify the library function to those opcodes' guard.
  */
 static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
 {
@@ -543,13 +543,6 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
     BS_INTRIN(ARRAY_NEW, true, bsArrayFromArgs(args, argCount))
     BS_INTRIN(ARRAY_NEW_SIZE, argCount == 2 && bsIntrinsicIndex(args[0], &index) && index <= 4294967295u,
               bsArrayNewSizeValue(index, args[1]))
-    BS_INTRIN(MATH_ABS, argCount == 1 && args[0].type == BS_NUMBER, bsNumber(fabs(args[0].u.number)))
-    BS_INTRIN(MATH_CEIL, argCount == 1 && args[0].type == BS_NUMBER, bsNumber(ceil(args[0].u.number)))
-    BS_INTRIN(MATH_FLOOR, argCount == 1 && args[0].type == BS_NUMBER, bsNumber(floor(args[0].u.number)))
-    BS_INTRIN(MATH_SIGN, argCount == 1 && args[0].type == BS_NUMBER,
-              bsNumber(args[0].u.number < 0 ? -1 : (args[0].u.number == 0 ? 0 : 1)))
-    BS_INTRIN(MATH_SQRT, argCount == 1 && args[0].type == BS_NUMBER && args[0].u.number >= 0,
-              bsNumber(sqrt(args[0].u.number)))
     BS_INTRIN(NUMBER_PARSE_INT, argCount == 1 && args[0].type == BS_STRING, bsIntrinsicParseInt(args[0]))
     BS_INTRIN(OBJECT_COPY, argCount == 1 && args[0].type == BS_OBJECT, bsObjectCopy(args[0]))
     case BS_INTRIN_OBJECT_DELETE:
@@ -581,6 +574,8 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
     BS_INTRIN(STRING_STARTS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
               bsBoolean(bsStringStartsWith(args[0], args[1])))
     BS_INTRIN(SYSTEM_BOOLEAN, argCount == 1, bsBoolean(bsValueBoolean(args[0])))
+    BS_INTRIN(SYSTEM_GLOBAL_SET, argCount == 2 && args[0].type == BS_STRING,
+              bsGlobalSetValue(options, args[0], args[1]))
     BS_INTRIN(SYSTEM_TYPE, argCount == 1, bsSystemTypeName(args[0]))
     BS_INTRIN(REGEX_MATCH, argCount == 2 && args[0].type == BS_REGEX && args[1].type == BS_STRING,
               bsRegexMatchImpl(args[0], args[1]))
@@ -960,7 +955,7 @@ static inline BSValue bsOperandTake(BSValue *regs, size_t slotCount, size_t owne
 /*
  * The intrinsic call opcodes' fast paths
  *
- * A CALL_NAME of one of the eleven opcode intrinsics compiles to an opcode of its own, whose
+ * A CALL_NAME of one of the opcode intrinsics compiles to an opcode of its own, whose
  * handler runs one of these: the site's cached global must be the library function - the one
  * function value carrying that intrinsic id, so a script function of the same name is not it - a
  * locals object must not shadow the name, and the arguments must be the happy-path shape. Any
@@ -1193,27 +1188,48 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
 
 
 /*
- * A global that exists updates in place - no slot moves, so every site's cache holds - through the
- * site's memo of its entry; a new global takes the general call, which appends it
+ * The one-argument math functions share an opcode: the site's global says which, by its intrinsic
+ * id, so the guard admits any of the five and the handler chooses by that id
  */
-static inline bool bsIntrinSystemGlobalSet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
-                                                BSOptions *options)
+static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
+                                BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_SYSTEM_GLOBAL_SET);
-    if (args == NULL) {
+    const BSCallCache *cache = &code->caches[inst->b];
+    if (globals == NULL || cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
         return false;
     }
-    BSValue name = bsOperandRead(regs, args->a);
-    if (name.type != BS_STRING) {
+    const BSValue *hit = cache->slot;
+    if (hit == NULL || hit->type != BS_FUNCTION) {
         return false;
     }
-    BSObjectEntry *entry = bsObjectEntryMemo(options->globals.u.object, name.u.string, &code->caches[inst->b].memo);
-    if (entry == NULL) {
+    unsigned char id = hit->u.function->intrinsic;
+    BSValue arg = bsOperandRead(regs, inst[1].a);
+    if (id < BS_INTRIN_MATH_ABS || id > BS_INTRIN_MATH_SQRT || arg.type != BS_NUMBER) {
         return false;
     }
-    BSValue value = bsOperandRead(regs, args->b);
-    bsAssign(&entry->value, bsRetain(value));
-    bsIntrinResult(inst, regs, value);
+    double number = arg.u.number;
+    double result;
+    switch (id) {
+    case BS_INTRIN_MATH_ABS:
+        result = fabs(number);
+        break;
+    case BS_INTRIN_MATH_CEIL:
+        result = ceil(number);
+        break;
+    case BS_INTRIN_MATH_FLOOR:
+        result = floor(number);
+        break;
+    case BS_INTRIN_MATH_SIGN:
+        result = number < 0 ? -1 : (number == 0 ? 0 : 1);
+        break;
+    default:
+        if (number < 0) {
+            return false;
+        }
+        result = sqrt(number);
+        break;
+    }
+    bsIntrinResult(inst, regs, bsNumber(result));
     return true;
 }
 
@@ -1401,7 +1417,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         &&op_FUNCTION, &&op_INCLUDE, &&op_STMT, &&op_LOAD_SLOT, &&op_CALL_ARRAY_GET,
         &&op_CALL_ARRAY_LENGTH, &&op_CALL_ARRAY_PUSH, &&op_CALL_ARRAY_SET, &&op_CALL_OBJECT_GET,
         &&op_CALL_OBJECT_HAS, &&op_CALL_OBJECT_SET, &&op_CALL_STRING_CHAR_CODE_AT, &&op_CALL_STRING_LENGTH,
-        &&op_CALL_STRING_SLICE, &&op_CALL_SYSTEM_GLOBAL_SET, &&op_JUMP_EQ,
+        &&op_CALL_STRING_SLICE, &&op_CALL_MATH, &&op_JUMP_EQ,
         &&op_JUMP_NE, &&op_JUMP_LT, &&op_JUMP_LE, &&op_JUMP_GT, &&op_JUMP_GE
     };
     /* "inst" is the instruction being run; BS_NEXT runs the one after it, BS_GOTO the one at an index */
@@ -1503,7 +1519,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CALL_INTRIN(CALL_STRING_CHAR_CODE_AT, bsIntrinStringCharCodeAt)
         BS_CALL_INTRIN(CALL_STRING_LENGTH, bsIntrinStringLength)
         BS_CALL_INTRIN(CALL_STRING_SLICE, bsIntrinStringSlice)
-        BS_CALL_INTRIN(CALL_SYSTEM_GLOBAL_SET, bsIntrinSystemGlobalSet)
+        BS_CALL_INTRIN(CALL_MATH, bsIntrinMath)
 #undef BS_CALL_INTRIN
 
         BS_CASE(CALL_NAME)

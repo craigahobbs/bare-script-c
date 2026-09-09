@@ -248,12 +248,15 @@ TEST(runtime_functions)
     ASSERT_VALUE(bsTestExecute("x = 1\nfunction f():\n    systemGlobalSet('x', 2)\n    return systemGlobalGet('x')\n"
                                "endfunction\nreturn [f(), x]"), "[2,2]");
 
-    /* systemGlobalSet's opcode: a cold site, then a warm site's in-place update, a new global, and a non-string name */
-    ASSERT_VALUE(bsTestExecute("x = 1\nfunction f(n, v):\n    return systemGlobalSet(n, v)\nendfunction\n"
-                               "return [f('x', 2), x, f('x', 3), x, f('y', 4), y, f('y', 5), y, f(1, 6)]"),
-                 "[2,2,3,3,4,4,5,5,null]");
-    ASSERT_VALUE(bsTestExecute("function systemGlobalSet(n, v):\n    return 'mine'\nendfunction\n"
-                               "return systemGlobalSet('x', 1)"), "\"mine\"");
+    /* The math opcode: each function warm, then the misses - a non-number, a negative square root */
+    ASSERT_VALUE(bsTestExecute("function f(x):\n    return [mathAbs(x), mathCeil(x), mathFloor(x), mathSign(x), mathSqrt(x)]\n"
+                               "endfunction\nf(4)\nreturn [f(-2.5), f(2.25), f(0), f('x'), f(-4)]"),
+                 "[[2.5,-2,-3,-1,null],[2.25,3,2,1,1.5],[0,0,0,0,0],[null,null,null,null,null],[4,-4,-4,-1,null]]");
+    ASSERT_VALUE(bsTestExecute("function mathSqrt(x):\n    return 'mine'\nendfunction\nreturn [mathSqrt(4), mathAbs(-1)]"),
+                 "[\"mine\",1]");
+    /* Same site after an in-place override - no global added in between, so the site stays warm */
+    ASSERT_VALUE(bsTestExecute("function f(x):\n    return mathAbs(x)\nendfunction\na = 0\na = f(-1)\nmathAbs = 3\n"
+                               "return [a, f(-1)]"), "[1,null]");
 
     /* Function-local jump labels */
     ASSERT_VALUE(bsTestExecute("function f():\n    i = 0\n    loop:\n    i = i + 1\n"

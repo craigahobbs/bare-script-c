@@ -165,7 +165,8 @@ interpreter's borrowed reads of the call's operands, the return is owned. Two di
 The library's functions open with the `BS_ARGS(model, failValue)` macro. Functions with an
 `intrinsic` id are handled by the interpreter on their happy-path argument shapes; a miss falls
 through to the function itself. The single-shape intrinsics (`arrayGet`, `arrayLength`, `arrayPush`,
-`arraySet`, `objectGet`, `objectHas`, `objectSet`, `stringCharCodeAt`, `stringLength`, `stringSlice`, `systemGlobalSet`) compile to call opcodes of their own
+`arraySet`, `objectGet`, `objectHas`, `objectSet`, `stringCharCodeAt`, `stringLength`, `stringSlice`,
+and the one-argument math functions, which share one opcode) compile to call opcodes of their own
 (`bsCallOpcode` in `src/model.c`, the `bsIntrin*` functions in `src/runtime.c`), guarded by the
 site's *warm* cache - valid for the activation's globals object, its global carrying that intrinsic
 id - with a cold site, or one an expression's locals object could shadow, taking the general call,
@@ -310,7 +311,10 @@ Profile first, change what the profile names, measure, keep or revert:
   fused call instruction that loads simple arguments; an intrinsic express lane in the call path
   (it did not replicate); a lazily built lookup table for large objects; caching the coverage
   slot pointer per `bsRunCode` entry; a JSON needs-escape table; larger array free-list classes;
-  allocation-free object comparison.
+  allocation-free object comparison; copying a function's constants into its frame with a loop
+  instead of memcpy (schemaValidate +4.8%, the parser tests +1%); changing code the interpreter loop
+  inlines - the array buffer pool, the intrinsic switch's bodies - without keeping the changed
+  bodies out of line (nbody moved +0.7..1.5% on unrelated layout churn until they were `BS_NOINLINE`).
 - The perfx suite (`make perfx`) is the yardstick for container-heavy code - `nbody` and
   `pathfind` spend their time in `objectGet`/`arrayGet` calls - where the include suite is
   parser-bound.

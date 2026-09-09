@@ -1243,7 +1243,8 @@ static uint8_t bsCallOpcode(const char *name, size_t argCount)
         {"objectGet", 2, 3, BS_OP_CALL_OBJECT_GET}, {"objectHas", 2, 2, BS_OP_CALL_OBJECT_HAS},
         {"objectSet", 3, 3, BS_OP_CALL_OBJECT_SET}, {"stringCharCodeAt", 2, 2, BS_OP_CALL_STRING_CHAR_CODE_AT},
         {"stringLength", 1, 1, BS_OP_CALL_STRING_LENGTH}, {"stringSlice", 2, 3, BS_OP_CALL_STRING_SLICE},
-        {"systemGlobalSet", 2, 2, BS_OP_CALL_SYSTEM_GLOBAL_SET}
+        {"mathAbs", 1, 1, BS_OP_CALL_MATH}, {"mathCeil", 1, 1, BS_OP_CALL_MATH}, {"mathFloor", 1, 1, BS_OP_CALL_MATH},
+        {"mathSign", 1, 1, BS_OP_CALL_MATH}, {"mathSqrt", 1, 1, BS_OP_CALL_MATH}
     };
     for (size_t ix = 0; ix < sizeof(table) / sizeof(table[0]); ix++) {
         if (argCount >= table[ix].argMin && argCount <= table[ix].argMax && bsNameIs(name, table[ix].name)) {
@@ -1549,7 +1550,7 @@ static void bsCodeRelocateConstants(BSInst *inst, size_t count, uint16_t base)
             /* The line word that follows is not operands, and a is the label's name index */
             pc++;
         } else if (op == BS_OP_CALL_NAME || op == BS_OP_CALL_SLOT ||
-                   (op >= BS_OP_CALL_ARRAY_GET && op <= BS_OP_CALL_SYSTEM_GLOBAL_SET)) {
+                   (op >= BS_OP_CALL_ARRAY_GET && op <= BS_OP_CALL_MATH)) {
             /* The argument operands, three per data word - an unused field is zero, which names a slot */
             size_t argCount = inst[pc].c;
             for (size_t ix = 0; ix < argCount; ix += BS_OPERANDS_PER_DATA) {

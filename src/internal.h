@@ -212,7 +212,7 @@ enum {
     BS_OP_CALL_STRING_CHAR_CODE_AT,
     BS_OP_CALL_STRING_LENGTH,
     BS_OP_CALL_STRING_SLICE,
-    BS_OP_CALL_SYSTEM_GLOBAL_SET,
+    BS_OP_CALL_MATH,   /* one of the one-argument math intrinsics, told apart by the site's function */
     /*
      * A jump on a comparison: if b op c, pc = the target in the DATA word that follows, else past
      * that word. A jump on a comparison being true takes the comparison's own opcode, a jump on it
