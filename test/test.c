@@ -80,12 +80,33 @@ void bsTestFail(const char *file, int line, const char *format, ...)
 }
 
 
-bool bsTestStringEqual(const char *actual, const char *expected)
+static bool bsTestStringEqual(const char *actual, const char *expected)
 {
     if (actual == NULL || expected == NULL) {
         return actual == expected;
     }
     return strcmp(actual, expected) == 0;
+}
+
+
+void bsTestCheck(const char *file, int line, bool ok, const char *message)
+{
+    if (!ok) {
+        bsTestFail(file, line, "%s", message);
+    } else {
+        bsTestPass();
+    }
+}
+
+
+void bsTestAssertContains(const char *file, int line, const char *subject, const char *haystack, const char *needle,
+                          bool expected)
+{
+    if ((strstr(haystack, needle) != NULL) != expected) {
+        bsTestFail(file, line, "%s - actual \"%s\"", subject, haystack);
+    } else {
+        bsTestPass();
+    }
 }
 
 
@@ -276,11 +297,10 @@ int bsTestRun(const char *filter, bool quiet)
 {
     size_t testCount = 0;
     size_t failCount = 0;
-    BSTestCase *testCase;
     double timeBegin = bsTestNow();
 
     bsTestQuiet = quiet;
-    for (testCase = bsTestHead; testCase != NULL; testCase = testCase->next) {
+    for (BSTestCase *testCase = bsTestHead; testCase != NULL; testCase = testCase->next) {
         if (filter != NULL && strstr(testCase->name, filter) == NULL) {
             continue;
         }
@@ -339,15 +359,6 @@ int bsTestRun(const char *filter, bool quiet)
     }
     printf("OK\n");
     return 0;
-}
-
-
-char *bsTestStrdup(const char *text)
-{
-    size_t size = strlen(text) + 1;
-    char *result = malloc(size);
-    memcpy(result, text, size);
-    return result;
 }
 
 

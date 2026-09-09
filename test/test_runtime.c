@@ -679,7 +679,7 @@ TEST(runtime_includes)
     /* An include with a URL function */
     options = bsTestFetchOptions();
     options->urlFn = bsUrlFileRelative;
-    options->urlData = bsTestStrdup("dir/script.bare");
+    options->urlData = strdup("dir/script.bare");
     options->urlDataFree = free;
     ASSERT_VALUE(bsTestExecuteOptions("include 'a.bare'\nreturn includedGlobal", options), "\"included\"");
     bsOptionsFree(options);

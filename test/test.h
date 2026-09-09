@@ -54,17 +54,10 @@ void bsTestPass(void);
  * Assertions
  */
 
-#define ASSERT_TRUE(expr) \
-    do { \
-        if (!(expr)) { bsTestFail(__FILE__, __LINE__, "ASSERT_TRUE(%s) failed", #expr); } \
-        else { bsTestPass(); } \
-    } while (0)
-
-#define ASSERT_FALSE(expr) \
-    do { \
-        if (expr) { bsTestFail(__FILE__, __LINE__, "ASSERT_FALSE(%s) failed", #expr); } \
-        else { bsTestPass(); } \
-    } while (0)
+#define ASSERT_TRUE(expr) bsTestCheck(__FILE__, __LINE__, (expr), "ASSERT_TRUE(" #expr ") failed")
+#define ASSERT_FALSE(expr) bsTestCheck(__FILE__, __LINE__, !(expr), "ASSERT_FALSE(" #expr ") failed")
+#define ASSERT_NULL(expr) bsTestCheck(__FILE__, __LINE__, (expr) == NULL, "ASSERT_NULL(" #expr ") failed")
+#define ASSERT_NOT_NULL(expr) bsTestCheck(__FILE__, __LINE__, (expr) != NULL, "ASSERT_NOT_NULL(" #expr ") failed")
 
 #define ASSERT_INT_EQ(actual, expected) \
     do { \
@@ -87,44 +80,11 @@ void bsTestPass(void);
     } while (0)
 
 #define ASSERT_STR_CONTAINS(haystack, needle) \
-    do { \
-        const char *bsHaystack_ = (haystack); \
-        const char *bsNeedle_ = (needle); \
-        if (strstr(bsHaystack_, bsNeedle_) == NULL) { \
-            bsTestFail(__FILE__, __LINE__, "%s contains %s - actual \"%s\"", #haystack, #needle, bsHaystack_); \
-        } else { bsTestPass(); } \
-    } while (0)
-
+    bsTestAssertContains(__FILE__, __LINE__, #haystack " contains " #needle, (haystack), (needle), true)
 #define ASSERT_STR_NOT_CONTAINS(haystack, needle) \
-    do { \
-        const char *bsHaystack_ = (haystack); \
-        const char *bsNeedle_ = (needle); \
-        if (strstr(bsHaystack_, bsNeedle_) != NULL) { \
-            bsTestFail(__FILE__, __LINE__, "%s omits %s - actual \"%s\"", #haystack, #needle, bsHaystack_); \
-        } else { bsTestPass(); } \
-    } while (0)
-
+    bsTestAssertContains(__FILE__, __LINE__, #haystack " omits " #needle, (haystack), (needle), false)
 #define ASSERT_STR_EQ(actual, expected) \
-    do { \
-        const char *bsActual_ = (actual); \
-        const char *bsExpected_ = (expected); \
-        if (!bsTestStringEqual(bsActual_, bsExpected_)) { \
-            bsTestFail(__FILE__, __LINE__, "%s == %s\n    actual:   %s\n    expected: %s", \
-                       #actual, #expected, bsActual_ ? bsActual_ : "(null)", bsExpected_ ? bsExpected_ : "(null)"); \
-        } else { bsTestPass(); } \
-    } while (0)
-
-#define ASSERT_NULL(expr) \
-    do { \
-        if ((expr) != NULL) { bsTestFail(__FILE__, __LINE__, "ASSERT_NULL(%s) failed", #expr); } \
-        else { bsTestPass(); } \
-    } while (0)
-
-#define ASSERT_NOT_NULL(expr) \
-    do { \
-        if ((expr) == NULL) { bsTestFail(__FILE__, __LINE__, "ASSERT_NOT_NULL(%s) failed", #expr); } \
-        else { bsTestPass(); } \
-    } while (0)
+    bsTestAssertEqual(__FILE__, __LINE__, #actual " == " #expected, (actual), (expected))
 
 /* Assert a value's JSON representation - the value is released */
 #define ASSERT_VALUE(value, expectedJSON) bsTestAssertValue(__FILE__, __LINE__, #value, (value), (expectedJSON))
@@ -138,7 +98,9 @@ void bsTestPass(void);
     bsTestAssertValueString(__FILE__, __LINE__, #value, (value), (expectedString))
 
 
-bool bsTestStringEqual(const char *actual, const char *expected);
+void bsTestCheck(const char *file, int line, bool ok, const char *message);
+void bsTestAssertContains(const char *file, int line, const char *subject, const char *haystack, const char *needle,
+                          bool expected);
 void bsTestAssertValue(const char *file, int line, const char *expr, BSValue value, const char *expectedJSON);
 void bsTestAssertValueString(const char *file, int line, const char *expr, BSValue value, const char *expected);
 
@@ -182,9 +144,6 @@ const char *bsTestTempDir(void);
 
 /* Write a temporary file; returns a static path valid until the next call */
 const char *bsTestTempFile(const char *name, const char *text);
-
-/* Duplicate a string with malloc, for data the runtime or the test frees */
-char *bsTestStrdup(const char *text);
 
 /* Set the keys "format" makes of each index in [begin, end) to their index */
 void bsTestObjectFill(BSValue object, const char *format, int begin, int end);

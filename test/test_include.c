@@ -434,10 +434,9 @@ TEST(include_gzip_invalid)
         "H4sIAAAAAAAA/wAAAAAAAAAA",
         "H4sICAAAAAAA/2FiAAAAAAAAAAA=",
         "H4sIEAAAAAAA/wEBAQEB",
-        "H4sIAgAAAAAA/wE=",
-        NULL
+        "H4sIAgAAAAAA/wE="
     };
-    for (size_t ix = 0; invalid[ix] != NULL; ix++) {
+    for (size_t ix = 0; ix < sizeof(invalid) / sizeof(invalid[0]); ix++) {
         char *decoded = bsTestGzipDecode(invalid[ix]);
         ASSERT_NULL(decoded);
         free(decoded);

@@ -624,8 +624,7 @@ TEST(parser_bootstrap_errors)
 TEST(parser_lint)
 {
     static const char *text = "function f():\n    unused = 1\n    return 2\nendfunction\n1 + 2\n";
-    BSParserError error = {0};
-    BSScript *script = bsParseScript(text, strlen(text), 1, "lint.bare", &error);
+    BSScript *script = bsParseScript(text, strlen(text), 1, "lint.bare", NULL);
     ASSERT_NOT_NULL(script);
 
     BSValue warnings = bsLintScript(script, bsNull());
@@ -647,7 +646,7 @@ TEST(parser_lint)
 
     /* A clean script lints without warnings */
     static const char *clean = "function f(a):\n    return a\nendfunction\nreturn f(1)\n";
-    script = bsParseScript(clean, strlen(clean), 1, "clean.bare", &error);
+    script = bsParseScript(clean, strlen(clean), 1, "clean.bare", NULL);
     warnings = bsLintScript(script, bsNull());
     ASSERT_VALUE(warnings, "[]");
     bsScriptRelease(script);

@@ -131,8 +131,7 @@ static void bsParserErrorInternal(BSParserError *error, const char *scriptName, 
 static BSValue bsParserCall(BSBootstrap *bootstrap, const char *functionName, const BSValue *args,
                             size_t argCount, const char *scriptName, BSParserError *error)
 {
-    BSValue globals = bsBootstrapGlobals(bootstrap);
-    BSValue function = bsObjectGet(globals, functionName);
+    BSValue function = bsObjectGet(bsBootstrapGlobals(bootstrap), functionName);
     BSValue result = bsFunctionCall(function, args, argCount, bootstrap->options);
     const char *runtimeError = bsErrorGet(bootstrap->options);
     if (runtimeError != NULL) {

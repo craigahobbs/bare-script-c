@@ -228,7 +228,6 @@ TEST(bare_include_path)
 
     unsetenv("BARESCRIPT_INCLUDE_PATH");
     ASSERT_INT_EQ(bsTestBare("-c", "systemLog('ok')", NULL), 0);
-
 }
 
 
@@ -282,7 +281,6 @@ TEST(bare_static_analysis)
     /* Static analysis continues past a failing script */
     ASSERT_INT_EQ(bsTestBare("-s", "-c", "1 + 2", "-c", "return 1", NULL), 1);
     ASSERT_STR_CONTAINS(bsTestMainText(), "<string2>");
-
 }
 
 

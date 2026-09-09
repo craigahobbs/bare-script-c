@@ -43,10 +43,10 @@ typedef enum {
 #define BS_ARG_INTEGER       0x02 /* the number argument must be an integer */
 #define BS_ARG_LAST_ARRAY    0x04 /* collect the remaining arguments into an array */
 #define BS_ARG_HAS_DEFAULT   0x08 /* the argument has a default number value */
-#define BS_ARG_LT            0x10
-#define BS_ARG_LTE           0x20
-#define BS_ARG_GT            0x40
-#define BS_ARG_GTE           0x80
+#define BS_ARG_LT            0x10 /* the number argument must be less than the limit */
+#define BS_ARG_LTE           0x20 /* ... less than or equal to the limit */
+#define BS_ARG_GT            0x40 /* ... greater than the limit */
+#define BS_ARG_GTE           0x80 /* ... greater than or equal to the limit */
 
 typedef struct BSArgModel {
     const char *name;

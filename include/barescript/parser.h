@@ -62,11 +62,11 @@ typedef struct BSCallCache {
  *
  * Instructions are eight-byte register instructions whose operands name a register - a slot, a
  * temporary, or a constant (a string literal or a number) copied in after them; the names call,
- * load, and store sites refer to are in names[]. STMT operands index
- * cover[], borrowed statement models from the parser output - NULL once the script forgets its
- * model, until coverage recording restores them. CALL_NAME, LOAD_NAME, and STORE_NAME operands
- * index caches[], one per site. tempCount is the temporaries the chunk needs past its slots,
- * computed at emit time, so the interpreter allocates its registers once.
+ * load, and store sites refer to are in names[]. STMT operands index cover[], borrowed statement
+ * models from the parser output - NULL once the script forgets its model, until coverage recording
+ * restores them. CALL_NAME, LOAD_NAME, and STORE_NAME operands index caches[], one per site.
+ * tempCount is the temporaries the chunk needs past its slots, computed at emit time, so the
+ * interpreter allocates its registers once.
  */
 typedef struct BSInst BSInst;
 
@@ -167,8 +167,9 @@ void bsParserCleanup(void);
 
 /*
  * Parse a BareScript expression. Returns the parsed expression, or NULL on error, in which case
- * "error" is filled in and must be freed with bsParserErrorFree. If "arrayLiterals" is true,
- * "[...]" parses as an array literal rather than a bracketed variable name.
+ * "error" is filled in and must be freed with bsParserErrorFree. A "lineNumber" of 0 means the
+ * expression has no line. If "arrayLiterals" is true, "[...]" parses as an array literal rather
+ * than a bracketed variable name.
  */
 BSExpr *bsParseExpression(const char *text, size_t size, int lineNumber, const char *scriptName,
                           bool arrayLiterals, BSParserError *error);

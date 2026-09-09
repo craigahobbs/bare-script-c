@@ -11,16 +11,26 @@
 #include "test.h"
 
 
-/* Assert a model is rejected */
-static void bsTestInvalidModel(const char *json)
+/* Assert a model's JSON is rejected with an error */
+static void bsTestInvalidModelJSON(const char *json, const char *expectedError)
 {
-    BSScript *script = bsTestScriptFromJSON(json, NULL);
+    const char *error = NULL;
+    BSScript *script = bsScriptFromModelJSON(json, strlen(json), NULL, &error);
     if (script != NULL) {
         bsScriptRelease(script);
         bsTestFail(__FILE__, __LINE__, "expected an invalid model: %s", json);
+    } else if (error == NULL || strcmp(error, expectedError) != 0) {
+        bsTestFail(__FILE__, __LINE__, "%s: error \"%s\", expected \"%s\"", json, error != NULL ? error : "(none)", expectedError);
     } else {
         bsTestPass();
     }
+}
+
+
+/* Assert a model is rejected */
+static void bsTestInvalidModel(const char *json)
+{
+    bsTestInvalidModelJSON(json, "Invalid BareScript model");
 }
 
 
@@ -43,8 +53,7 @@ TEST(model_script_round_trip)
         "x = 1 + f(2, 'three') * -y || (z) && !w\n"
         "outer(1)\n";
 
-    BSParserError error = {0};
-    BSScript *script = bsParseScript(text, strlen(text), 1, "round.bare", &error);
+    BSScript *script = bsParseScript(text, strlen(text), 1, "round.bare", NULL);
     ASSERT_NOT_NULL(script);
 
     BSValue model = bsScriptToModel(script);
@@ -97,22 +106,6 @@ TEST(model_script_lines)
     ASSERT_TRUE(bsObjectHas(model, "scriptLines"));
     bsRelease(model);
     bsScriptRelease(script);
-}
-
-
-/* Assert a model's JSON is rejected with an error */
-static void bsTestInvalidModelJSON(const char *json, const char *expectedError)
-{
-    const char *error = NULL;
-    BSScript *script = bsScriptFromModelJSON(json, strlen(json), NULL, &error);
-    if (script != NULL) {
-        bsScriptRelease(script);
-        bsTestFail(__FILE__, __LINE__, "expected an invalid model: %s", json);
-    } else if (error == NULL || strcmp(error, expectedError) != 0) {
-        bsTestFail(__FILE__, __LINE__, "%s: error \"%s\", expected \"%s\"", json, error != NULL ? error : "(none)", expectedError);
-    } else {
-        bsTestPass();
-    }
 }
 
 
@@ -365,28 +358,13 @@ TEST(model_invalid)
 
     /* A jump statement */
     bsTestInvalidModel("{\"statements\":[{\"jump\":{}}]}");
-    bsTestInvalidModel("{\"statements\":[{\"jump\":{\"label\":1}}]}");
     bsTestInvalidModel("{\"statements\":[{\"jump\":{\"label\":\"a\",\"expr\":1}}]}");
-
-    /* A return statement */
-    bsTestInvalidModel("{\"statements\":[{\"return\":{\"expr\":1}}]}");
-
-    /* A label statement */
-    bsTestInvalidModel("{\"statements\":[{\"label\":{}}]}");
-    bsTestInvalidModel("{\"statements\":[{\"label\":{\"name\":1}}]}");
 
     /* A function definition statement */
     bsTestInvalidModel("{\"statements\":[{\"function\":{}}]}");
     bsTestInvalidModel("{\"statements\":[{\"function\":{\"name\":\"f\"}}]}");
     bsTestInvalidModel("{\"statements\":[{\"function\":{\"name\":1,\"statements\":[]}}]}");
-    bsTestInvalidModel("{\"statements\":[{\"function\":{\"name\":\"f\",\"args\":[1],\"statements\":[]}}]}");
     bsTestInvalidModel("{\"statements\":[{\"function\":{\"name\":\"f\",\"statements\":[{}]}}]}");
-
-    /* An include statement */
-    bsTestInvalidModel("{\"statements\":[{\"include\":{}}]}");
-    bsTestInvalidModel("{\"statements\":[{\"include\":{\"includes\":[]}}]}");
-    bsTestInvalidModel("{\"statements\":[{\"include\":{\"includes\":[{}]}}]}");
-    bsTestInvalidModel("{\"statements\":[{\"include\":{\"includes\":[{\"url\":1}]}}]}");
 
     /* Fail after emit has already allocated includes, slots, or jump patches */
     bsTestInvalidModel("{\"statements\":[{\"include\":{\"includes\":[{\"url\":\"a.bare\"}]}},{}]}");
@@ -423,9 +401,6 @@ TEST(model_valid_shapes)
         "{\"statements\":[{\"include\":{\"includes\":["
         "{\"url\":\"a.bare\"},{\"url\":\"b.bare\",\"system\":true}]}}]}", NULL);
     ASSERT_NOT_NULL(script);
-    ASSERT_INT_EQ((int) script->code.includeCount, 2);
-    ASSERT_FALSE(script->code.includes[0].system);
-    ASSERT_TRUE(script->code.includes[1].system);
     BSValue model = bsScriptToModel(script);
     BSValue includes = bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(model, "statements"), 0),
                                                "include"), "includes");

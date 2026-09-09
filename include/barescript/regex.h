@@ -8,7 +8,7 @@
  * subset of JavaScript regular expression syntax that BareScript's regex library functions expose:
  *
  *   literals  . [...] [^...] ( ) (?: ) (?<name> ) (?= ) (?! ) (?<= ) (?<! ) |
- *   escapes   \d \D \w \W \s \S \b \B \n \r \t \f \v \0 \xHH \uHHHH \k<name> \1 - \9
+ *   escapes   \d \D \w \W \s \S \b \B \n \r \t \f \v \0 \NNN \cX \xHH \uHHHH \k<name> \N
  *   repeats   * + ? {n} {n,} {n,m} and their lazy "?" forms
  *   anchors   ^ $
  *   flags     i (case-insensitive), m (multi-line), s (dot matches newline)

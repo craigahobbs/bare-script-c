@@ -193,6 +193,7 @@ int bsMain(int argc, char **argv)
         options->debug = debug;
         options->fetchFn = bsFetchReadWrite;
         options->logFn = bsLogStdout;
+        options->urlDataFree = free;
 
         /* The shared globals, which each script executes against unless static analysis isolates it */
         BSValue sharedGlobals = bsRetain(options->globals);
@@ -276,7 +277,7 @@ int bsMain(int argc, char **argv)
              */
             BSValue staticGlobals = bsNull();
             bool runtimeFailed = false;
-            bool isUserScript = (ix >= ixUserScript);
+            bool isUserScript = ix >= ixUserScript;
             if (!staticAnalysis || staticExecute) {
                 /*
                  * Under static analysis each user script executes against its own copy of the
@@ -293,11 +294,9 @@ int bsMain(int argc, char **argv)
                     bsAssign(&options->globals, bsRetain(sharedGlobals));
                 }
 
-                char *scriptPath = sources[ix].isFile ? bsCliStrdup(sources[ix].value) : NULL;
                 free(options->urlData);
-                options->urlFn = scriptPath != NULL ? bsUrlFileRelative : NULL;
-                options->urlData = scriptPath;
-                options->urlDataFree = scriptPath != NULL ? free : NULL;
+                options->urlData = sources[ix].isFile ? bsCliStrdup(sources[ix].value) : NULL;
+                options->urlFn = options->urlData != NULL ? bsUrlFileRelative : NULL;
 
                 int64_t timeBegin = bsDatetimeNow();
                 BSValue result = bsExecuteScript(script, options);

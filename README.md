@@ -235,6 +235,9 @@ int main(void)
     bsRelease(result);
     bsOptionsFree(options);
     bsScriptRelease(script);
+    bsParserCleanup();
+    bsSystemIncludeClear();
+    bsIncludeCleanup();
     bsLibraryCleanup();
     bsValueCleanup();
     return 0;

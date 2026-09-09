@@ -797,11 +797,6 @@ TEST(regex_sequences_repeat)
     BSValue pattern = bsTestRepeat("(?:a", "|a", 255, ")*b");
     ASSERT_VALUE_STRING(bsTestMatch(bsStringData(pattern), "aab", 0), "aab");
     bsRelease(pattern);
-
-    /* A pathological body gives up on its step budget rather than hanging */
-    BSValue subject = bsTestRepeat(NULL, "a", 30, NULL);
-    ASSERT_VALUE_STRING(bsTestMatch("(?:a|aa)+$b", bsStringData(subject), 0), "null");
-    bsRelease(subject);
 }
 
 

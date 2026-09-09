@@ -47,7 +47,7 @@ unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t
 BSScript *bsIncludeScript(const char *name);
 
 
-/* Regex value reference counting - implemented by the regex engine */
+/* Free a regex value whose reference count reached zero (regex.c) */
 void bsRegexDestroy(BSValue value);
 
 /* Free the thread's regex match scratch buffers (regex.c) */
@@ -227,7 +227,6 @@ enum {
     BS_OP_JUMP_GE,
     BS_OP_DATA = 0xFF  /* call operands, a comparison jump's target, or a trap's line; never dispatched */
 };
-
 
 
 /*

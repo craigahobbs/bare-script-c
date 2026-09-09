@@ -355,7 +355,7 @@ JavaScript's syntax that the regex functions expose, with JavaScript's matching 
 | ---------- | ------------------------------------------------------------------------- |
 | Literals   | `.` `[...]` `[^...]` `( )` `(?: )` `(?<name> )` alternation               |
 | Lookaround | `(?= )` `(?! )` `(?<= )` `(?<! )`                                          |
-| Escapes    | `\d \D \w \W \s \S \b \B \n \r \t \f \v \0 \xHH \uHHHH \k<name>` `\1`-`\9` |
+| Escapes    | `\d \D \w \W \s \S \b \B \n \r \t \f \v \0 \NNN \cX \xHH \uHHHH \k<name> \N`      |
 | Repeats    | `* + ? {n} {n,} {n,m}` and their lazy `?` forms                             |
 | Anchors    | `^ $`                                                                      |
 | Flags      | `i` (case-insensitive), `m` (multi-line), `s` (dot matches newline)         |

@@ -633,7 +633,7 @@ TEST(library_system_fetch)
     options = bsTestOptions();
     options->fetchFn = bsTestLibraryFetchFn;
     options->urlFn = bsUrlFileRelative;
-    options->urlData = bsTestStrdup("dir/script.bare");
+    options->urlData = strdup("dir/script.bare");
     options->urlDataFree = free;
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch('a')", options), "\"url=dir/a\"");
     bsOptionsFree(options);
