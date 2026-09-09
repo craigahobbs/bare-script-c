@@ -4,9 +4,9 @@
 /*
  * The BareScript library
  *
- * Every library function has the same shape: validate the arguments against a static argument
- * model - the BS_ARGS macro - then do the work with the validated values, which are borrowed
- * except for a BS_ARG_LAST_ARRAY argument, which the function releases. bsArgsValidate applies
+ * Every library function with typed arguments has the same shape: validate them against a static
+ * argument model - the BS_ARGS macro - then do the work with the validated values, which are
+ * borrowed except for a BS_ARG_LAST_ARRAY argument, which the function releases. bsArgsValidate applies
  * the same coercion and range rules as the reference implementations' value_args_validate,
  * including the documented per-function error return values.
  */
@@ -219,6 +219,13 @@ static const BSArgModel valueArgs[] = {{"value", BS_ARG_ANY, 0, 0, 0, 0, 0}};
  */
 
 
+/* Whether a value is an integer number in [0, max] */
+static bool bsIsIntegerTo(BSValue value, double max)
+{
+    return value.type == BS_NUMBER && trunc(value.u.number) == value.u.number && value.u.number >= 0 &&
+        value.u.number <= max;
+}
+
 BSValue bsStringSlice(BSValue string, size_t begin, size_t end)
 {
     const BSString *source = string.u.string;
@@ -272,20 +279,6 @@ static bool bsArgSlice(BSValue startValue, BSValue endValue, size_t count, size_
 }
 
 
-/* Pop or shift: take the array's last or first value and delete it. Fails if the array is empty. */
-static BSValue bsArrayTake(BSValue array, bool last, BSOptions *options)
-{
-    size_t count = bsArrayCount(array);
-    if (count == 0) {
-        return bsArgFail(options, "array", array, bsNull());
-    }
-    size_t index = last ? count - 1 : 0;
-    BSValue result = bsRetain(bsArrayGet(array, index));
-    bsArrayDelete(array, index);
-    return result;
-}
-
-
 /*
  * Array functions
  */
@@ -308,11 +301,6 @@ static BSValue bsFnArrayDelete(const BSValue *args, size_t argCount, BSOptions *
 }
 
 
-static const BSArgModel arrayExtendArgs[] = {
-    {"array", BS_ARG_ARRAY, 0, 0, 0, 0, 0},
-    {"array2", BS_ARG_ARRAY, 0, 0, 0, 0, 0}
-};
-
 static void bsArrayPushRange(BSValue dest, BSValue src, size_t start, size_t end)
 {
     for (size_t ix = start; ix < end; ix++) {
@@ -320,6 +308,11 @@ static void bsArrayPushRange(BSValue dest, BSValue src, size_t start, size_t end
     }
 }
 
+
+static const BSArgModel arrayExtendArgs[] = {
+    {"array", BS_ARG_ARRAY, 0, 0, 0, 0, 0},
+    {"array2", BS_ARG_ARRAY, 0, 0, 0, 0, 0}
+};
 
 static BSValue bsFnArrayExtend(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
@@ -473,6 +466,20 @@ BS_NOINLINE BSValue bsArrayNewSizeValue(size_t size, BSValue value)
 }
 
 BS_LIBRARY_FN(bsFnArrayNewSize, arrayNewSizeArgs, bsNull(), bsArrayNewSizeValue((size_t) values[0].u.number, values[1]))
+
+
+/* Pop or shift: take the array's last or first value and delete it. Fails if the array is empty. */
+static BSValue bsArrayTake(BSValue array, bool last, BSOptions *options)
+{
+    size_t count = bsArrayCount(array);
+    if (count == 0) {
+        return bsArgFail(options, "array", array, bsNull());
+    }
+    size_t index = last ? count - 1 : 0;
+    BSValue result = bsRetain(bsArrayGet(array, index));
+    bsArrayDelete(array, index);
+    return result;
+}
 
 
 BS_LIBRARY_FN(bsFnArrayPop, arrayArgs, bsNull(), bsArrayTake(values[0], true, options))
@@ -1369,8 +1376,7 @@ static BSValue bsFnStringDecode(const BSValue *args, size_t argCount, BSOptions 
     char *buffer = bsAlloc(count);
     for (size_t ix = 0; ix < count; ix++) {
         BSValue byte = bsArrayGet(values[0], ix);
-        if (byte.type != BS_NUMBER || trunc(byte.u.number) != byte.u.number ||
-            byte.u.number < 0 || byte.u.number > 255) {
+        if (!bsIsIntegerTo(byte, 255)) {
             free(buffer);
             return bsNull();
         }
@@ -1415,8 +1421,7 @@ static BSValue bsFnStringFromCharCode(const BSValue *args, size_t argCount, BSOp
     char utf8[4];
     for (size_t ix = 0; ix < argCount; ix++) {
         BSValue code = args[ix];
-        if (code.type != BS_NUMBER || trunc(code.u.number) != code.u.number || code.u.number < 0 ||
-            code.u.number > 0x10FFFF) {
+        if (!bsIsIntegerTo(code, 0x10FFFF)) {
             bsSBFree(&sb);
             return bsArgFail(options, "charCodes", code, bsNull());
         }
@@ -2042,7 +2047,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
 
 
 /*
- * The library function value cache
+ * Library initialization - the function values, the match keys, and the type names
  *
  * Library function values are created once per thread and shared by every globals object on it,
  * so a library function has a stable identity - which systemIs relies on, and which lets an

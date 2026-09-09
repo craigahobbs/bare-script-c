@@ -138,8 +138,12 @@ TEST(model_operand_limits)
     bsTestInvalidModel(bsStringData(json));
     bsRelease(json);
 
-    /* A chunk holds at most 32768 includes */
+    /* A chunk holds at most 32768 includes - a function body's chunk too */
     json = bsTestRepeat("{\"statements\":[{\"include\":{\"includes\":[{\"url\":\"a.bare\"}", ",{\"url\":\"a.bare\"}", 32768, "]}}]}");
+    bsTestInvalidModel(bsStringData(json));
+    bsRelease(json);
+    json = bsTestRepeat("{\"statements\":[{\"function\":{\"name\":\"f\",\"args\":[],\"statements\":[{\"include\":{\"includes\":[{\"url\":\"a.bare\"}",
+                        ",{\"url\":\"a.bare\"}", 32768, "]}}]}}]}");
     bsTestInvalidModel(bsStringData(json));
     bsRelease(json);
 

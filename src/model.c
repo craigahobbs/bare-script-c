@@ -18,56 +18,6 @@
 
 
 
-void bsScriptForgetModel(BSScript *script)
-{
-    bsRelease(script->model);
-    script->model = bsNull();
-
-    /* The chunks' statement models are borrowed from the model - bsScriptRestoreCover brings them back */
-    free(script->code.cover);
-    script->code.cover = NULL;
-    for (size_t ix = 0; ix < script->functionCount; ix++) {
-        free(script->functions[ix]->code.cover);
-        script->functions[ix]->code.cover = NULL;
-    }
-}
-
-
-/* Move a chunk's statement models from a freshly compiled twin of the same model - unless the
-   script's lines no longer parse to it */
-static bool bsCodeTakeCover(BSCode *code, BSCode *twin)
-{
-    if (twin->coverCount != code->coverCount) {
-        return false;
-    }
-    code->cover = twin->cover;
-    twin->cover = NULL;
-    return true;
-}
-
-
-bool bsScriptRestoreCover(BSScript *script)
-{
-    /* Parse the lines again and compile the model once more - its chunks mirror this script's */
-    BSValue model = bsScriptReparse(script);
-    BSScript *twin = model.type == BS_OBJECT ? bsScriptFromModel(model, NULL) : NULL;
-    bool restored = twin != NULL && twin->functionCount == script->functionCount &&
-        bsCodeTakeCover(&script->code, &twin->code);
-    for (size_t ix = 0; restored && ix < script->functionCount; ix++) {
-        restored = bsCodeTakeCover(&script->functions[ix]->code, &twin->functions[ix]->code);
-    }
-    if (restored) {
-        bsRelease(script->model);
-        script->model = bsRetain(model);
-    }
-    if (twin != NULL) {
-        bsScriptRelease(twin);
-    }
-    bsRelease(model);
-    return restored;
-}
-
-
 static void bsCodeFree(BSCode *code)
 {
     free(code->inst);
@@ -141,7 +91,7 @@ void bsScriptRelease(BSScript *script)
 
 
 /*
- * Emit
+ * The model keys
  */
 
 
@@ -213,7 +163,7 @@ static BSValue bsInternName(BSValue name)
 
 
 /*
- * The syntax tree the emitter compiles
+ * The syntax tree
  *
  * A statement is loaded into an arena of nodes - from the parser's model objects, or straight
  * from a bundled include's binary model, which then builds no objects at all - emitted, and the
@@ -774,7 +724,7 @@ static uint16_t bsEmitName(BSEmit *e, BSValue name)
     if (index.type == BS_NUMBER) {
         return (uint16_t) index.u.number;
     }
-    bsEmitLimit(e, e->nameCount, 0xffffu);
+    bsEmitLimit(e, e->nameCount, BS_INDEX_MAX);
     bsObjectSetString(e->nameMap, name, bsNumber((double) e->nameCount));
     BS_GROW(e->names, e->nameCount, e->nameCap, 8);
     e->names[e->nameCount] = bsRetain(name);
@@ -1205,7 +1155,7 @@ static void bsEmitIfTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t dst)
 {
     uint32_t cond = ast->nodes[call].a;
     if (cond == 0) {
-        bsEmitInst(e, BS_OP_MOVE, dst, BS_OPERAND_NULL, 0);
+        bsEmitArgOrNull(e, ast, 0, dst);
         return;
     }
     uint32_t then = ast->nodes[cond].next;
@@ -1389,6 +1339,22 @@ static void bsEmitExprDiscard(BSEmit *e, const BSAst *ast, uint32_t id)
 }
 
 
+int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc)
+{
+    size_t low = 0;
+    size_t high = count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if (pcs[middle] <= pc) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return low == 0 ? 0 : lines[low - 1];
+}
+
+
 /* Record a statement's model and line */
 static void bsEmitCover(BSEmit *e, const BSNode *node)
 {
@@ -1461,8 +1427,8 @@ static void bsEmitStatement(BSEmit *e, const BSAst *ast, uint32_t id)
         bsEmitFunction(e, ast, id);
         return;
 
-    default: {
-        /* An include statement: one instruction runs the statement's includes, which fetch together */
+    case BS_NODE_INCLUDE: {
+        /* One instruction runs the statement's includes, which fetch together */
         size_t first = e->includeCount;
         for (uint32_t item = node->a; item != 0; item = ast->nodes[item].next) {
             bsEmitLimit(e, e->includeCount, BS_OPERAND_MAX);
@@ -1487,22 +1453,6 @@ static void bsEmitStatements(BSEmit *e, const BSAst *ast, const uint32_t *statem
         }
         bsEmitStatement(e, ast, statements[ix]);
     }
-}
-
-
-int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc)
-{
-    size_t low = 0;
-    size_t high = count;
-    while (low < high) {
-        size_t middle = low + (high - low) / 2;
-        if (pcs[middle] <= pc) {
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-    return low == 0 ? 0 : lines[low - 1];
 }
 
 
@@ -1657,7 +1607,8 @@ static void bsEmitFunction(BSEmit *e, const BSAst *ast, uint32_t id)
     bsAssignedAnalyze(&body, ast, statements, count, def->argCount);
     bsEmitStatements(&body, ast, statements, count);
     free(statements);
-    if (!bsEmitEnd(&body, true, &def->code, BS_OPERAND_NULL) || index > 0xffffu) {
+    bsEmitLimit(e, index, BS_INDEX_MAX);
+    if (!bsEmitEnd(&body, true, &def->code, BS_OPERAND_NULL)) {
         /* The body overflowed an operand space, so the script is invalid */
         e->overflow = true;
         return;
@@ -1687,31 +1638,27 @@ BSExpr *bsExprFromModel(BSValue model)
 }
 
 
-/* A new script with no name, no lines, and no model */
-static BSScript *bsScriptNew(void)
+/* A new script with no name and no model, keeping "lines" - its source lines array, or none */
+static BSScript *bsScriptNew(BSValue lines)
 {
     BSScript *script = bsAlloc(sizeof(BSScript));
     memset(script, 0, sizeof(*script));
     script->refcount = 1;
     script->startLineNumber = 1;
-    script->scriptLines = bsArrayNew();
+    script->scriptLines = lines.type == BS_ARRAY ? bsRetain(lines) : bsArrayNew();
     return script;
 }
 
 
-/* Take a script's name, lines, and system flag from its model's members; "scriptName" overrides the name */
+/* Take a script's name and system flag from its model's members; "scriptName" overrides the name */
 static void bsScriptInfo(BSScript *script, BSValue model, const char *scriptName)
 {
     script->system = bsValueBoolean(bsObjectGetString(model, bsKeys.system));
     BSValue modelName = bsObjectGetString(model, bsKeys.scriptName);
     if (scriptName != NULL) {
-        bsAssign(&script->scriptName, bsStringNew(scriptName));
+        script->scriptName = bsStringNew(scriptName);
     } else if (modelName.type == BS_STRING) {
-        bsAssign(&script->scriptName, bsRetain(modelName));
-    }
-    BSValue scriptLines = bsObjectGetString(model, bsKeys.scriptLines);
-    if (scriptLines.type == BS_ARRAY) {
-        bsAssign(&script->scriptLines, bsRetain(scriptLines));
+        script->scriptName = bsRetain(modelName);
     }
 }
 
@@ -1727,7 +1674,7 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
         return NULL;
     }
 
-    BSScript *script = bsScriptNew();
+    BSScript *script = bsScriptNew(bsObjectGetString(model, bsKeys.scriptLines));
     script->model = bsRetain(model);
     bsScriptInfo(script, model, scriptName);
 
@@ -1789,6 +1736,11 @@ BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scrip
  * operator, left, right), 7 a unary operator (the operator, the operand), 8 a group (the
  * expression). The table's strings are interned once, so a name costs one reference per use.
  * A read past the end, an unknown byte, or a reference past the table fails the whole model.
+ */
+
+/*
+ * A child is read into a local before it is stored in its parent node: the read may grow the arena,
+ * and C does not order an assignment's two sides
  */
 
 #define BS_MODEL_DEPTH_MAX 1000
@@ -2067,7 +2019,7 @@ BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const 
 
     /* Each statement is read, emitted, and dropped from the arena before the next - with no
        statement markers, the binary models being the bundled library's, which is system code */
-    BSScript *script = bsScriptNew();
+    BSScript *script = bsScriptNew(bsNull());
     script->system = true;
     size_t functionCap = 0;
     BSEmit e;
@@ -2094,8 +2046,58 @@ BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const 
         bsScriptRelease(script);
         return NULL;
     }
-    bsAssign(&script->scriptName, bsStringNew(scriptName));
+    script->scriptName = bsStringNew(scriptName);
     return script;
+}
+
+
+void bsScriptForgetModel(BSScript *script)
+{
+    bsRelease(script->model);
+    script->model = bsNull();
+
+    /* The chunks' statement models are borrowed from the model - bsScriptRestoreCover brings them back */
+    free(script->code.cover);
+    script->code.cover = NULL;
+    for (size_t ix = 0; ix < script->functionCount; ix++) {
+        free(script->functions[ix]->code.cover);
+        script->functions[ix]->code.cover = NULL;
+    }
+}
+
+
+/* Move a chunk's statement models from a freshly compiled twin of the same model - unless the
+   script's lines no longer parse to it */
+static bool bsCodeTakeCover(BSCode *code, BSCode *twin)
+{
+    if (twin->coverCount != code->coverCount) {
+        return false;
+    }
+    code->cover = twin->cover;
+    twin->cover = NULL;
+    return true;
+}
+
+
+bool bsScriptRestoreCover(BSScript *script)
+{
+    /* Parse the lines again and compile the model once more - its chunks mirror this script's */
+    BSValue model = bsScriptReparse(script);
+    BSScript *twin = model.type == BS_OBJECT ? bsScriptFromModel(model, NULL) : NULL;
+    bool restored = twin != NULL && twin->functionCount == script->functionCount &&
+        bsCodeTakeCover(&script->code, &twin->code);
+    for (size_t ix = 0; restored && ix < script->functionCount; ix++) {
+        restored = bsCodeTakeCover(&script->functions[ix]->code, &twin->functions[ix]->code);
+    }
+    if (restored) {
+        bsRelease(script->model);
+        script->model = bsRetain(model);
+    }
+    if (twin != NULL) {
+        bsScriptRelease(twin);
+    }
+    bsRelease(model);
+    return restored;
 }
 
 

@@ -338,6 +338,7 @@ struct BSInst {
 #define BS_OPERAND_CONST 0x8000u           /* while emitting, an operand naming a constant rather than a register */
 #define BS_OPERAND_MAX 0x7fffu             /* the largest register or constant index an operand can name */
 #define BS_OPERAND_INDEX(o) ((o) & BS_OPERAND_MAX)
+#define BS_INDEX_MAX 0xffffu                /* the largest name or function index an instruction's a field holds */
 #define BS_REG_DISCARD 0xffffu              /* a call destination that drops the result */
 #define BS_OPERANDS_PER_DATA 3              /* call argument operands per DATA word */
 
