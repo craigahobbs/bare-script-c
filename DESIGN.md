@@ -283,10 +283,14 @@ The encoding, written by `bin/includeSource.bare` and read by `bsScriptFromModel
 reader interns each once and a use costs one reference; then the statements. Counts, lengths,
 indexes, and line numbers are LEB128 varints, a string a table index, a statement a kind byte and
 its members, an expression a tag byte and its members, with an integer a zigzag varint and any
-other number its shortest text. The models are gzip-compressed at level 9 by `gzip.bare`
-(`gzipCompress` / `gzipUncompress`, byte arrays in and out) and embedded as `unsigned char` arrays.
-That compresses about 601 KB of include library source to about 159 KB of gzip - against 204 KB
-for the same models as JSON.
+other number its shortest text. The models are deflated as gzip streams and embedded as
+`unsigned char` arrays. The generator's compressor is `gzip.bare`'s hash-chain matcher and bit
+writer with Huffman codes fitted to each model - a dynamic block (RFC 1951, 3.2.7), or the fixed
+code when that is smaller - which `gzip.bare` itself, writing fixed codes only, cannot produce;
+the runtime's inflater decodes fixed and dynamic blocks through one table-driven Huffman decoder
+and nothing else, since a stored block is never written. That compresses about 601 KB of include
+library source to about 140 KB - against 159 KB with fixed codes and 204 KB for the same models
+as JSON.
 
 `src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
 fresh clone builds with no bootstrap. `make includes` regenerates them by running

@@ -56,8 +56,9 @@ perf` merges their results when present.
   once.
 - `lib/include/*.bare` and `lib/include/test/*` are **vendored from the reference** - do not edit
   them to make a test pass; fix the C instead.
-- Bundled include models are gzip-compressed by `gzip.bare` and embedded as byte arrays;
-  regenerate with `make includes` after changing `lib/include/` or `bin/includeSource.bare`.
+- Bundled include models are deflated by `bin/includeSource.bare`'s own compressor (`gzip.bare`'s
+  matcher with dynamic Huffman codes) and embedded as byte arrays; regenerate with `make includes`
+  after changing `lib/include/` or `bin/includeSource.bare`.
 - `jsonParse` and `regexNew` messages match CPython's `json` and `re` exactly, including
   positions. Where they cannot, it is because BareScript specifies *JavaScript* regular
   expressions; those divergences are tabulated in README's **Compatibility** section. Verify

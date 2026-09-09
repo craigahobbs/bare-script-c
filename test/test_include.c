@@ -394,6 +394,11 @@ TEST(include_gzip_decode)
     } cases[] = {
         {"H4sIAAAAAAAC/8tIzcnJBwCGphA2BQAAAA==", "hello"},
         {"H4sIAAAAAAAA/wMAAAAAAAAAAAA=", ""},
+        {"H4sIAAAAAAAC/0sEAgBF5ZitBAAAAA==", "aaaa"},   /* a match overlapping its own output */
+        {"H4sIAAAAAAAC/0pMAiwxCQCmCtc2BAAAAA==", "abab"},   /* two fixed blocks */
+        {"H4sIAAAAAAAC/wXBgQAAAACAINb2h7ikAaYK1zYEAAAA", "abab"},   /* dynamic codes */
+        {"H4sIAAAAAAAC/wXBBQEAAACDsKwX+ldgS3cBEc2C7QQAAAA=", "abcd"},   /* dynamic codes with a repeated length */
+        {"H4sIAAAAAAAC/wXBAYEkSRDEMKyOrJ69f/4AJPX/fwDUIigdAwAAAA==", "aji"},    /* dynamic codes longer than the decode table */
     };
     for (size_t ix = 0; ix < sizeof(cases) / sizeof(cases[0]); ix++) {
         char *decoded = bsTestGzipDecode(cases[ix].gzip);
@@ -434,7 +439,30 @@ TEST(include_gzip_invalid)
         "H4sIAAAAAAAA/wAAAAAAAAAA",
         "H4sICAAAAAAA/2FiAAAAAAAAAAA=",
         "H4sIEAAAAAAA/wEBAQEB",
-        "H4sIAgAAAAAA/wE="
+        "H4sIAgAAAAAA/wE=",
+        "H4sIAAAAAAAC/wemCtc2BAAAAA==",                     /* a block of type 3 */
+        "H4sIAAAAAAAC/wEEAPv/YWJhYqYK1zYEAAAA",                 /* a stored block */
+        "H4sIAAAAAAAC/wMAAAAAAAAAAA==",                     /* the input ends inside a literal code */
+        "H4sIAAAAAAAC/0tMAgBtSIOeAQAAAA==",                     /* a literal past the declared size */
+        "H4sIAAAAAAAC/xsDpgrXNgQAAAA=",                     /* the fixed code's literal 286 */
+        "H4sIAAAAAAAC/0sEPqYK1zYEAAAA",                     /* the fixed code's distance 30 */
+        "H4sIAAAAAAAC/0tEAqYK1zYEAAAA",                     /* the input ends inside a length's extra bits */
+        "H4sIAAAAAAAC/0sEEqYK1zYEAAAA",                     /* the input ends inside a distance's extra bits */
+        "H4sIAAAAAAAC/wMCAKYK1zYEAAAA",                     /* a match before any output */
+        "H4sIAAAAAAAC/0sEAgBF5ZitAQAAAA==",                 /* a match past the declared size */
+        "H4sIAAAAAAAC//XBgQAAAACAINb2h7ikAaYK1zYEAAAA",         /* a dynamic block with more than 286 literal codes */
+        "H4sIAAAAAAAC/wXBBQEAAACDMMkqDaYK1zYEAAAA",             /* a dynamic block repeating a length before any */
+        "H4sIAAAAAAAC/wXBgQAAAACAIH9/f2mmCtc2BAAAAA==",         /* a dynamic block's lengths past their count */
+        "H4sIAAAAAAAC/wXBgQAAAACAINbK36HSpgrXNgQAAAA=",         /* an over-subscribed literal code */
+        "H4sIAAAAAAAC/wXBgQAAAABAEFb9ISINpgrXNgQAAAA=",         /* an over-subscribed code length code */
+        "H4sIAAAAAAAC/wWmCtc2BAAAAA==",                     /* the input ends inside a dynamic block's header */
+        "H4sIAAAAAAAC/wXBAYEkSRDEMKyOrJ69f/4AJPUBQ7636AEAAAA=",  /* the input ends inside a code longer than the decode table */
+        "H4sIAAAAAAAC/ztx4sSJEyeQyVSSpggAAAA=",         /* the input ends inside a length's extra bits, on a byte */
+        "H4sIAAAAAAAC/zuRCCTJVJKmCAAAAA==",             /* the input ends inside a distance's extra bits, on a byte */
+        "H4sIAAAAAAAC/wXAJEnJVJKmCAAAAA==",             /* the input ends inside the code length code's lengths */
+        "H4sIAAAAAAAC/wUgJAnJVJKmCAAAAA==",             /* the input ends before a dynamic block's run-length symbols */
+        "H4sIAAAAAAAC/wXBgQAABAAAINb9JS7JVJKmCAAAAA==",     /* the input ends inside a long code no shorter code matches */
+        "H4sIAAAAAAAC/wXBgQAABAAAINb9JS7//8lUkqYIAAAA"  /* bits no code of an incomplete code matches */
     };
     for (size_t ix = 0; ix < sizeof(invalid) / sizeof(invalid[0]); ix++) {
         char *decoded = bsTestGzipDecode(invalid[ix]);

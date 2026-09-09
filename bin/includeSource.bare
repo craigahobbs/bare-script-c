@@ -6,7 +6,8 @@
 #
 # Each include library script is embedded as its parser-compiled script model in the binary
 # encoding below, which the runtime reads straight into its compiler with no parser and no model
-# objects, gzip-compressed at level 9 with gzip.bare and emitted as a C unsigned-char array. Each
+# objects, deflated as a gzip stream - gzip.bare's matcher with Huffman codes fitted to the model,
+# which the runtime's inflater decodes - and emitted as a C unsigned-char array. Each
 # array but the required includes' is compiled out by defining NO_BARESCRIPT_INCLUDE_<NAME>. The
 # unit tests decode every bundled model with the runtime's inflater and decoder, so the models are
 # not verified here.
@@ -183,6 +184,305 @@ function includeSourceEncode(model):
 endfunction
 
 
+# Huffman code lengths for "freqs", none longer than "maxBits" - a symbol with no uses gets none
+function includeSourceHuffmanLengths(freqs, maxBits):
+    n = arrayLength(freqs)
+    while true:
+        # The leaves in use; a code needs at least two so every code word has a bit
+        nodes = []
+        for freq, symbol in freqs:
+            if freq > 0:
+                arrayPush(nodes, [freq, symbol, null, null])
+            endif
+        endfor
+        if arrayLength(nodes) == 0:
+            return arrayNewSize(n, 0)
+        endif
+        if arrayLength(nodes) == 1:
+            lengths = arrayNewSize(n, 0)
+            arraySet(lengths, arrayGet(arrayGet(nodes, 0), 1), 1)
+            return lengths
+        endif
+
+        # Combine the two lightest nodes until one remains
+        while arrayLength(nodes) > 1:
+            arraySort(nodes, includeSourceNodeCompare)
+            a = arrayPop(nodes)
+            b = arrayPop(nodes)
+            arrayPush(nodes, [arrayGet(a, 0) + arrayGet(b, 0), null, a, b])
+        endwhile
+
+        # The leaf depths are the code lengths; too deep, halve the counts and retry
+        lengths = arrayNewSize(n, 0)
+        deepest = includeSourceTreeDepths(arrayGet(nodes, 0), 0, lengths)
+        if deepest <= maxBits:
+            return lengths
+        endif
+        scaled = []
+        for freq in freqs:
+            arrayPush(scaled, if(freq > 0, mathFloor((freq + 1) / 2), 0))
+        endfor
+        freqs = scaled
+    endwhile
+endfunction
+
+
+# Sort nodes heaviest first, so the two lightest pop off the end
+function includeSourceNodeCompare(a, b):
+    return arrayGet(b, 0) - arrayGet(a, 0)
+endfunction
+
+
+# Record each leaf's depth in "lengths"; returns the deepest
+function includeSourceTreeDepths(node, depth, lengths):
+    if arrayGet(node, 1) != null:
+        arraySet(lengths, arrayGet(node, 1), depth)
+        return depth
+    endif
+    left = includeSourceTreeDepths(arrayGet(node, 2), depth + 1, lengths)
+    right = includeSourceTreeDepths(arrayGet(node, 3), depth + 1, lengths)
+    return mathMax(left, right)
+endfunction
+
+
+# The literal and match tokens of "bytes" - gzip.bare's matcher at its top level: a literal is
+# its byte, a match is 256 + (length - 3) * 32768 + (dist - 1)
+function includeSourceTokens(bytes):
+    tokens = []
+    n = arrayLength(bytes)
+    chain = arrayGet(gzipChainByLevel, 9)
+    window = gzipWindow
+    minMatch = gzipMinMatch
+    maxMatch = gzipMaxMatch
+    hashMask = gzipHashMask
+    hashTable = arrayNewSize(gzipHashSize, -1)
+    prev = arrayNewSize(n, -1)
+    ix = 0
+    while ix < n:
+        if ix + minMatch <= n:
+            h = ((arrayGet(bytes, ix) * 31 + arrayGet(bytes, ix + 1)) * 31 + \
+                arrayGet(bytes, ix + 2)) & hashMask
+            bestLen = minMatch - 1
+            bestDist = 0
+            pos = arrayGet(hashTable, h)
+            chainIx = 0
+            maxLen = n - ix
+            if maxLen > maxMatch:
+                maxLen = maxMatch
+            endif
+            while pos >= 0 && chainIx < chain && ix - pos <= window:
+                if arrayGet(bytes, pos) == arrayGet(bytes, ix) && \
+                        arrayGet(bytes, pos + bestLen) == arrayGet(bytes, ix + bestLen):
+                    matchLen = 0
+                    while matchLen < maxLen && \
+                            arrayGet(bytes, ix + matchLen) == arrayGet(bytes, pos + matchLen):
+                        matchLen = matchLen + 1
+                    endwhile
+                    if matchLen > bestLen:
+                        bestLen = matchLen
+                        bestDist = ix - pos
+                        if bestLen == maxLen:
+                            break
+                        endif
+                    endif
+                endif
+                pos = arrayGet(prev, pos)
+                chainIx = chainIx + 1
+            endwhile
+            arraySet(prev, ix, arrayGet(hashTable, h))
+            arraySet(hashTable, h, ix)
+            if bestLen >= minMatch:
+                arrayPush(tokens, 256 + (bestLen - 3) * 32768 + (bestDist - 1))
+                k = 1
+                while k < bestLen:
+                    j = ix + k
+                    if j + minMatch <= n:
+                        hj = ((arrayGet(bytes, j) * 31 + arrayGet(bytes, j + 1)) * 31 + \
+                            arrayGet(bytes, j + 2)) & hashMask
+                        arraySet(prev, j, arrayGet(hashTable, hj))
+                        arraySet(hashTable, hj, j)
+                    endif
+                    k = k + 1
+                endwhile
+                ix = ix + bestLen
+                continue
+            endif
+        endif
+        arrayPush(tokens, arrayGet(bytes, ix))
+        ix = ix + 1
+    endwhile
+    return tokens
+endfunction
+
+
+# The run-length form of the code lengths "lengths" (RFC 1951, 3.2.7): each item is a symbol
+# 0-18 and, for 16, 17, and 18, its extra bits value
+function includeSourceLengthRuns(lengths):
+    runs = []
+    n = arrayLength(lengths)
+    ix = 0
+    while ix < n:
+        length = arrayGet(lengths, ix)
+        run = 1
+        while ix + run < n && arrayGet(lengths, ix + run) == length:
+            run = run + 1
+        endwhile
+        if length == 0 && run >= 3:
+            count = mathMin(run, 138)
+            if count >= 11:
+                arrayPush(runs, [18, count - 11])
+            else:
+                arrayPush(runs, [17, count - 3])
+            endif
+            ix = ix + count
+        elif length != 0 && run >= 4:
+            arrayPush(runs, [length, 0])
+            count = mathMin(run - 1, 6)
+            arrayPush(runs, [16, count - 3])
+            ix = ix + 1 + count
+        else:
+            arrayPush(runs, [length, 0])
+            ix = ix + 1
+        endif
+    endwhile
+    return runs
+endfunction
+
+
+# The bit cost of the tokens under a code
+function includeSourceTokensCost(tokens, litLengths, distLengths):
+    cost = 0
+    for token in tokens:
+        if token < 256:
+            cost = cost + arrayGet(litLengths, token)
+        else:
+            length = mathFloor((token - 256) / 32768) + 3
+            dist = (token - 256) % 32768 + 1
+            lenIx = arrayGet(gzipLengthCodeOf, length)
+            distIx = gzipDistCode(dist)
+            cost = cost + arrayGet(litLengths, 257 + lenIx) + arrayGet(gzipLengthExtra, lenIx) + \
+                arrayGet(distLengths, distIx) + arrayGet(gzipDistExtra, distIx)
+        endif
+    endfor
+    return cost + arrayGet(litLengths, 256)
+endfunction
+
+
+# Write the tokens with the literal/length and distance codes, then the end of the block
+function includeSourceWriteTokens(writer, tokens, litTable, distTable):
+    for token in tokens:
+        if token < 256:
+            gzipHuffmanWrite(writer, litTable, token)
+        else:
+            length = mathFloor((token - 256) / 32768) + 3
+            dist = (token - 256) % 32768 + 1
+            lenIx = arrayGet(gzipLengthCodeOf, length)
+            gzipHuffmanWrite(writer, litTable, 257 + lenIx)
+            gzipWriteBits(writer, length - arrayGet(gzipLengthBase, lenIx), arrayGet(gzipLengthExtra, lenIx))
+            distIx = gzipDistCode(dist)
+            gzipHuffmanWrite(writer, distTable, distIx)
+            gzipWriteBits(writer, dist - arrayGet(gzipDistBase, distIx), arrayGet(gzipDistExtra, distIx))
+        endif
+    endfor
+    gzipHuffmanWrite(writer, litTable, 256)
+endfunction
+
+
+# Compress "bytes" as a gzip stream: one final block, with Huffman codes fitted to the data when
+# that is smaller than the fixed codes - gzip.bare's matcher, bit writer, and code tables
+function includeSourceGzip(bytes):
+    tokens = includeSourceTokens(bytes)
+
+    # The token frequencies and the codes they fit
+    litFreqs = arrayNewSize(286, 0)
+    distFreqs = arrayNewSize(30, 0)
+    for token in tokens:
+        if token < 256:
+            arraySet(litFreqs, token, arrayGet(litFreqs, token) + 1)
+        else:
+            lenIx = arrayGet(gzipLengthCodeOf, mathFloor((token - 256) / 32768) + 3)
+            distIx = gzipDistCode((token - 256) % 32768 + 1)
+            arraySet(litFreqs, 257 + lenIx, arrayGet(litFreqs, 257 + lenIx) + 1)
+            arraySet(distFreqs, distIx, arrayGet(distFreqs, distIx) + 1)
+        endif
+    endfor
+    arraySet(litFreqs, 256, 1)
+    litLengths = includeSourceHuffmanLengths(litFreqs, 15)
+    distLengths = includeSourceHuffmanLengths(distFreqs, 15)
+
+    # A distance code with fewer than two code words gets two of one bit, so it is complete
+    distUsed = 0
+    for length in distLengths:
+        distUsed = distUsed + if(length, 1, 0)
+    endfor
+    if distUsed < 2:
+        arraySet(distLengths, 0, 1)
+        arraySet(distLengths, 1, 1)
+    endif
+
+    # The code lengths, run-length coded, and the code-length code that carries them
+    nlit = 286
+    while nlit > 257 && !arrayGet(litLengths, nlit - 1):
+        nlit = nlit - 1
+    endwhile
+    ndist = 30
+    while ndist > 1 && !arrayGet(distLengths, ndist - 1):
+        ndist = ndist - 1
+    endwhile
+    runs = includeSourceLengthRuns(arrayExtend(arraySlice(litLengths, 0, nlit), arraySlice(distLengths, 0, ndist)))
+    codeFreqs = arrayNewSize(19, 0)
+    for run in runs:
+        arraySet(codeFreqs, arrayGet(run, 0), arrayGet(codeFreqs, arrayGet(run, 0)) + 1)
+    endfor
+    codeLengths = includeSourceHuffmanLengths(codeFreqs, 7)
+    ncode = 19
+    while ncode > 4 && !arrayGet(codeLengths, arrayGet(gzipCodeLengthOrder, ncode - 1)):
+        ncode = ncode - 1
+    endwhile
+
+    # The dynamic block, unless the fixed code is smaller
+    dynamicCost = 14 + 3 * ncode + includeSourceTokensCost(tokens, litLengths, distLengths)
+    for run in runs:
+        symbol = arrayGet(run, 0)
+        dynamicCost = dynamicCost + arrayGet(codeLengths, symbol) + \
+            if(symbol == 16, 2, if(symbol == 17, 3, if(symbol == 18, 7, 0)))
+    endfor
+    fixedCost = includeSourceTokensCost(tokens, gzipStaticLitLengthsNew(), gzipStaticDistLengthsNew())
+    writer = gzipWriterNew()
+    if fixedCost <= dynamicCost:
+        gzipWriteBits(writer, 3, 3)
+        includeSourceWriteTokens(writer, tokens, gzipStaticLit, gzipStaticDist)
+    else:
+        gzipWriteBits(writer, 5, 3)
+        gzipWriteBits(writer, nlit - 257, 5)
+        gzipWriteBits(writer, ndist - 1, 5)
+        gzipWriteBits(writer, ncode - 4, 4)
+        ix = 0
+        while ix < ncode:
+            gzipWriteBits(writer, arrayGet(codeLengths, arrayGet(gzipCodeLengthOrder, ix)), 3)
+            ix = ix + 1
+        endwhile
+        codeTable = gzipHuffmanBuild(codeLengths)
+        for run in runs:
+            symbol = arrayGet(run, 0)
+            gzipHuffmanWrite(writer, codeTable, symbol)
+            if symbol >= 16:
+                gzipWriteBits(writer, arrayGet(run, 1), if(symbol == 16, 2, if(symbol == 17, 3, 7)))
+            endif
+        endfor
+        includeSourceWriteTokens(writer, tokens, gzipHuffmanBuild(litLengths), gzipHuffmanBuild(distLengths))
+    endif
+    gzipWriteFlush(writer)
+
+    # The gzip header, the block, and the CRC and size trailer
+    gzipBytes = [31, 139, 8, 0, 0, 0, 0, 0, 2, 255]
+    arrayExtend(gzipBytes, arrayGet(writer, 0))
+    arrayExtend(gzipBytes, gzipU32Bytes(gzipCrc32Bytes(bytes)))
+    arrayExtend(gzipBytes, gzipU32Bytes(arrayLength(bytes)))
+    return gzipBytes
+endfunction
+
+
 # The required includes - the runtime bootstraps its parser and linter from these, so they are
 # always bundled
 includeSourceRequired = ['barescriptParser.bare', 'barescriptLint.bare']
@@ -271,8 +571,8 @@ async function main():
         endif
         model = objectGet(parseResult, 'result')
 
-        # Encode the model, compress it at gzip level 9 (max), and emit the bytes as a C initializer, 18 per line
-        compressed = gzipCompress(includeSourceEncode(model), 9)
+        # Encode the model, compress it, and emit the bytes as a C initializer, 18 per line
+        compressed = includeSourceGzip(includeSourceEncode(model))
         totalSource = totalSource + stringLength(text)
         totalEncoded = totalEncoded + arrayLength(compressed)
         lines = []

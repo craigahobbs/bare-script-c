@@ -5,7 +5,7 @@
  * The bundled BareScript include library
  *
  * Each include library script is embedded in the library as its parser-compiled binary script
- * model, gzip-compressed (see bin/includeSource.bare). A model is inflated on first use; its compiled
+ * model, deflated (see bin/includeSource.bare). A model is inflated on first use; its compiled
  * script is cached, and the bytes are kept only for bsIncludeSource's callers.
  */
 
@@ -63,67 +63,104 @@ static int bsGetBits(BSBits *bits, int n)
 
 
 /*
- * The fixed Huffman code (RFC 1951, 3.2.6) - the only one the bundled models use, since gzip.bare
- * writes a single fixed-code block. A code's bits arrive most-significant first, so the decode
- * table is indexed by the next nine stream bits in stream order and holds each code's length and
- * symbol; the code is complete, so every index has an entry.
+ * A canonical Huffman code (RFC 1951, 3.2.2) as a decoding table: the codes of up to nine bits
+ * in a table indexed by the next nine stream bits, in stream order, holding each code's length
+ * and symbol; the longer codes - rare, and absent from the fixed code - decode a bit at a time
+ * from the per-length counts and the symbols in code order.
  */
-#define BS_FIXED_TABLE_BITS 9
-#define BS_FIXED_TABLE_SIZE (1u << BS_FIXED_TABLE_BITS)
+#define BS_HUFFMAN_TABLE_BITS 9
+#define BS_HUFFMAN_TABLE_SIZE (1u << BS_HUFFMAN_TABLE_BITS)
+#define BS_HUFFMAN_MAX_BITS 15
+#define BS_HUFFMAN_MAX_SYMBOLS 288
 
-/* Build the literal/length table: 7 bits code 256-279, 8 bits 0-143 and 280-287, 9 bits 144-255 */
-static void bsFixedTable(uint16_t *table)
+typedef struct {
+    uint16_t table[BS_HUFFMAN_TABLE_SIZE];
+    uint16_t count[BS_HUFFMAN_MAX_BITS + 1];
+    uint16_t symbols[BS_HUFFMAN_MAX_SYMBOLS];
+} BSHuffman;
+
+
+/* Build the decoding table from the symbols' code lengths; false for an over-subscribed code */
+static bool bsHuffmanBuild(BSHuffman *huffman, const unsigned char *lengths, unsigned symbolCount)
 {
-    for (unsigned symbol = 0; symbol < 288; symbol++) {
-        unsigned code;
-        unsigned length;
-        if (symbol < 144) {
-            code = 0x30 + symbol;
-            length = 8;
-        } else if (symbol < 256) {
-            code = 0x190 + symbol - 144;
-            length = 9;
-        } else if (symbol < 280) {
-            code = symbol - 256;
-            length = 7;
-        } else {
-            code = 0xC0 + symbol - 280;
-            length = 8;
+    memset(huffman->count, 0, sizeof(huffman->count));
+    for (unsigned symbol = 0; symbol < symbolCount; symbol++) {
+        huffman->count[lengths[symbol]]++;
+    }
+    huffman->count[0] = 0;
+    int left = 1;
+    uint16_t offsets[BS_HUFFMAN_MAX_BITS + 1];
+    offsets[1] = 0;
+    for (unsigned length = 1; length <= BS_HUFFMAN_MAX_BITS; length++) {
+        left = left * 2 - huffman->count[length];
+        if (left < 0) {
+            return false;
         }
-        unsigned reversed = 0;
-        for (unsigned ix = 0; ix < length; ix++) {
-            reversed |= ((code >> ix) & 1u) << (length - 1 - ix);
-        }
-        for (unsigned index = reversed; index < BS_FIXED_TABLE_SIZE; index += 1u << length) {
-            table[index] = (uint16_t) ((length << BS_FIXED_TABLE_BITS) | symbol);
+        if (length < BS_HUFFMAN_MAX_BITS) {
+            offsets[length + 1] = (uint16_t) (offsets[length] + huffman->count[length]);
         }
     }
+    for (unsigned symbol = 0; symbol < symbolCount; symbol++) {
+        if (lengths[symbol] != 0) {
+            huffman->symbols[offsets[lengths[symbol]]++] = (uint16_t) symbol;
+        }
+    }
+
+    /* The table: each short code's bits reversed into stream order, repeated past its length */
+    memset(huffman->table, 0, sizeof(huffman->table));
+    unsigned code = 0;
+    unsigned index = 0;
+    for (unsigned length = 1; length <= BS_HUFFMAN_TABLE_BITS; length++) {
+        for (unsigned ix = 0; ix < huffman->count[length]; ix++, index++, code++) {
+            unsigned reversed = 0;
+            for (unsigned bit = 0; bit < length; bit++) {
+                reversed |= ((code >> bit) & 1u) << (length - 1 - bit);
+            }
+            for (unsigned at = reversed; at < BS_HUFFMAN_TABLE_SIZE; at += 1u << length) {
+                huffman->table[at] = (uint16_t) ((length << BS_HUFFMAN_TABLE_BITS) | huffman->symbols[index]);
+            }
+        }
+        code <<= 1;
+    }
+    return true;
 }
 
 
-/* Decode a literal/length symbol; -1 at the end of the input */
-static int bsFixedLiteral(BSBits *bits, const uint16_t *table)
+/* Decode a symbol; -1 at the end of the input or for a code the table does not hold */
+static int bsHuffmanDecode(BSBits *bits, const BSHuffman *huffman)
 {
-    bsBitsFill(bits, BS_FIXED_TABLE_BITS);
-    unsigned entry = table[bits->bitBuf & (BS_FIXED_TABLE_SIZE - 1)];
-    int length = (int) (entry >> BS_FIXED_TABLE_BITS);
-    if (length > bits->bitCount) {
-        return -1;
+    bsBitsFill(bits, BS_HUFFMAN_MAX_BITS);
+    unsigned entry = huffman->table[bits->bitBuf & (BS_HUFFMAN_TABLE_SIZE - 1)];
+    if (entry != 0) {
+        int length = (int) (entry >> BS_HUFFMAN_TABLE_BITS);
+        if (length > bits->bitCount) {
+            return -1;
+        }
+        bits->bitBuf >>= length;
+        bits->bitCount -= length;
+        return (int) (entry & (BS_HUFFMAN_TABLE_SIZE - 1));
     }
-    bits->bitBuf >>= length;
-    bits->bitCount -= length;
-    return (int) (entry & (BS_FIXED_TABLE_SIZE - 1));
-}
 
-
-/* Decode a distance symbol - a five-bit code, most-significant bit first; -1 at the end of the input */
-static int bsFixedDistance(BSBits *bits)
-{
-    int value = bsGetBits(bits, 5);
-    if (value < 0) {
-        return -1;
+    /* A code longer than the table: walk the code lengths, one stream bit at a time */
+    int code = 0;
+    int first = 0;
+    int index = 0;
+    for (int length = 1; length <= BS_HUFFMAN_MAX_BITS; length++) {
+        if (length > bits->bitCount) {
+            return -1;
+        }
+        code |= (int) ((bits->bitBuf >> (length - 1)) & 1u);
+        int count = huffman->count[length];
+        if (code - count < first) {
+            bits->bitBuf >>= length;
+            bits->bitCount -= length;
+            return huffman->symbols[index + (code - first)];
+        }
+        index += count;
+        first = (first + count) << 1;
+        code <<= 1;
     }
-    return ((value & 1) << 4) | ((value & 2) << 2) | (value & 4) | ((value & 8) >> 2) | ((value & 16) >> 4);
+    return -1;
 }
 
 
@@ -142,15 +179,16 @@ static const unsigned short bsDistBase[30] = {
     3073, 4097, 6145, 8193, 12289, 16385, 24577
 };
 
+/* The order the code length code's lengths arrive in (RFC 1951, 3.2.7) */
+static const unsigned char bsCodeLengthOrder[19] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
 
-/* Decode one block's codes into "out". Returns the output length, or SIZE_MAX for a malformed stream. */
-static size_t bsInflateCodes(BSBits *bits, unsigned char *out, size_t outCap)
+
+/* Decode one block's codes into "out" past "outLen" bytes. Returns the output length, or SIZE_MAX for a malformed stream. */
+static size_t bsInflateCodes(BSBits *bits, unsigned char *out, size_t outLen, size_t outCap,
+                             const BSHuffman *literals, const BSHuffman *distances)
 {
-    size_t outLen = 0;
-    uint16_t table[BS_FIXED_TABLE_SIZE];
-    bsFixedTable(table);
     for (;;) {
-        int symbol = bsFixedLiteral(bits, table);
+        int symbol = bsHuffmanDecode(bits, literals);
         if (symbol < 0) {
             return SIZE_MAX;
         }
@@ -165,24 +203,24 @@ static size_t bsInflateCodes(BSBits *bits, unsigned char *out, size_t outCap)
             return outLen;
         }
         if (symbol > 285) {
-            return SIZE_MAX; /* GCOV_EXCL_LINE */
+            return SIZE_MAX;
         }
         int extra = bsGetBits(bits, bsLengthExtra[symbol - 257]);
         if (extra < 0) {
-            return SIZE_MAX; /* GCOV_EXCL_LINE */
+            return SIZE_MAX;
         }
         unsigned length = (unsigned) (bsLengthBase[symbol - 257] + extra);
-        int distSymbol = bsFixedDistance(bits);
+        int distSymbol = bsHuffmanDecode(bits, distances);
         if (distSymbol < 0 || distSymbol > 29) {
-            return SIZE_MAX; /* GCOV_EXCL_LINE */
+            return SIZE_MAX;
         }
         extra = bsGetBits(bits, bsDistExtra[distSymbol]);
         if (extra < 0) {
-            return SIZE_MAX; /* GCOV_EXCL_LINE */
+            return SIZE_MAX;
         }
         unsigned distance = (unsigned) (bsDistBase[distSymbol] + extra);
         if (distance > outLen || outLen + length > outCap) {
-            return SIZE_MAX; /* GCOV_EXCL_LINE */
+            return SIZE_MAX;
         }
         size_t src = outLen - distance;
         if (distance >= length) {
@@ -198,6 +236,82 @@ static size_t bsInflateCodes(BSBits *bits, unsigned char *out, size_t outCap)
 }
 
 
+/* Read a dynamic block's code lengths (RFC 1951, 3.2.7) and build its two codes; false if malformed */
+static bool bsInflateDynamicCodes(BSBits *bits, BSHuffman *literals, BSHuffman *distances)
+{
+    int literalCount = bsGetBits(bits, 5);
+    int distanceCount = bsGetBits(bits, 5);
+    int codeCount = bsGetBits(bits, 4);
+    if (literalCount < 0 || distanceCount < 0 || codeCount < 0 || literalCount > 29) {
+        return false;
+    }
+    literalCount += 257;
+    distanceCount += 1;
+    codeCount += 4;
+
+    /* The code length code, then the two codes' lengths under it, with the run-length symbols */
+    unsigned char lengths[286 + 30];
+    memset(lengths, 0, 19);
+    for (int ix = 0; ix < codeCount; ix++) {
+        int length = bsGetBits(bits, 3);
+        if (length < 0) {
+            return false;
+        }
+        lengths[bsCodeLengthOrder[ix]] = (unsigned char) length;
+    }
+    BSHuffman codeLengths;
+    if (!bsHuffmanBuild(&codeLengths, lengths, 19)) {
+        return false;
+    }
+    int total = literalCount + distanceCount;
+    int count = 0;
+    while (count < total) {
+        int symbol = bsHuffmanDecode(bits, &codeLengths);
+        if (symbol < 0) {
+            return false;
+        }
+        if (symbol < 16) {
+            lengths[count++] = (unsigned char) symbol;
+            continue;
+        }
+        unsigned char repeat = 0;
+        int runLength;
+        if (symbol == 16) {
+            if (count == 0) {
+                return false;
+            }
+            repeat = lengths[count - 1];
+            runLength = bsGetBits(bits, 2) + 3;
+        } else if (symbol == 17) {
+            runLength = bsGetBits(bits, 3) + 3;
+        } else {
+            runLength = bsGetBits(bits, 7) + 11;
+        }
+        if (count + runLength > total) {
+            return false;
+        }
+        memset(lengths + count, repeat, (size_t) runLength);
+        count += runLength;
+    }
+    return bsHuffmanBuild(literals, lengths, (unsigned) literalCount) &&
+           bsHuffmanBuild(distances, lengths + literalCount, (unsigned) distanceCount);
+}
+
+
+/* The fixed codes (RFC 1951, 3.2.6): 7 bits code 256-279, 8 bits 0-143 and 280-287, 9 bits 144-255; distances 5 bits */
+static void bsInflateFixedCodes(BSHuffman *literals, BSHuffman *distances)
+{
+    unsigned char lengths[288];
+    memset(lengths, 8, 144);
+    memset(lengths + 144, 9, 112);
+    memset(lengths + 256, 7, 24);
+    memset(lengths + 280, 8, 8);
+    bsHuffmanBuild(literals, lengths, 288);
+    memset(lengths, 5, 32);
+    bsHuffmanBuild(distances, lengths, 32);
+}
+
+
 static uint32_t bsReadU32LE(const unsigned char *data)
 {
     return (uint32_t) data[0] | ((uint32_t) data[1] << 8) | ((uint32_t) data[2] << 16) |
@@ -206,10 +320,10 @@ static uint32_t bsReadU32LE(const unsigned char *data)
 
 
 /*
- * The bundled models are written by gzip.bare's compressor (see bin/includeSource.bare), whose
- * output has one shape: the ten-byte header with no optional fields, a single final block of fixed
- * Huffman codes, and the CRC and size trailer. Only that shape is decoded. The data is compiled in,
- * so the inflated size is the one integrity check it needs; the CRC is not verified. The output is
+ * The bundled models are written by bin/includeSource.bare's compressor: the ten-byte gzip header
+ * with no optional fields, blocks of fixed or dynamic Huffman codes, and the CRC and size trailer.
+ * A stored block is not decoded - the compressor never writes one. The data is compiled in, so the
+ * inflated size is the one integrity check it needs; the CRC is not verified. The output is
  * NUL-terminated past its size.
  */
 unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t *size)
@@ -221,7 +335,26 @@ unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t
     uint32_t isize = bsReadU32LE(src + srcSize - 4);
     unsigned char *out = bsAlloc((size_t) isize + 1);
     BSBits bits = {src + 10, srcSize - 18, 0, 0, 0};
-    if (bsGetBits(&bits, 3) != 3 || bsInflateCodes(&bits, out, isize) != isize) {
+    BSHuffman literals;
+    BSHuffman distances;
+    size_t outLen = 0;
+    int final;
+    do {
+        final = bsGetBits(&bits, 1);
+        int type = bsGetBits(&bits, 2);
+        if (type == 1) {
+            bsInflateFixedCodes(&literals, &distances);
+        } else if (type != 2 || !bsInflateDynamicCodes(&bits, &literals, &distances)) {
+            free(out);
+            return NULL;
+        }
+        outLen = bsInflateCodes(&bits, out, outLen, isize, &literals, &distances);
+        if (outLen == SIZE_MAX) {
+            free(out);
+            return NULL;
+        }
+    } while (final == 0);
+    if (outLen != isize) {
         free(out);
         return NULL;
     }
