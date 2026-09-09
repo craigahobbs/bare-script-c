@@ -187,8 +187,7 @@ BSExpr *bsExprFromModel(BSValue model);
 BSValue bsScriptToModel(const BSScript *script);
 
 /*
- * Compile a script from its model's JSON text a statement at a time, so the model - several times
- * the size of its JSON - is never whole in memory. The script keeps no model; bsScriptToModel
+ * Compile a script from its model's JSON text. The script keeps no model; bsScriptToModel
  * re-parses its lines, if it has them. "scriptName" overrides the model's own name; NULL keeps it.
  * Returns NULL, with "error" set to the JSON or model error, if the text is not a script model.
  */

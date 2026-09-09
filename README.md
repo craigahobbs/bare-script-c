@@ -40,7 +40,7 @@ The reference implementations are in [JavaScript](https://github.com/craigahobbs
 [Python](https://github.com/craigahobbs/bare-script-py). This one produces byte-identical output
 across their 1,407-test suite, with 100% line coverage of its own C. It is also fast and small: on
 real-world code it matches V8's bytecode interpreter and beats CPython, Lua, Ruby, and Perl, in a
-520 KB library with no dependency beyond libm that starts in 3 ms and 3 MB. The measurements are
+470 KB library with no dependency beyond libm that starts in 3 ms and 3 MB. The measurements are
 under [Performance](#performance).
 
 ```sh
@@ -121,7 +121,7 @@ A compiled-out include keeps its registry entry and stub accessor, which return 
 otherwise. There is no dependency tracking: an include that an included script itself includes has
 to be listed with it - `markdownUp.bare` includes four scripts that include five more - and an
 excluded include is missing from every bundled include that includes it. The parser and linter
-alone make a 286 KB release library, against 469 KB with all thirty-two. A change to `INCLUDE` or
+alone make a 286 KB release library, against 470 KB with all thirty-two. A change to `INCLUDE` or
 `INCLUDE_EXCLUDE` needs a `make clean` first, and the test suites need every include.
 
 
@@ -393,7 +393,7 @@ debug messages, which follow the Python implementation - see [Compatibility](#co
 ## Performance
 
 On real-world code this runtime beats V8's bytecode interpreter, CPython, Lua, Ruby, and Perl,
-starts in 3 ms and 2.6 MB, and does it as a plain bytecode interpreter - no JIT - in 224 KB of
+starts in 3 ms and 2.5 MB, and does it as a plain bytecode interpreter - no JIT - in 222 KB of
 code. Two suites back that up: `make perfx`, real-world-like applications ported to six
 languages, and `make perf`, the include library's own suite, which the JavaScript and Python
 implementations also run. Each table's last column scores a language against the best one: its
@@ -491,11 +491,11 @@ report footprint, where the CSV fields repeat.
 
 | This runtime                            |        |
 | --------------------------------------- | -----: |
-| Shared library                          | 520 KB |
-| ... of which compressed include library | 204 KB |
+| Shared library                          | 470 KB |
+| ... of which compressed include library | 159 KB |
 | ... of which Unicode case tables        |   8 KB |
-| ... of which code                       | 224 KB |
-| Empty script, resident set              | 2.6 MB |
+| ... of which code                       | 222 KB |
+| Empty script, resident set              | 2.5 MB |
 | Empty script, peak footprint            | 1.9 MB |
 | `make perf` test, peak                  |   6 MB |
 | Include library test suite, peak        |  36 MB |

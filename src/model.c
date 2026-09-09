@@ -11,6 +11,8 @@
 
 #include <stdlib.h>
 
+#include "barescript/json.h"
+
 #include "internal.h"
 
 
@@ -1798,39 +1800,21 @@ BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
 }
 
 
-/* Emit a streamed statement; an overflow is reported as the decoder's invalid-model error */
-static bool bsEmitStreamedStatement(BSAst *ast, uint32_t statement, void *data)
-{
-    BSEmit *e = data;
-    bsEmitStatement(e, ast, statement);
-    return !e->overflow;
-}
-
-
 BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scriptName, const char **error)
 {
-    bsModelKeysInit();
-    BSScript *script = bsScriptNew();
-    size_t functionCap = 0;
-    BSEmit e;
-    bsEmitInit(&e, script, &functionCap);
-    BSAst ast;
-    bsAstInit(&ast);
-    BSValue rest;
-    bool decoded = bsJSONDecodeScript(text, size, &ast, bsEmitStreamedStatement, &e, &rest, error);
-    bsAstFree(&ast);
-    if (!bsEmitEnd(&e, decoded, &script->code, e.nullConst)) {
-        bsRelease(rest);
-        if (error != NULL && *error == NULL) {
-            *error = "Invalid BareScript model";
+    const char *jsonError = NULL;
+    BSValue model = bsJSONDecode(text, size, &jsonError);
+    BSScript *script = jsonError == NULL ? bsScriptFromModel(model, scriptName) : NULL;
+    bsRelease(model);
+    if (script == NULL) {
+        if (error != NULL) {
+            *error = jsonError != NULL ? jsonError : "Invalid BareScript model";
         }
-        bsScriptRelease(script);
         return NULL;
     }
-    bsScriptInfo(script, rest, scriptName);
-    bsRelease(rest);
-
-    /* The statement models the chunks borrowed were released as they were compiled */
+    if (error != NULL) {
+        *error = NULL;
+    }
     bsScriptForgetModel(script);
     return script;
 }

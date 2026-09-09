@@ -311,7 +311,7 @@ A compiled-out include keeps its registry entry and stub accessor, which return 
 otherwise. There is no dependency tracking: an include that an included script itself includes has
 to be listed with it - `markdownUp.bare` includes four scripts that include five more - and an
 excluded include is missing from every bundled include that includes it. The parser and linter
-alone make a 286 KB release library, against 469 KB with all thirty-two. A change to `INCLUDE` or
+alone make a 286 KB release library, against 470 KB with all thirty-two. A change to `INCLUDE` or
 `INCLUDE_EXCLUDE` needs a `make clean` first, and the test suites need every include.
 
 

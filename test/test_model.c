@@ -115,8 +115,14 @@ static void bsTestInvalidModelJSON(const char *json, const char *expectedError)
 {
     const char *error = NULL;
     BSScript *script = bsScriptFromModelJSON(json, strlen(json), NULL, &error);
-    ASSERT_NULL(script);
-    ASSERT_STR_EQ(error, expectedError);
+    if (script != NULL) {
+        bsScriptRelease(script);
+        bsTestFail(__FILE__, __LINE__, "expected an invalid model: %s", json);
+    } else if (error == NULL || strcmp(error, expectedError) != 0) {
+        bsTestFail(__FILE__, __LINE__, "%s: error \"%s\", expected \"%s\"", json, error != NULL ? error : "(none)", expectedError);
+    } else {
+        bsTestPass();
+    }
 }
 
 
@@ -230,7 +236,7 @@ TEST(model_script_from_json)
 
     /* Malformed JSON and malformed models */
     bsTestInvalidModelJSON("", "Expecting value");
-    bsTestInvalidModelJSON("[]", "Expecting value");
+    bsTestInvalidModelJSON("[]", "Invalid BareScript model");
     bsTestInvalidModelJSON("{", "Expecting property name enclosed in double quotes");
     bsTestInvalidModelJSON("{\"statements\" []}", "Expecting ':' delimiter");
     bsTestInvalidModelJSON("{\"statements\": 5}", "Invalid BareScript model");

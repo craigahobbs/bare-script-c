@@ -88,7 +88,7 @@ no model objects at all (DESIGN.md's **The Parser and Linter** draws it).
 `src/model.c` compiles a statement from a transient syntax tree (`BSAst`, an arena of nodes) to
 bytecode. A parsed script's model objects are loaded into the tree a statement at a time by
 `bsAstStatement`; a bundled include's binary model is read into it by `bsScriptFromModelBinary`,
-and a system include's JSON model by `bsJSONDecodeScript`. The
+and a system include's JSON model is decoded to objects first. The
 loaders reject a malformed model; the emitter assumes a well-formed tree. A script keeps its model
 only where something will read it - the CLI under static analysis, an include while coverage is
 recording; otherwise `bsScriptForgetModel` drops it and `bsScriptToModel` re-parses the retained

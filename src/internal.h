@@ -211,17 +211,6 @@ uint32_t bsAstExpr(BSAst *ast, BSValue model);
  */
 BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const char *scriptName);
 
-/*
- * Decode a script model's JSON - {"statements": [...], ...} - a statement at a time: each element
- * of "statements" is read into "ast", passed to "emit", and the arena reset before the next. The
- * model's other members are returned in "rest", owned. Returns false - with "error" set, "rest"
- * null - on a JSON error, a model without a statements array, a malformed statement, or when
- * "emit" returns false.
- */
-bool bsJSONDecodeScript(const char *text, size_t size, BSAst *ast,
-                        bool (*emit)(BSAst *ast, uint32_t statement, void *data), void *data,
-                        BSValue *rest, const char **error);
-
 
 /*
  * Bytecode: fixed eight-byte register instructions. "a" is the destination register or an index;
