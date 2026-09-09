@@ -168,12 +168,6 @@ TEST(options_fetch_http)
 }
 
 
-TEST(options_version)
-{
-    ASSERT_STR_EQ(bsVersion(), BARESCRIPT_VERSION);
-}
-
-
 /*
  * A minimal HTTP server, for exercising the libcurl fetch function
  */

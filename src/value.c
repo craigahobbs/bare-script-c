@@ -12,7 +12,6 @@
 #include <time.h>
 
 #include "barescript/json.h"
-#include "barescript/value.h"
 
 #define BARESCRIPT_VALUE_IMPL
 #include "internal.h"

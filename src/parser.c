@@ -13,9 +13,6 @@
 
 #include <string.h>
 
-#include "barescript/parser.h"
-#include "barescript/runtime.h"
-
 #include "internal.h"
 
 

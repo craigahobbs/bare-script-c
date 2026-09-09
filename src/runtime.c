@@ -10,10 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "barescript/json.h"
-#include "barescript/library.h"
-#include "barescript/options.h"
-#include "barescript/runtime.h"
+#include "barescript/barescript.h"
 
 #include "internal.h"
 
@@ -33,6 +30,12 @@ static _Thread_local uint32_t bsCacheEpoch;
 static _Thread_local struct {
     BSValue coverage, enabled;
 } bsCoverageKeys;
+
+const char *bsVersion(void)
+{
+    return BARESCRIPT_VERSION;
+}
+
 
 /*
  * The script execution options
@@ -1103,6 +1106,24 @@ static inline bool bsIntrinArraySet(const BSCode *code, const BSInst *inst, BSVa
     return true;
 }
 
+/*
+ * The entry holding a key, checked first at "*memo" - the entry index a call site found its key
+ * at last time, which a find updates - so a record built the same way as the last one costs one
+ * pointer compare. NULL if the key is absent.
+ */
+static inline BSObjectEntry *bsObjectEntryMemo(BSObject *object, BSString *key, uint32_t *memo)
+{
+    uint32_t ix = *memo;
+    if (ix < object->count && object->entries[ix].key == key) {
+        return &object->entries[ix];
+    }
+    BSObjectEntry *entry = bsObjectEntryFind(object, key);
+    if (entry != NULL) {
+        *memo = (uint32_t) (entry - object->entries);
+    }
+    return entry;
+}
+
 static inline bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
@@ -1422,8 +1443,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BSObject *globals = options->globals.u.object;
         if (options->coverageEpoch != options->cacheEpoch || options->coverageGen != globals->generation) {
             if (bsCoverageKeys.coverage.type != BS_STRING) {
-                bsCoverageKeys.coverage = bsStringIntern(BS_GLOBAL_COVERAGE, strlen(BS_GLOBAL_COVERAGE));
-                bsCoverageKeys.enabled = bsStringIntern("enabled", 7);
+                bsCoverageKeys.coverage = bsStringInternLiteral(BS_GLOBAL_COVERAGE);
+                bsCoverageKeys.enabled = bsStringInternLiteral("enabled");
             }
             options->coverageSlot = bsObjectValuePtrString(options->globals, bsCoverageKeys.coverage);
             options->coverageGen = globals->generation;

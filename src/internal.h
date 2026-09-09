@@ -2,7 +2,8 @@
    https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE */
 
 /*
- * Internal declarations shared across the BareScript implementation files
+ * Internal declarations shared across the BareScript implementation files, grouped by the file
+ * that defines them
  */
 
 #ifndef BARESCRIPT_INTERNAL_H
@@ -16,15 +17,17 @@
 #include "barescript/value.h"
 
 
-/* The largest datetime JavaScript's Date represents, in milliseconds */
-#define BS_DATETIME_MAX 8640000000000000.0
-
 /* Keep a function out of line - a slow path whose inlining would bloat every hot call site */
 #if defined(__GNUC__) || defined(__clang__)
 #define BS_NOINLINE __attribute__((noinline))
 #else
 #define BS_NOINLINE
 #endif
+
+
+/*
+ * Values (value.c)
+ */
 
 /* Allocation helpers - these abort the process on allocation failure */
 void *bsAlloc(size_t size);
@@ -40,25 +43,6 @@ char *bsStrdup(const char *text);
         } \
     } while (0)
 
-/* Inflate a bundled include model. Returns a NUL-terminated, malloc-allocated buffer, or NULL. */
-unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t *size);
-
-/* Compiled bundled include, cached after the first load. Returns an owned script reference. */
-BSScript *bsIncludeScript(const char *name);
-
-/* A bundled model's shared string, interned and borrowed; false past the table */
-bool bsIncludeSharedString(size_t index, BSValue *string);
-
-
-/* Free a regex value whose reference count reached zero (regex.c) */
-void bsRegexDestroy(BSValue value);
-
-/* Free the thread's regex match scratch buffers (regex.c) */
-void bsRegexScratchFree(void);
-
-/* Release the calling thread's HTTP connection pool (options.c) */
-void bsFetchCleanup(void);
-
 /* Destroy a heap value whose refcount has reached zero */
 void bsReleaseDestroyed(BSValue value);
 
@@ -68,9 +52,7 @@ void bsReleaseDestroyed(BSValue value);
  *
  * Every reference type - string, array, object, function, regex - begins with the same int32_t
  * refcount, so one unsigned range test over the contiguous BS_STRING..BS_REGEX span decides
- * whether a value is counted at all, and one decrement serves them all. The regex used to be
- * counted through a call of its own, which cost the common non-reference value an extra compare
- * on the hottest path in the runtime.
+ * whether a value is counted at all, and one decrement serves them all.
  */
 #define BS_IS_REF(value) \
     ((unsigned) (value).type - (unsigned) BS_STRING <= (unsigned) (BS_REGEX - BS_STRING))
@@ -101,15 +83,216 @@ static inline void bsAssignInline(BSValue *target, BSValue value)
     bsReleaseInline(previous);
 }
 
+/* The value type names, indexed by BSType */
+extern const char *const bsTypeNames[BS_REGEX + 1];
+
+/* The largest datetime JavaScript's Date represents, in milliseconds */
+#define BS_DATETIME_MAX 8640000000000000.0
+
+/*
+ * Look up an object key by a string value. Returns true if the key is present; "*out" is then a
+ * borrowed value (which may itself be null). Distinguishes a missing key from a key whose value is
+ * null.
+ */
+bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out);
+
+/* Whether a stored key equals the string "key" - a pointer compare when both are interned */
+bool bsObjectKeyIs(const BSString *stored, BSValue key);
+
+/* Pointer to the stored value for key, or NULL if absent. Valid until a key is added or removed. */
+BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size);
+BSValue *bsObjectValuePtrString(BSValue object, BSValue key);
+
+/* The entry holding a string key, or NULL if absent. Valid until a key is added or removed. */
+BSObjectEntry *bsObjectEntryFind(BSObject *object, BSString *key);
+
+/*
+ * Append a key known to be absent, skipping the duplicate scan. Takes ownership of "item" and
+ * retains "key". For building an object from keys that are distinct by construction.
+ */
+void bsObjectAppend(BSValue object, BSValue key, BSValue item);
+
+/* Copy src's pairs onto dest, overwriting matching keys */
+void bsObjectAssign(BSValue dest, BSValue src);
+
+/* Intern a short string. Strings longer than 64 bytes are not interned. Returns an owned value. */
+BSValue bsStringIntern(const char *data, size_t size);
+#define bsStringInternLiteral(text) bsStringIntern(text, sizeof(text) - 1)
+
+/* Reuse an interned string if present; otherwise a new ordinary string. Does not grow the table. */
+BSValue bsStringInternExisting(const char *data, size_t size);
+
+/*
+ * Append a value's string representation to a string that nothing else references - the caller
+ * holds its only reference and has checked that - growing the allocation in place. Returns the
+ * string, which may have moved.
+ */
+BSString *bsStringAppendValue(BSString *string, BSValue value);
+
+/* strtod over an unterminated span */
+double bsStrtod(const char *text, size_t size);
+
+/* Allocate a string whose bytes are already known to be ASCII (length == size). */
+BSValue bsStringNewAscii(const char *text, size_t size);
+
+/*
+ * A string of "size" bytes of a string at a byte offset: a short one copies, a longer one shares
+ * the parent's bytes - a slice, which holds the root parent - so the parser's rest-of-the-line
+ * slices and split pieces copy nothing. "length" is the span's code point count, or SIZE_MAX to
+ * count it. A span shorter than BS_STRING_SLICE_MIN is copied: below it the copy costs less than
+ * the parent bookkeeping, and a copy of a line-sized span reuses the blocks the last line freed.
+ */
+#define BS_STRING_SLICE_MIN 96
+BSValue bsStringSliceShare(BSValue parent, size_t offset, size_t size, size_t length);
+
+static inline BSValue bsStringSliceBytes(BSValue parent, size_t offset, size_t size, size_t length)
+{
+    const BSString *source = parent.u.string;
+    if (size >= BS_STRING_SLICE_MIN) {
+        return bsStringSliceShare(parent, offset, size, length);
+    }
+    const char *text = source->data + offset;
+    return length == size || source->length == source->size ? bsStringNewAscii(text, size) :
+        bsStringNewSize(text, size);
+}
+
+/*
+ * A string's bytes for a size-aware reader: a slice's span is not NUL-terminated, and this does
+ * not take the copy bsStringData does to terminate it
+ */
+static inline const char *bsStringSpan(BSValue value)
+{
+    return value.type == BS_STRING ? value.u.string->data : "";
+}
+
+/* Ensure a string builder has room for "size" more bytes, so a reader can fill sb->data + sb->size */
+void bsSBReserve(BSStringBuilder *sb, size_t size);
+
+/* Non-ASCII code-point index to byte offset; ASCII is handled by bsStringOffsetFast */
+size_t bsStringOffsetSlow(BSValue value, size_t index);
+
+static inline size_t bsStringOffsetFast(BSValue value, size_t index)
+{
+    if (value.type != BS_STRING) {
+        return 0;
+    }
+    BSString *string = value.u.string;
+    if (string->length == string->size) {
+        return index < string->size ? index : string->size;
+    }
+    return bsStringOffsetSlow(value, index);
+}
+
 #ifndef BARESCRIPT_VALUE_IMPL
 #define bsRetain bsRetainInline
 #define bsRelease bsReleaseInline
 #define bsAssign bsAssignInline
+#define bsStringOffset bsStringOffsetFast
 #endif
 
 
+/*
+ * Helpers defined here
+ */
+
+/* A 0-9 / a-z / A-Z digit's value, or -1 */
+static inline int bsDigitValue(char ch)
+{
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'z') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'Z') {
+        return ch - 'A' + 10;
+    }
+    return -1;
+}
+
+static inline int bsHexValue(char ch)
+{
+    int value = bsDigitValue(ch);
+    return value > 15 ? -1 : value;
+}
+
+/*
+ * The Unicode spaces - JavaScript's WhiteSpace and LineTerminator sets: the ASCII spaces, U+00A0,
+ * U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, and U+FEFF. The regex \s class,
+ * stringTrim, and number parsing all read this one set.
+ */
+static inline bool bsIsSpaceCode(uint32_t code)
+{
+    if (code < 0x80) {
+        return code == ' ' || (code >= 0x09 && code <= 0x0D);
+    }
+    return code == 0xA0 || code == 0x1680 || (code >= 0x2000 && code <= 0x200A) || code == 0x2028 ||
+        code == 0x2029 || code == 0x202F || code == 0x205F || code == 0x3000 || code == 0xFEFF;
+}
+
+/* True if "string" begins or ends with "search". Both must be strings. */
+static inline bool bsStringStartsWith(BSValue string, BSValue search)
+{
+    size_t n = search.u.string->size;
+    return n <= string.u.string->size &&
+           memcmp(string.u.string->data, search.u.string->data, n) == 0;
+}
+
+static inline bool bsStringEndsWith(BSValue string, BSValue search)
+{
+    size_t n = search.u.string->size;
+    size_t size = string.u.string->size;
+    return n <= size && memcmp(string.u.string->data + (size - n), search.u.string->data, n) == 0;
+}
+
+/* An owned array of retained copies of "args" */
+static inline BSValue bsArrayFromArgs(const BSValue *args, size_t argCount)
+{
+    BSValue array = bsArrayNewCapacity(argCount);
+    for (size_t ix = 0; ix < argCount; ix++) {
+        bsArrayPush(array, bsRetain(args[ix]));
+    }
+    return array;
+}
+
+
+/*
+ * Unicode case mapping (unicode.c)
+ */
+
+/*
+ * A string's full upper or lower case, as an owned string value - the sharp s upper-cases to "SS",
+ * a capital sigma that ends a word lower-cases to the final sigma
+ */
+BSValue bsStringToCase(BSValue string, bool upper);
+
+/*
+ * JavaScript's canonical form of a code point for case-insensitive matching: its simple upper
+ * case, unless that would map a non-ASCII code point to ASCII
+ */
+uint32_t bsUnicodeCanon(uint32_t code);
+
+/*
+ * The code points a canonical form matches case-insensitively - itself, its lower case when that
+ * maps back, and the further members of its group when it has several lower-case forms - into
+ * "members", which holds BS_CANON_MEMBERS; returns the count. The largest group has three members
+ * past its canonical form.
+ */
+#define BS_CANON_MEMBERS 4
+size_t bsUnicodeCanonMembers(uint32_t canon, uint32_t *members);
+
+
+/*
+ * The parser (parser.c)
+ */
+
 /* Re-parse a script's retained lines into a fresh model. Returns an owned model, or a null value. */
 BSValue bsScriptReparse(const BSScript *script);
+
+
+/*
+ * The compiler (model.c)
+ */
 
 /* Bring back a forgotten model and the chunks' borrowed statement models, for coverage recording */
 bool bsScriptRestoreCover(BSScript *script);
@@ -121,6 +304,14 @@ bool bsScriptRestoreCover(BSScript *script);
  */
 BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const char *scriptName);
 
+/* Intern the parser-model object keys so JSON decode and emit share interned names */
+void bsModelKeysInit(void);
+
+/*
+ * The line of the statement containing the instruction at "pc" - the last of "count" statements
+ * whose first instruction, in "pcs", is at or before it - or zero before the first
+ */
+int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc);
 
 /*
  * Bytecode: fixed eight-byte register instructions. "a" is the destination register or an index;
@@ -217,221 +408,8 @@ enum {
 
 
 /*
- * Look up an object key by a string value. Returns true if the key is present; "*out" is then a
- * borrowed value (which may itself be null). Distinguishes a missing key from a key whose value is
- * null.
+ * The library (library.c)
  */
-bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out);
-
-/* Whether a stored key equals the string "key" - a pointer compare when both are interned */
-bool bsObjectKeyIs(const BSString *stored, BSValue key);
-
-/* Pointer to the stored value for key, or NULL if absent. Valid until a key is added or removed. */
-BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size);
-BSValue *bsObjectValuePtrString(BSValue object, BSValue key);
-
-/* The entry holding a string key, or NULL if absent. Valid until a key is added or removed. */
-BSObjectEntry *bsObjectEntryFind(BSObject *object, BSString *key);
-
-/*
- * The entry holding a key, checked first at "*memo" - the entry index a call site found its key
- * at last time, which a find updates - so a record built the same way as the last one costs one
- * pointer compare. NULL if the key is absent.
- */
-static inline BSObjectEntry *bsObjectEntryMemo(BSObject *object, BSString *key, uint32_t *memo)
-{
-    uint32_t ix = *memo;
-    if (ix < object->count && object->entries[ix].key == key) {
-        return &object->entries[ix];
-    }
-    BSObjectEntry *entry = bsObjectEntryFind(object, key);
-    if (entry != NULL) {
-        *memo = (uint32_t) (entry - object->entries);
-    }
-    return entry;
-}
-
-/*
- * Append a key known to be absent, skipping the duplicate scan. Takes ownership of "item" and
- * retains "key". For building an object from keys that are distinct by construction.
- */
-void bsObjectAppend(BSValue object, BSValue key, BSValue item);
-
-/* Intern a short string. Strings longer than 64 bytes are not interned. Returns an owned value. */
-BSValue bsStringIntern(const char *data, size_t size);
-
-/* Reuse an interned string if present; otherwise a new ordinary string. Does not grow the table. */
-BSValue bsStringInternExisting(const char *data, size_t size);
-
-/* The library's stringTrim and stringIndexOf of validated arguments, shared with the intrinsic switch (library.c) */
-BSValue bsStringTrimValue(BSValue string);
-BSValue bsStringIndexOfValue(BSValue string, BSValue search, size_t index);
-
-/* An array of "size" retained copies of "value" (library.c) */
-BSValue bsArrayNewSizeValue(size_t size, BSValue value);
-
-/*
- * Append a value's string representation to a string that nothing else references - the caller
- * holds its only reference and has checked that - growing the allocation in place. Returns the
- * string, which may have moved.
- */
-BSString *bsStringAppendValue(BSString *string, BSValue value);
-
-/* strtod over an unterminated span (value.c) */
-double bsStrtod(const char *text, size_t size);
-
-/* Allocate a string whose bytes are already known to be ASCII (length == size). */
-BSValue bsStringNewAscii(const char *text, size_t size);
-
-/*
- * A string of "size" bytes of a string at a byte offset: a short one copies, a longer one shares
- * the parent's bytes - a slice, which holds the root parent - so the parser's rest-of-the-line
- * slices and split pieces copy nothing. "length" is the span's code point count, or SIZE_MAX to
- * count it. A span shorter than BS_STRING_SLICE_MIN is copied: below it the copy costs less than
- * the parent bookkeeping, and a copy of a line-sized span reuses the blocks the last line freed.
- */
-#define BS_STRING_SLICE_MIN 96
-BSValue bsStringSliceShare(BSValue parent, size_t offset, size_t size, size_t length);
-
-static inline BSValue bsStringSliceBytes(BSValue parent, size_t offset, size_t size, size_t length)
-{
-    const BSString *source = parent.u.string;
-    if (size >= BS_STRING_SLICE_MIN) {
-        return bsStringSliceShare(parent, offset, size, length);
-    }
-    const char *text = source->data + offset;
-    return length == size || source->length == source->size ? bsStringNewAscii(text, size) :
-        bsStringNewSize(text, size);
-}
-
-/*
- * A string's bytes for a size-aware reader: a slice's span is not NUL-terminated, and this does
- * not take the copy bsStringData does to terminate it
- */
-static inline const char *bsStringSpan(BSValue value)
-{
-    return value.type == BS_STRING ? value.u.string->data : "";
-}
-
-/* Ensure a string builder has room for "size" more bytes, so a reader can fill sb->data + sb->size */
-void bsSBReserve(BSStringBuilder *sb, size_t size);
-
-/* Non-ASCII code-point index to byte offset; ASCII is handled by bsStringOffsetFast */
-size_t bsStringOffsetSlow(BSValue value, size_t index);
-
-static inline size_t bsStringOffsetFast(BSValue value, size_t index)
-{
-    if (value.type != BS_STRING) {
-        return 0;
-    }
-    BSString *string = value.u.string;
-    if (string->length == string->size) {
-        return index < string->size ? index : string->size;
-    }
-    return bsStringOffsetSlow(value, index);
-}
-
-#ifndef BARESCRIPT_VALUE_IMPL
-#define bsStringOffset bsStringOffsetFast
-#endif
-
-
-/* A 0-9 / a-z / A-Z digit's value, or -1 */
-static inline int bsDigitValue(char ch)
-{
-    if (ch >= '0' && ch <= '9') {
-        return ch - '0';
-    }
-    if (ch >= 'a' && ch <= 'z') {
-        return ch - 'a' + 10;
-    }
-    if (ch >= 'A' && ch <= 'Z') {
-        return ch - 'A' + 10;
-    }
-    return -1;
-}
-
-static inline int bsHexValue(char ch)
-{
-    int value = bsDigitValue(ch);
-    return value > 15 ? -1 : value;
-}
-
-
-/*
- * The Unicode spaces - JavaScript's WhiteSpace and LineTerminator sets: the ASCII spaces, U+00A0,
- * U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, and U+FEFF. The regex \s class,
- * stringTrim, and number parsing all read this one set.
- */
-static inline bool bsIsSpaceCode(uint32_t code)
-{
-    if (code < 0x80) {
-        return code == ' ' || (code >= 0x09 && code <= 0x0D);
-    }
-    return code == 0xA0 || code == 0x1680 || (code >= 0x2000 && code <= 0x200A) || code == 0x2028 ||
-        code == 0x2029 || code == 0x202F || code == 0x205F || code == 0x3000 || code == 0xFEFF;
-}
-
-
-/*
- * Unicode case mapping (unicode.c)
- */
-
-/*
- * A string's full upper or lower case, as an owned string value - the sharp s upper-cases to "SS",
- * a capital sigma that ends a word lower-cases to the final sigma
- */
-BSValue bsStringToCase(BSValue string, bool upper);
-
-/*
- * JavaScript's canonical form of a code point for case-insensitive matching: its simple upper
- * case, unless that would map a non-ASCII code point to ASCII
- */
-uint32_t bsUnicodeCanon(uint32_t code);
-
-/*
- * The code points a canonical form matches case-insensitively - itself, its lower case when that
- * maps back, and the further members of its group when it has several lower-case forms - into
- * "members", which holds BS_CANON_MEMBERS; returns the count. The largest group has three members
- * past its canonical form.
- */
-#define BS_CANON_MEMBERS 4
-size_t bsUnicodeCanonMembers(uint32_t canon, uint32_t *members);
-
-
-/* True if "string" begins or ends with "search". Both must be strings. */
-static inline bool bsStringStartsWith(BSValue string, BSValue search)
-{
-    size_t n = search.u.string->size;
-    return n <= string.u.string->size &&
-           memcmp(string.u.string->data, search.u.string->data, n) == 0;
-}
-
-static inline bool bsStringEndsWith(BSValue string, BSValue search)
-{
-    size_t n = search.u.string->size;
-    size_t size = string.u.string->size;
-    return n <= size && memcmp(string.u.string->data + (size - n), search.u.string->data, n) == 0;
-}
-
-
-/* An owned array of retained copies of "args" */
-static inline BSValue bsArrayFromArgs(const BSValue *args, size_t argCount)
-{
-    BSValue array = bsArrayNewCapacity(argCount);
-    for (size_t ix = 0; ix < argCount; ix++) {
-        bsArrayPush(array, bsRetain(args[ix]));
-    }
-    return array;
-}
-
-
-/* Intern the parser-model object keys so JSON decode and emit share interned names */
-void bsModelKeysInit(void);
-
-/* Copy src's pairs onto dest, overwriting matching keys */
-void bsObjectAssign(BSValue dest, BSValue src);
-
 
 /*
  * Library function fast-path identifiers, stored on BSFunction.intrinsic
@@ -475,8 +453,15 @@ enum {
     BS_INTRIN_REGEX_MATCH
 };
 
-/* systemGlobalSet: store a value under a name in the globals and return it, owned */
-BSValue bsGlobalSetValue(BSOptions *options, BSValue name, BSValue value);
+/* The library's stringTrim and stringIndexOf of validated arguments, shared with the intrinsic switch */
+BSValue bsStringTrimValue(BSValue string);
+BSValue bsStringIndexOfValue(BSValue string, BSValue search, size_t index);
+
+/* The substring of a string between two code point indexes, both within it, as an owned string value */
+BSValue bsStringSlice(BSValue string, size_t begin, size_t end);
+
+/* An array of "size" retained copies of "value" */
+BSValue bsArrayNewSizeValue(size_t size, BSValue value);
 
 /* Happy-path regexMatch; the argument types must already be regex and string */
 BSValue bsRegexMatchImpl(BSValue regex, BSValue string);
@@ -484,18 +469,24 @@ BSValue bsRegexMatchImpl(BSValue regex, BSValue string);
 /* A value's interned type name string - "array", "boolean", ... - as an owned value */
 BSValue bsSystemTypeName(BSValue value);
 
-/* The substring of a string between two code point indexes, both within it, as an owned string value */
-BSValue bsStringSlice(BSValue string, size_t begin, size_t end);
 
 /*
- * The line of the statement containing the instruction at "pc" - the last of "count" statements
- * whose first instruction, in "pcs", is at or before it - or zero before the first
+ * The runtime (runtime.c)
  */
-int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc);
 
-/* The value type names, indexed by BSType */
-extern const char *const bsTypeNames[BS_REGEX + 1];
+/* systemGlobalSet: store a value under a name in the globals and return it, owned */
+BSValue bsGlobalSetValue(BSOptions *options, BSValue name, BSValue value);
 
+
+/*
+ * Regular expressions (regex.c)
+ */
+
+/* Free a regex value whose reference count reached zero */
+void bsRegexDestroy(BSValue value);
+
+/* Free the thread's regex match scratch buffers */
+void bsRegexScratchFree(void);
 
 /* True if no two of a regex's capture groups share a name */
 bool bsRegexGroupNamesUnique(BSValue regex);
@@ -505,6 +496,31 @@ bool bsRegexGroupsNamed(BSValue regex);
 
 /* A capture group's interned name string value (borrowed), or a null value if the group is unnamed */
 BSValue bsRegexGroupNameValue(BSValue regex, size_t group);
+
+
+/*
+ * The bundled include library (include.c; bsIncludeSourceDecode is in the generated includeSource.c)
+ */
+
+/* Inflate a bundled include model. Returns a NUL-terminated, malloc-allocated buffer, or NULL. */
+unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t *size);
+
+/* Inflate a bundled include's compressed binary model by registry index, caching the bytes for the thread */
+const unsigned char *bsIncludeSourceDecode(size_t index, size_t *size);
+
+/* Compiled bundled include, cached after the first load. Returns an owned script reference. */
+BSScript *bsIncludeScript(const char *name);
+
+/* A bundled model's shared string, interned and borrowed; false past the table */
+bool bsIncludeSharedString(size_t index, BSValue *string);
+
+
+/*
+ * Options (options.c)
+ */
+
+/* Release the calling thread's HTTP connection pool */
+void bsFetchCleanup(void);
 
 
 #endif

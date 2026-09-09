@@ -5,7 +5,7 @@
 
 #include "barescript/includeSource.h"
 
-#include "includeSourceDecode.h"
+#include "internal.h"
 
 
 /*

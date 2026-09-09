@@ -572,7 +572,7 @@ async function main():
     # The source
     sourceParts = [licenseC, '\n', generated, '\n' + \
         '#include "barescript/includeSource.h"\n\n' + \
-        '#include "includeSourceDecode.h"\n\n\n' + \
+        '#include "internal.h"\n\n\n' + \
         '/*\n' + \
         ' * Compiling out includes\n' + \
         ' *\n' + \

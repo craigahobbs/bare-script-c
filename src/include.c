@@ -13,10 +13,7 @@
 #include <string.h>
 
 #include "barescript/includeSource.h"
-#include "barescript/parser.h"
-#include "barescript/runtime.h"
 
-#include "includeSourceDecode.h"
 #include "internal.h"
 
 

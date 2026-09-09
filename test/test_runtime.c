@@ -12,6 +12,12 @@
 #include "test.h"
 
 
+TEST(runtime_version)
+{
+    ASSERT_STR_EQ(bsVersion(), BARESCRIPT_VERSION);
+}
+
+
 TEST(runtime_expressions)
 {
     ASSERT_VALUE(bsTestExecute("return 1 + 2"), "3");

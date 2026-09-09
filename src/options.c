@@ -10,7 +10,6 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include "barescript/barescript.h"
 #include "barescript/options.h"
 
 #include "internal.h"
@@ -23,12 +22,6 @@
 #include <stdatomic.h>
 #include <time.h>
 #endif
-
-
-const char *bsVersion(void)
-{
-    return BARESCRIPT_VERSION;
-}
 
 
 bool bsUrlIsURL(const char *url)

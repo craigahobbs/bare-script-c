@@ -169,7 +169,7 @@ void bsModelKeysInit(void)
             bsRelease(keys[ix]);
         }
     }
-#define BS_KEY(field, text) bsKeys.field = bsStringIntern(text, sizeof(text) - 1)
+#define BS_KEY(field, text) bsKeys.field = bsStringInternLiteral(text)
     BS_KEY(args, "args");
     BS_KEY(binary, "binary");
     BS_KEY(expr, "expr");
@@ -197,8 +197,8 @@ void bsModelKeysInit(void)
     BS_KEY(variable, "variable");
 #undef BS_KEY
     /* Parser-model keys the emitter does not read; intern so JSON decode reuses them */
-    bsRelease(bsStringIntern("async", sizeof("async") - 1));
-    bsRelease(bsStringIntern("lineCount", sizeof("lineCount") - 1));
+    bsRelease(bsStringInternLiteral("async"));
+    bsRelease(bsStringInternLiteral("lineCount"));
 }
 
 

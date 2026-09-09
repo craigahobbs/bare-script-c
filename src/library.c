@@ -2070,10 +2070,10 @@ static void bsLibraryInit(void)
     }
 
     /* The strings the regex match model and systemType intern once */
-    bsMatchKeys.index = bsStringIntern("index", 5);
-    bsMatchKeys.input = bsStringIntern("input", 5);
-    bsMatchKeys.groups = bsStringIntern("groups", 6);
-    bsMatchKeys.empty = bsStringIntern("", 0);
+    bsMatchKeys.index = bsStringInternLiteral("index");
+    bsMatchKeys.input = bsStringInternLiteral("input");
+    bsMatchKeys.groups = bsStringInternLiteral("groups");
+    bsMatchKeys.empty = bsStringInternLiteral("");
     bsMatchKeyGroupGrow(10);
     for (int ix = 0; ix <= (int) BS_REGEX; ix++) {
         bsSystemTypeNames[ix] = bsStringIntern(bsTypeNames[ix], strlen(bsTypeNames[ix]));
