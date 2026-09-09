@@ -420,6 +420,12 @@ static BS_NOINLINE bool bsJSONDecodeString(BSJSONParser *parser, BSValue *result
 }
 
 
+static bool bsJSONDecodeQuoted(BSJSONParser *parser, BSValue *result, bool key)
+{
+    return bsJSONDecodePlainString(parser, result, key) || bsJSONDecodeString(parser, result, key);
+}
+
+
 static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result);
 
 
@@ -482,7 +488,7 @@ static bool bsJSONDecodeKey(BSJSONParser *parser, BSValue *key)
     if (parser->offset >= parser->size || parser->text[parser->offset] != '"') {
         return bsJSONError(parser, "Expecting property name enclosed in double quotes", parser->offset);
     }
-    if (!(bsJSONDecodePlainString(parser, key, true) || bsJSONDecodeString(parser, key, true))) {
+    if (!bsJSONDecodeQuoted(parser, key, true)) {
         return false;
     }
     if (!bsJSONSkipTake(parser, ':')) {
@@ -620,8 +626,7 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
         return bsJSONDecodeArray(parser, depth, result);
     }
     if (ch == '"') {
-        return bsJSONDecodePlainString(parser, result, false) ||
-            bsJSONDecodeString(parser, result, false);
+        return bsJSONDecodeQuoted(parser, result, false);
     }
     if (ch == 't' && bsJSONLiteral(parser, "true")) {
         *result = bsBoolean(true);
