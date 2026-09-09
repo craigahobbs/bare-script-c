@@ -1334,9 +1334,10 @@ static bool bsCodeRangeHas(const BSCodeRange16 *bmp, size_t bmpCount, const BSCo
  * The full mapping of a code point - one to three code points, into "mapped" - and its count. The
  * full mapping is the simple one except for the few code points that expand, like the sharp s.
  */
-static size_t bsCaseMapFull(const BSCaseSpecial *specials, size_t specialCount, bool upper, uint32_t code,
-                            uint32_t *mapped)
+static size_t bsCaseMapFull(bool upper, uint32_t code, uint32_t *mapped)
 {
+    const BSCaseSpecial *specials = upper ? bsUnicodeUpperSpecial : bsUnicodeLowerSpecial;
+    size_t specialCount = upper ? BS_TABLE_COUNT(bsUnicodeUpperSpecial) : BS_TABLE_COUNT(bsUnicodeLowerSpecial);
     size_t low;
     BS_TABLE_FIND(specials, code < 0x10000 ? specialCount : 0, code, low);
     if (low != 0 && specials[low - 1].first == code) {
@@ -1473,12 +1474,12 @@ BSValue bsStringToCase(BSValue string, bool upper)
         uint32_t mapped[3];
         size_t count;
         if (upper) {
-            count = bsCaseMapFull(bsUnicodeUpperSpecial, BS_TABLE_COUNT(bsUnicodeUpperSpecial), true, code, mapped);
+            count = bsCaseMapFull(true, code, mapped);
         } else if (code == BS_CAPITAL_SIGMA && bsFinalSigma(text, size, ix, codeSize)) {
             mapped[0] = BS_FINAL_SIGMA;
             count = 1;
         } else {
-            count = bsCaseMapFull(bsUnicodeLowerSpecial, BS_TABLE_COUNT(bsUnicodeLowerSpecial), false, code, mapped);
+            count = bsCaseMapFull(false, code, mapped);
         }
         for (size_t ixMapped = 0; ixMapped < count; ixMapped++) {
             char buffer[4];

@@ -482,7 +482,7 @@ static bool bsJSONDecodeKey(BSJSONParser *parser, BSValue *key)
     if (parser->offset >= parser->size || parser->text[parser->offset] != '"') {
         return bsJSONError(parser, "Expecting property name enclosed in double quotes", parser->offset);
     }
-    if (!bsJSONDecodePlainString(parser, key, true) && !bsJSONDecodeString(parser, key, true)) {
+    if (!(bsJSONDecodePlainString(parser, key, true) || bsJSONDecodeString(parser, key, true))) {
         return false;
     }
     if (!bsJSONSkipTake(parser, ':')) {
@@ -621,8 +621,7 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
     if (parser->offset >= parser->size) {
         return bsJSONError(parser, "Expecting value", parser->offset);
     }
-    size_t begin = parser->offset;
-    char ch = parser->text[begin];
+    char ch = parser->text[parser->offset];
     if (ch == '{') {
         return bsJSONDecodeObject(parser, depth, result);
     }
@@ -648,7 +647,7 @@ static bool bsJSONDecodeValue(BSJSONParser *parser, int depth, BSValue *result)
     if (ch == '-' || (ch >= '0' && ch <= '9')) {
         return bsJSONDecodeNumber(parser, result);
     }
-    return bsJSONError(parser, "Expecting value", begin);
+    return bsJSONError(parser, "Expecting value", parser->offset);
 }
 
 
