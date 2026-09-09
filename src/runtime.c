@@ -159,8 +159,8 @@ void bsScopeInit(BSScope *scope)
  */
 
 
-static _Thread_local BSValue bsSystemIncludes = {BS_NULL, {0}};
-static _Thread_local BSValue bsSystemIncludePaths = {BS_NULL, {0}};
+static _Thread_local BSValue bsSystemIncludes;
+static _Thread_local BSValue bsSystemIncludePaths;
 
 
 /* Register a system include's text, a string value the registry takes */
@@ -530,7 +530,7 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
             bsArrayDelete(args[0], last);
             return true;
         }
-        return false;
+        break;
     case BS_INTRIN_ARRAY_PUSH:
         if (argCount >= 1 && args[0].type == BS_ARRAY) {
             for (size_t ix = 1; ix < argCount; ix++) {
@@ -539,7 +539,7 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
             *result = bsRetain(args[0]);
             return true;
         }
-        return false;
+        break;
     BS_INTRIN(ARRAY_NEW, true, bsArrayFromArgs(args, argCount))
     BS_INTRIN(ARRAY_NEW_SIZE, argCount == 2 && bsIntrinsicIndex(args[0], &index) && index <= 4294967295u,
               bsArrayNewSizeValue(index, args[1]))
@@ -551,7 +551,7 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
             *result = bsNull();
             return true;
         }
-        return false;
+        break;
     BS_INTRIN(OBJECT_KEYS, argCount == 1 && args[0].type == BS_OBJECT, bsObjectKeys(args[0]))
     case BS_INTRIN_OBJECT_NEW: {
         for (size_t ix = 0; ix < argCount; ix += 2) {
@@ -692,10 +692,7 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
 }
 
 
-/*
- * Parse and execute one include - a fetched include's text or a system include's registered text,
- * a string value, or given any other value a system include's bundled compiled script - then lint it
- */
+/* Report an include statement's failed include; false so a caller can return it */
 static bool bsIncludeFailed(BSScript *script, const char *url, int lineNumber, BSOptions *options)
 {
     bsErrorSetStatement(options, script, lineNumber, "Include of \"%s\" failed", url);
@@ -703,10 +700,14 @@ static bool bsIncludeFailed(BSScript *script, const char *url, int lineNumber, B
 }
 
 
+/*
+ * Parse and execute one include - a fetched include's text or a system include's registered text,
+ * a string value, or given any other value a system include's bundled compiled script - then lint it
+ */
 static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSValue text, int lineNumber,
                              BSOptions *options)
 {
-    BSScript *includeScript = NULL;
+    BSScript *includeScript;
     if (text.type != BS_STRING) {
         /* The bundled include library's compiled script, cached for the thread */
         includeScript = system ? bsIncludeScript(url) : NULL;
@@ -788,7 +789,7 @@ typedef struct BSIncludeItem {
  * nested include statement takes the text of an include its enclosing statement fetched rather
  * than fetch it again. A fetch that failed leaves true. The outermost statement owns the set.
  */
-static _Thread_local BSValue bsIncludeTexts = {BS_NULL, {0}};
+static _Thread_local BSValue bsIncludeTexts;
 
 
 /*
@@ -1240,12 +1241,10 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
  * Operands are borrowed reads; only the result is owned, and storing it releases what the
  * destination register held.
  */
-#define BS_READ(operand) bsOperandRead(regs, (operand))
-
 #define BS_ARITHMETIC(name, expr) \
     BS_CASE(name) { \
-        BSValue left = BS_READ(inst->b); \
-        BSValue right = BS_READ(inst->c); \
+        BSValue left = bsOperandRead(regs, inst->b); \
+        BSValue right = bsOperandRead(regs, inst->c); \
         bsAssign(&regs[inst->a], \
                  (left.type == BS_NUMBER && right.type == BS_NUMBER) ? bsArithmetic(expr) : bsNull()); \
     } \
@@ -1253,8 +1252,8 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
 
 /* The three-way comparison of the instruction's operands, in "cmp" */
 #define BS_COMPARE_OPERANDS(cmp) \
-    BSValue left = BS_READ(inst->b); \
-    BSValue right = BS_READ(inst->c); \
+    BSValue left = bsOperandRead(regs, inst->b); \
+    BSValue right = bsOperandRead(regs, inst->c); \
     int cmp; \
     if (left.type == BS_NUMBER && right.type == BS_NUMBER) { \
         double ln = left.u.number, rn = right.u.number; \
@@ -1269,8 +1268,8 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
  * otherwise
  */
 #define BS_EQUAL_OPERANDS(equal) \
-    BSValue left = BS_READ(inst->b); \
-    BSValue right = BS_READ(inst->c); \
+    BSValue left = bsOperandRead(regs, inst->b); \
+    BSValue right = bsOperandRead(regs, inst->c); \
     bool equal; \
     if (left.type == BS_NUMBER && right.type == BS_NUMBER) { \
         equal = left.u.number == right.u.number; \
@@ -1297,6 +1296,14 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
     } \
     BS_NEXT()
 
+/* "hasCoverage" is fixed for the whole run, so the branch predicts and the call is not built */
+#define BS_JUMP_COVER(target) \
+    do { \
+        if (hasCoverage) { \
+            bsJumpCover(code, (target), script, coverage); \
+        } \
+    } while (0)
+
 /* A jump on a comparison - the target is in the data word that follows, stepped over when not taken */
 #define BS_JUMP_TEST(test) \
     if (test) { \
@@ -1322,8 +1329,8 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
 /* JavaScript semantics: operands are 32-bit integers, and a shift count is masked to five bits */
 #define BS_BITWISE(name, expr) \
     BS_CASE(name) { \
-        BSValue left = BS_READ(inst->b); \
-        BSValue right = BS_READ(inst->c); \
+        BSValue left = bsOperandRead(regs, inst->b); \
+        BSValue right = bsOperandRead(regs, inst->c); \
         BSValue bits = bsNull(); \
         if (bsIsInteger(left) && bsIsInteger(right)) { \
             int32_t leftInt = bsToInt32(left.u.number); \
@@ -1334,17 +1341,9 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
     } \
     BS_NEXT()
 
-/* "hasCoverage" is fixed for the whole run, so the branch predicts and the call is not built */
-#define BS_JUMP_COVER(target) \
-    do { \
-        if (hasCoverage) { \
-            bsJumpCover(code, (target), script, coverage); \
-        } \
-    } while (0)
-
 #define BS_JUMP_IF(name, cond) \
     BS_CASE(name) { \
-        BSValue value = BS_READ(inst->a); \
+        BSValue value = bsOperandRead(regs, inst->a); \
         if (cond) { \
             BS_JUMP_COVER(inst->w); \
             BS_GOTO(inst->w); \
@@ -1473,7 +1472,7 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CASE(STORE_NAME) {
             BSCallCache *cache = &code->caches[inst->a];
             BSValue name = code->names[cache->nameIndex];
-            BSValue value = bsRetain(BS_READ(inst->b));
+            BSValue value = bsRetain(bsOperandRead(regs, inst->b));
             BSValue *slot = bsGlobalSlot(cache, name, options);
             if (slot != NULL) {
                 /* An existing global updates in place - no slot moves, so every site's cache holds */
@@ -1532,14 +1531,14 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             const BSInst *data = inst + 1;
             size_t ix = 0;
             for (; ix + BS_OPERANDS_PER_DATA <= argCount; ix += BS_OPERANDS_PER_DATA, data++) {
-                args[ix] = BS_READ(data->a);
-                args[ix + 1] = BS_READ(data->b);
-                args[ix + 2] = BS_READ(data->c);
+                args[ix] = bsOperandRead(regs, data->a);
+                args[ix + 1] = bsOperandRead(regs, data->b);
+                args[ix + 2] = bsOperandRead(regs, data->c);
             }
             if (ix < argCount) {
-                args[ix] = BS_READ(data->a);
+                args[ix] = bsOperandRead(regs, data->a);
                 if (ix + 1 < argCount) {
-                    args[ix + 1] = BS_READ(data->b);
+                    args[ix + 1] = bsOperandRead(regs, data->b);
                 }
                 data++;
             }
@@ -1560,8 +1559,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_NEXT();
 
         BS_CASE(ADD) {
-            BSValue left = BS_READ(inst->b);
-            BSValue right = BS_READ(inst->c);
+            BSValue left = bsOperandRead(regs, inst->b);
+            BSValue right = bsOperandRead(regs, inst->c);
             if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
                 bsAssign(&regs[inst->a], bsArithmetic(left.u.number + right.u.number));
             } else if (left.type == BS_STRING && inst->a == inst->b && left.u.string->refcount == 1 &&
@@ -1576,8 +1575,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_NEXT();
 
         BS_CASE(SUB) {
-            BSValue left = BS_READ(inst->b);
-            BSValue right = BS_READ(inst->c);
+            BSValue left = bsOperandRead(regs, inst->b);
+            BSValue right = bsOperandRead(regs, inst->c);
             BSValue value = bsNull();
             if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
                 value = bsArithmetic(left.u.number - right.u.number);
@@ -1614,17 +1613,17 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_BITWISE(SHR, leftInt >> ((uint32_t) rightInt & 31u));
 
         BS_CASE(NEG) {
-            BSValue value = BS_READ(inst->b);
+            BSValue value = bsOperandRead(regs, inst->b);
             bsAssign(&regs[inst->a], value.type == BS_NUMBER ? bsNumber(-value.u.number) : bsNull());
         }
         BS_NEXT();
 
         BS_CASE(NOT)
-            bsAssign(&regs[inst->a], bsBoolean(!bsValueBoolean(BS_READ(inst->b))));
+            bsAssign(&regs[inst->a], bsBoolean(!bsValueBoolean(bsOperandRead(regs, inst->b))));
             BS_NEXT();
 
         BS_CASE(BNOT) {
-            BSValue value = BS_READ(inst->b);
+            BSValue value = bsOperandRead(regs, inst->b);
             bsAssign(&regs[inst->a],
                      bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull());
         }
@@ -1676,7 +1675,6 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
 #undef BS_CASE
 #undef BS_NEXT
 #undef BS_GOTO
-#undef BS_READ
 
 fail:
     return bsNull();

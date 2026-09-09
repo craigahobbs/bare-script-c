@@ -2041,8 +2041,8 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
  * so a library function has a stable identity - which systemIs relies on, and which lets an
  * override be detected by pointer inequality.
  */
-static _Thread_local BSValue bsScriptFunctionValues = {BS_NULL, {0}};
-static _Thread_local BSValue bsExpressionFunctionValues = {BS_NULL, {0}};
+static _Thread_local BSValue bsScriptFunctionValues;
+static _Thread_local BSValue bsExpressionFunctionValues;
 
 
 static void bsLibraryInit(void)

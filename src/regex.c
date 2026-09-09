@@ -208,7 +208,7 @@ struct BSRegex {
     BSValue *groupNames;  /* groupCount entries, or NULL if no group is named */
     bool uniqueNames;     /* no two groups share a name, so a match model can append each */
     RxInst *prog;         /* the compiled program, and the tables its instructions refer to */
-    struct RxClass *classes;
+    RxClass *classes;
     size_t classCount;
     struct RxAlt *alts;
     size_t altCount;
@@ -1061,6 +1061,16 @@ static void rxFirstAddCode(RxFirstSet *set, unsigned flags, uint32_t code)
 }
 
 
+/* Add every code point of "other" to "set" */
+static void rxFirstUnion(RxFirstSet *set, const RxFirstSet *other)
+{
+    for (size_t ix = 0; ix < 4; ix++) {
+        set->bits[ix] |= other->bits[ix];
+    }
+    set->high = set->high || other->high;
+}
+
+
 /*
  * Add the code points that can begin a match of a node chain to "set". Returns true if the chain
  * can match the empty string, in which case the set does not constrain the match position.
@@ -1147,9 +1157,35 @@ static void rxFirstCompute(const RxNode *node, unsigned flags, RxFirstSet *set)
 }
 
 
-/* Free the node tree - once the program is compiled it is not needed, and on a failed compile */
-static void rxChunksFree(RxCompiler *compiler)
+static void bsRegexFree(BSRegex *regex)
 {
+    rxProgramFree(regex);
+    if (regex->groupNames != NULL) {
+        for (size_t ix = 0; ix < regex->groupCount; ix++) {
+            bsRelease(regex->groupNames[ix]);
+        }
+        free(regex->groupNames);
+    }
+    free(regex);
+}
+
+
+/*
+ * Free the compiler's state - the numbered and named references, the group paths, and last the
+ * node tree, which a compiled program no longer needs
+ */
+static void rxCompilerFree(RxCompiler *compiler)
+{
+    free(compiler->backrefs);
+    for (size_t ix = 0; ix < compiler->namedRefCount; ix++) {
+        bsRelease(compiler->namedRefs[ix].node->u.backref.name);
+        free(compiler->namedRefs[ix].node->u.backref.groups);
+    }
+    free(compiler->namedRefs);
+    for (size_t ix = 0; ix < compiler->regex->groupCount; ix++) {
+        free(compiler->groupPaths[ix].entries);
+    }
+    free(compiler->path);
     RxNodeChunk *chunk = compiler->chunks;
     while (chunk != NULL) {
         for (size_t ix = 0; ix < chunk->used; ix++) {
@@ -1164,35 +1200,6 @@ static void rxChunksFree(RxCompiler *compiler)
         free(chunk);
         chunk = next;
     }
-}
-
-
-static void bsRegexFree(BSRegex *regex)
-{
-    rxProgramFree(regex);
-    if (regex->groupNames != NULL) {
-        for (size_t ix = 0; ix < regex->groupCount; ix++) {
-            bsRelease(regex->groupNames[ix]);
-        }
-        free(regex->groupNames);
-    }
-    free(regex);
-}
-
-
-/* Free the compiler's own lists - the numbered and named references, the group paths */
-static void rxCompilerFree(RxCompiler *compiler)
-{
-    free(compiler->backrefs);
-    for (size_t ix = 0; ix < compiler->namedRefCount; ix++) {
-        bsRelease(compiler->namedRefs[ix].node->u.backref.name);
-        free(compiler->namedRefs[ix].node->u.backref.groups);
-    }
-    free(compiler->namedRefs);
-    for (size_t ix = 0; ix < compiler->regex->groupCount; ix++) {
-        free(compiler->groupPaths[ix].entries);
-    }
-    free(compiler->path);
 }
 
 
@@ -1254,7 +1261,6 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
             bsRelease(compiler.groupNames[ix]);
         }
         rxCompilerFree(&compiler);
-        rxChunksFree(&compiler);
         bsRegexFree(regex);
         return bsNull();
     }
@@ -1292,7 +1298,6 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
 
     rxEmitProgram(&compiler);
     rxCompilerFree(&compiler);
-    rxChunksFree(&compiler);
 
     /* Keep named-group strings only; unnamed patterns store no name array */
     bool named = false;
@@ -1843,10 +1848,7 @@ static bool rxFollowCompute(const RxNode *rest, const RxFirstSet *follow, unsign
         if (follow == NULL || follow->any) {
             return false;
         }
-        for (size_t ix = 0; ix < 4; ix++) {
-            set->bits[ix] |= follow->bits[ix];
-        }
-        set->high = set->high || follow->high;
+        rxFirstUnion(set, follow);
     }
     return !set->any;
 }
@@ -1937,10 +1939,7 @@ static void rxEmitNode(RxEmit *e, RxNode *node, const RxFirstSet *follow)
         if (!e->backward && follow != NULL) {
             memset(&bodyFollow, 0, sizeof(bodyFollow));
             rxFirstSet(node->u.repeat.sub, e->flags, &bodyFollow);
-            for (size_t ix = 0; ix < 4; ix++) {
-                bodyFollow.bits[ix] |= follow->bits[ix];
-            }
-            bodyFollow.high = bodyFollow.high || follow->high;
+            rxFirstUnion(&bodyFollow, follow);
             bodyUsable = !bodyFollow.any;
         }
         rxEmitChain(e, node->u.repeat.sub, bodyUsable ? &bodyFollow : NULL);
@@ -1995,8 +1994,7 @@ static void rxEmitNode(RxEmit *e, RxNode *node, const RxFirstSet *follow)
             break;
         }
         /* A lookahead's body matches forward from here, even within a lookbehind; a lookbehind's backward */
-        uint32_t look = rxEmit(e, RXI_LOOK, 0, 0, 0, negate, 0);
-        e->inst[look].a = (uint32_t) e->count;
+        uint32_t look = rxEmit(e, RXI_LOOK, (uint32_t) e->count + 1, 0, 0, negate, 0);
         bool backward = e->backward;
         e->backward = !ahead;
         rxEmitChain(e, node->u.look.sub, NULL);

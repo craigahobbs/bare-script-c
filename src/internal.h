@@ -233,7 +233,7 @@ enum {
 /*
  * Look up an object key by a string value. Returns true if the key is present; "*out" is then a
  * borrowed value (which may itself be null). Distinguishes a missing key from a key whose value is
- * null. An interned key skips intern-table hashing.
+ * null.
  */
 bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out);
 
@@ -526,6 +526,8 @@ extern const char *const bsTypeNames[BS_REGEX + 1];
 
 /* True if no two of a regex's capture groups share a name */
 bool bsRegexGroupNamesUnique(BSValue regex);
+
+/* True if any of a regex's capture groups is named */
 bool bsRegexGroupsNamed(BSValue regex);
 
 /* A capture group's interned name string value (borrowed), or a null value if the group is unnamed */
