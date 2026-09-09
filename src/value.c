@@ -83,37 +83,25 @@ char *bsStrdup(const char *text)
 
 BSValue bsNull(void)
 {
-    BSValue value;
-    value.type = BS_NULL;
-    value.u.ref = NULL;
-    return value;
+    return (BSValue) {.type = BS_NULL, .u.ref = NULL};
 }
 
 
 BSValue bsBoolean(bool boolean)
 {
-    BSValue value;
-    value.type = BS_BOOLEAN;
-    value.u.boolean = boolean;
-    return value;
+    return (BSValue) {.type = BS_BOOLEAN, .u.boolean = boolean};
 }
 
 
 BSValue bsNumber(double number)
 {
-    BSValue value;
-    value.type = BS_NUMBER;
-    value.u.number = number;
-    return value;
+    return (BSValue) {.type = BS_NUMBER, .u.number = number};
 }
 
 
 BSValue bsDatetime(int64_t milliseconds)
 {
-    BSValue value;
-    value.type = BS_DATETIME;
-    value.u.datetime = milliseconds;
-    return value;
+    return (BSValue) {.type = BS_DATETIME, .u.datetime = milliseconds};
 }
 
 
@@ -303,6 +291,19 @@ static _Thread_local BSValueState bsTS;
 static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128, 192};
 
 
+/* Put an item on a pool's free list - "next" is the item's link - or free it when the list holds "max" */
+#define BS_POOL_GIVE(head, count, max, item, next) \
+    do { \
+        if ((count) < (max)) { \
+            (next) = (void *) (head); \
+            (head) = (item); \
+            (count)++; \
+        } else { \
+            free(item); \
+        } \
+    } while (0)
+
+
 /*
  * The storage after a string's header: its bytes, or for a slice its parent. A string outside the
  * pool - a block of its own, or bytes apart from a pooled header - opens its storage with the
@@ -316,16 +317,12 @@ static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128,
 /* A string's capacity: none for a slice, its pool class's, or the word its storage opens with */
 static size_t bsStringCapacity(const BSString *string)
 {
-    static const uint8_t classCapacity[BS_STRING_POOL_CLASSES + 1] = {
-        0, 48 - sizeof(BSString) - 1, 64 - sizeof(BSString) - 1, 96 - sizeof(BSString) - 1,
-        128 - sizeof(BSString) - 1, 192 - sizeof(BSString) - 1
-    };
     uint16_t flags = string->flags;
     if ((flags & (BS_STR_SLICE | BS_STR_APART)) != 0) {
         return (flags & BS_STR_SLICE) != 0 ? 0 : BS_STRING_HEAP_CAPACITY(string->data);
     }
     unsigned class = flags >> BS_STR_POOL_SHIFT;
-    return class != 0 ? classCapacity[class] : BS_STRING_HEAP_CAPACITY(string->data);
+    return class != 0 ? bsStringPoolSize[class - 1] - sizeof(BSString) - 1 : BS_STRING_HEAP_CAPACITY(string->data);
 }
 
 
@@ -411,13 +408,11 @@ static void bsStringFree(BSString *string)
         free(string->index);
     }
     unsigned class = string->flags >> BS_STR_POOL_SHIFT;
-    if (class != 0 && bsTS.stringPoolCount[class - 1] < BS_STRING_POOL_MAX) {
-        string->index = (uint32_t *) bsTS.stringPool[class - 1];
-        bsTS.stringPool[class - 1] = string;
-        bsTS.stringPoolCount[class - 1]++;
-        return;
+    if (class != 0) {
+        BS_POOL_GIVE(bsTS.stringPool[class - 1], bsTS.stringPoolCount[class - 1], BS_STRING_POOL_MAX, string, string->index);
+    } else {
+        free(string);
     }
-    free(string);
 }
 
 
@@ -520,10 +515,7 @@ BSValue bsStringNew(const char *text)
 
 BSValue bsStringTake(BSString *string)
 {
-    BSValue value;
-    value.type = BS_STRING;
-    value.u.string = string;
-    return value;
+    return (BSValue) {.type = BS_STRING, .u.string = string};
 }
 
 
@@ -990,13 +982,12 @@ static BS_NOINLINE BSValue *bsArrayBufAlloc(size_t capacity)
 static BS_NOINLINE void bsArrayBufFree(BSValue *values, size_t capacity)
 {
     int classIndex = bsArrayBufClassIndex(capacity);
-    if (classIndex >= 0 && bsTS.arrayBufPoolCount[classIndex] < BS_ARRAY_BUF_POOL_MAX) {
-        values[0].u.ref = bsTS.arrayBufPool[classIndex];
-        bsTS.arrayBufPool[classIndex] = values;
-        bsTS.arrayBufPoolCount[classIndex]++;
-        return;
+    if (classIndex >= 0) {
+        BS_POOL_GIVE(bsTS.arrayBufPool[classIndex], bsTS.arrayBufPoolCount[classIndex], BS_ARRAY_BUF_POOL_MAX, values,
+                     values[0].u.ref);
+    } else {
+        free(values);
     }
-    free(values);
 }
 
 static BSArray *bsArrayAlloc(void)
@@ -1012,13 +1003,7 @@ static BSArray *bsArrayAlloc(void)
 
 static void bsArrayRecycle(BSArray *array)
 {
-    if (bsTS.arrayPoolCount >= BS_ARRAY_POOL_MAX) {
-        free(array);
-        return;
-    }
-    array->values = (BSValue *) bsTS.arrayPool;
-    bsTS.arrayPool = array;
-    bsTS.arrayPoolCount++;
+    BS_POOL_GIVE(bsTS.arrayPool, bsTS.arrayPoolCount, BS_ARRAY_POOL_MAX, array, array->values);
 }
 
 
@@ -1031,10 +1016,7 @@ BSValue bsArrayNewCapacity(size_t capacity)
     array->capacity = capacity;
     array->values = capacity != 0 ? bsArrayBufAlloc(capacity) : NULL;
 
-    BSValue value;
-    value.type = BS_ARRAY;
-    value.u.array = array;
-    return value;
+    return (BSValue) {.type = BS_ARRAY, .u.array = array};
 }
 
 
@@ -1211,13 +1193,7 @@ static BSObject *bsObjectAlloc(void)
 
 static void bsObjectRecycle(BSObject *object)
 {
-    if (bsTS.objectPoolCount >= BS_OBJECT_POOL_MAX) {
-        free(object);
-        return;
-    }
-    object->entries = (BSObjectEntry *) bsTS.objectPool;
-    bsTS.objectPool = object;
-    bsTS.objectPoolCount++;
+    BS_POOL_GIVE(bsTS.objectPool, bsTS.objectPoolCount, BS_OBJECT_POOL_MAX, object, object->entries);
 }
 
 
@@ -1231,10 +1207,7 @@ BSValue bsObjectNew(void)
     object->entries = object->inline_;
     object->index = NULL;
 
-    BSValue value;
-    value.type = BS_OBJECT;
-    value.u.object = object;
-    return value;
+    return (BSValue) {.type = BS_OBJECT, .u.object = object};
 }
 
 
@@ -1265,13 +1238,11 @@ static BSObjectEntry *bsEntriesAlloc(size_t capacity)
 static void bsEntriesFree(BSObjectEntry *entries, size_t capacity)
 {
     int classIndex = bsEntryPoolClass(capacity);
-    if (classIndex >= 0 && bsTS.entryPoolCount[classIndex] < BS_ENTRY_POOL_MAX) {
-        entries[0].key = (BSString *) bsTS.entryPool[classIndex];
-        bsTS.entryPool[classIndex] = entries;
-        bsTS.entryPoolCount[classIndex]++;
-        return;
+    if (classIndex >= 0) {
+        BS_POOL_GIVE(bsTS.entryPool[classIndex], bsTS.entryPoolCount[classIndex], BS_ENTRY_POOL_MAX, entries, entries[0].key);
+    } else {
+        free(entries);
     }
-    free(entries);
 }
 
 
@@ -1522,11 +1493,11 @@ static void bsObjectIndexPut(BSObjectIndex *index, uint32_t hash, uint32_t entry
 }
 
 
-/* Build - or rebuild - the index over the entries, sized for "capacity" keys at half load */
-static BS_NOINLINE void bsObjectIndexBuild(BSObject *object, size_t capacity)
+/* Build - or rebuild - the index over the entries, sized for the object's capacity at half load */
+static BS_NOINLINE void bsObjectIndexBuild(BSObject *object)
 {
     uint32_t size = 32;
-    while (size < capacity * 2) {
+    while (size < object->capacity * 2) {
         size *= 2;
     }
     free(object->index);
@@ -1608,7 +1579,7 @@ static BS_NOINLINE void bsObjectEntriesGrow(BSObject *object)
     object->entries = entries;
     object->capacity = (uint32_t) capacity;
     if (object->index != NULL) {
-        bsObjectIndexBuild(object, capacity);
+        bsObjectIndexBuild(object);
     }
 }
 
@@ -1630,7 +1601,7 @@ static void bsObjectEntryAdd(BSObject *object, BSValue key, BSValue item)
     if (object->index != NULL) {
         bsObjectIndexPut(object->index, bsStringHash(entry->key), ix);
     } else if (object->count > BS_OBJECT_LINEAR) {
-        bsObjectIndexBuild(object, object->capacity);
+        bsObjectIndexBuild(object);
     }
 }
 
@@ -1648,7 +1619,7 @@ BSValue bsObjectNewCapacity(size_t count)
         object->entries = bsEntriesAlloc(capacity);
         object->capacity = (uint32_t) capacity;
         if (count > BS_OBJECT_LINEAR) {
-            bsObjectIndexBuild(object, capacity);
+            bsObjectIndexBuild(object);
         }
     }
     return value;
@@ -1784,7 +1755,7 @@ bool bsObjectDelete(BSValue value, const char *key)
     if (object->index != NULL) {
         /* The entries after it moved down, so the index is rebuilt - or dropped, below the threshold */
         if (object->count > BS_OBJECT_LINEAR) {
-            bsObjectIndexBuild(object, object->capacity);
+            bsObjectIndexBuild(object);
         } else {
             free(object->index);
             object->index = NULL;
@@ -1939,10 +1910,7 @@ BSValue bsFunctionNew(const char *name, BSFunctionFn fn, void *data, void (*data
     function->dataFree = dataFree;
     function->intrinsic = 0;
 
-    BSValue value;
-    value.type = BS_FUNCTION;
-    value.u.function = function;
-    return value;
+    return (BSValue) {.type = BS_FUNCTION, .u.function = function};
 }
 
 
@@ -2582,26 +2550,27 @@ bool bsValueIs(BSValue value1, BSValue value2)
 
 int bsValueCompare(BSValue left, BSValue right)
 {
-    if (left.type == BS_NULL) {
-        return right.type == BS_NULL ? 0 : -1;
+    /* Null orders before every other type; otherwise values of different types compare by type name */
+    if (left.type != right.type) {
+        if (left.type == BS_NULL || right.type == BS_NULL) {
+            return left.type == BS_NULL ? -1 : 1;
+        }
+        return strcmp(bsTypeNames[left.type], bsTypeNames[right.type]) < 0 ? -1 : 1;
     }
-    if (right.type == BS_NULL) {
-        return 1;
-    }
-    if (left.type == BS_STRING && right.type == BS_STRING) {
+    switch (left.type) {
+    case BS_NULL:
+        return 0;
+    case BS_STRING: {
         int compare = bsKeyCompare(left.u.string, right.u.string->data, right.u.string->size);
         return BS_COMPARE(compare, 0);
     }
-    if (left.type == BS_BOOLEAN && right.type == BS_BOOLEAN) {
+    case BS_BOOLEAN:
         return BS_COMPARE(left.u.boolean, right.u.boolean);
-    }
-    if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
+    case BS_NUMBER:
         return BS_COMPARE(left.u.number, right.u.number);
-    }
-    if (left.type == BS_DATETIME && right.type == BS_DATETIME) {
+    case BS_DATETIME:
         return BS_COMPARE(left.u.datetime, right.u.datetime);
-    }
-    if (left.type == BS_ARRAY && right.type == BS_ARRAY) {
+    case BS_ARRAY: {
         size_t leftCount = left.u.array->count;
         size_t rightCount = right.u.array->count;
         size_t count = leftCount < rightCount ? leftCount : rightCount;
@@ -2613,7 +2582,7 @@ int bsValueCompare(BSValue left, BSValue right)
         }
         return BS_COMPARE(leftCount, rightCount);
     }
-    if (left.type == BS_OBJECT && right.type == BS_OBJECT) {
+    case BS_OBJECT: {
         BSValue leftKeys = bsObjectKeysSorted(left);
         BSValue rightKeys = bsObjectKeysSorted(right);
         size_t leftCount = bsArrayCount(leftKeys);
@@ -2635,7 +2604,8 @@ int bsValueCompare(BSValue left, BSValue right)
         }
         return BS_COMPARE(leftCount, rightCount);
     }
-
-    /* Values of different types compare by type name */
-    return strcmp(bsTypeNames[left.type], bsTypeNames[right.type]) < 0 ? -1 : 1;
+    default:
+        /* Two functions or two regexes are unordered, like values of different types of one name */
+        return 1;
+    }
 }

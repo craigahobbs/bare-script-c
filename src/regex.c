@@ -598,7 +598,7 @@ static RxNode *rxParseClass(RxCompiler *compiler, size_t classOffset)
     while (compiler->offset < compiler->size) {
         char ch = compiler->pattern[compiler->offset];
         if (ch == ']') {
-            /* An empty class - "[]" - matches nothing */
+            /* The class ends - at once for "[]", which matches nothing */
             compiler->offset++;
             rxClassFinish(&node->u.cls, compiler->flags);
             return node;
@@ -1321,10 +1321,7 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         }
     }
 
-    BSValue value;
-    value.type = BS_REGEX;
-    value.u.regex = regex;
-    return value;
+    return (BSValue) {.type = BS_REGEX, .u.regex = regex};
 }
 
 
