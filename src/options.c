@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "barescript/barescript.h"
 #include "barescript/options.h"
@@ -435,15 +436,23 @@ static BSValue bsFileRead(const char *path)
         return bsNull();
     }
 
-    /* Read into a string builder's spare room, so the text becomes the string uncopied */
+    /*
+     * Read into a string builder's spare room sized to the file, so the text becomes the string
+     * uncopied and unpadded - one read short of the room shows the end
+     */
     BSStringBuilder sb;
     bsSBInit(&sb);
+    struct stat status;
+    size_t reserve = fstat(fileno(file), &status) == 0 && status.st_size > 0 ? (size_t) status.st_size + 1 : 4096;
+    size_t want;
     size_t read;
     do {
-        bsSBReserve(&sb, 4096);
-        read = fread(sb.data + sb.size, 1, sb.capacity - sb.size - 1, file);
+        bsSBReserve(&sb, reserve);
+        want = sb.capacity - sb.size - 1;
+        read = fread(sb.data + sb.size, 1, want, file);
         sb.size += read;
-    } while (read != 0);
+        reserve = 4096;
+    } while (read == want);
     bool failed = (ferror(file) != 0);
     fclose(file);
     if (failed) {

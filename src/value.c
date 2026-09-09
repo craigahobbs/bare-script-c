@@ -804,9 +804,10 @@ void bsSBFree(BSStringBuilder *sb)
 void bsSBReserve(BSStringBuilder *sb, size_t size)
 {
     if (sb->size + size + 1 > sb->capacity) {
-        size_t capacity = sb->capacity != 0 ? sb->capacity : 32;
-        while (capacity < sb->size + size + 1) {
-            capacity *= 2;
+        /* Double, or take a larger request as it is - a file's text is sized once */
+        size_t capacity = sb->capacity != 0 ? sb->capacity * 2 : 32;
+        if (capacity < sb->size + size + 1) {
+            capacity = sb->size + size + 1;
         }
         BSString *string = bsRealloc(bsSBString(sb), sizeof(BSString) + BS_STRING_HEAP_HEAD + capacity);
         sb->data = BS_STRING_STORAGE(string) + BS_STRING_HEAP_HEAD;
