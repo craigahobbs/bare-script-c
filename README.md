@@ -109,20 +109,21 @@ Any include but `barescriptParser.bare` and `barescriptLint.bare` - the runtime 
 can be compiled out to make the library smaller. Defining `NO_BARESCRIPT_INCLUDE_<NAME>`, the file
 name without `.bare` in upper case, leaves that include's model out; the Makefile's `INCLUDE`
 variable names the includes to bundle, `INCLUDE_EXCLUDE` the ones to leave out, and either defines
-the macro for every include not bundled:
+the macro for every include not bundled (the parser and linter are bundled either way):
 
 ```sh
-make release INCLUDE="barescriptParser.bare barescriptLint.bare markdownUp.bare url.bare"
+make release INCLUDE="markdownUp.bare url.bare"
 make release INCLUDE_EXCLUDE="qrcode.bare draw.bare"
 ```
 
 A compiled-out include keeps its registry entry and stub accessor, which return no model, so
-`include <name.bare>` is served from the system include path when one is registered and fails
-otherwise. There is no dependency tracking: an include that an included script itself includes has
-to be listed with it - `markdownUp.bare` includes four scripts that include five more - and an
-excluded include is missing from every bundled include that includes it. The parser and linter
-alone make a 321 KB release library, against 438 KB with all thirty-two. A change to `INCLUDE` or
-`INCLUDE_EXCLUDE` needs a `make clean` first, and the test suites need every include.
+`include <name.bare>` fails. There is no dependency tracking: an include that an included script
+itself includes has to be listed with it - `markdownUp.bare` includes four scripts that include five
+more - and an excluded include is missing from every bundled include that includes it. The parser
+and linter alone make a 321 KB release library, against 438 KB with all thirty-two. A change to
+`INCLUDE` or `INCLUDE_EXCLUDE` needs a `make clean` first. Both are for a library built for an
+application: the test suites and the release build's training need every include, so neither is
+for a test or release build of this project.
 
 
 ## Command-Line Interface
@@ -168,14 +169,9 @@ bare -c 'include <unittest.bare>
 systemLog(systemType(unittestRunTest))'
 ```
 
-A system include resolves in three steps: scripts registered with `bsSystemIncludeRegister`, then
-the directories registered with `bsSystemIncludePath`, then the bundled library. The CLI adds every
-directory in the colon-separated `BARESCRIPT_INCLUDE_PATH` environment variable to the search path,
-so a script can run against an include library checkout instead of the bundled copy:
-
-```sh
-BARESCRIPT_INCLUDE_PATH=/path/to/bare-script/lib/include bare script.bare
-```
+A system include is served from the bundled library and nowhere else. A user include -
+`include 'name.bare'` - is fetched through the options' fetch function, relative to the including
+script.
 
 ### MarkdownUp Output
 
@@ -236,7 +232,6 @@ int main(void)
     bsOptionsFree(options);
     bsScriptRelease(script);
     bsParserCleanup();
-    bsSystemIncludeClear();
     bsIncludeCleanup();
     bsLibraryCleanup();
     bsValueCleanup();
@@ -369,8 +364,8 @@ The runtime has no process-wide mutable state: every thread is an independent ru
 threads never contend. What that buys is confinement, and confinement is the rule: values,
 scripts, expressions, and options belong to the thread that created them and cannot be handed to
 another; pass text between threads instead and let the receiving thread parse it. A thread that used the runtime releases its
-state before it exits with `bsParserCleanup`, `bsSystemIncludeClear`, `bsIncludeCleanup`,
-`bsLibraryCleanup`, and last `bsValueCleanup`; a thread that exits without them leaks its copy.
+state before it exits with `bsParserCleanup`, `bsIncludeCleanup`, `bsLibraryCleanup`, and last
+`bsValueCleanup`; a thread that exits without them leaks its copy.
 The details are in [DESIGN.md](DESIGN.md#threads).
 
 The public headers are in `include/barescript`: `value.h`, `parser.h`, `runtime.h`, `library.h`,

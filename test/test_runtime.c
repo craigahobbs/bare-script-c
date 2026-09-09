@@ -678,16 +678,11 @@ TEST(runtime_includes)
 
 TEST(runtime_system_includes)
 {
-    bsSystemIncludeClear();
-    ASSERT_NULL(bsSystemIncludeGet("nope.bare"));
-
-    bsSystemIncludeRegister("sys.bare", "systemGlobal = 'system'");
-    ASSERT_STR_EQ(bsSystemIncludeGet("sys.bare"), "systemGlobal = 'system'");
-
+    /* A system include is a bundled include library script */
     BSOptions *options = bsTestOptions();
-    ASSERT_VALUE(bsTestExecuteOptions("include <sys.bare>\nreturn systemGlobal", options), "\"system\"");
+    ASSERT_VALUE(bsTestExecuteOptions("include <url.bare>\nreturn urlEncode('a b')", options), "\"a%20b\"");
     /* A repeated system include is a no-op */
-    ASSERT_VALUE(bsTestExecuteOptions("include <sys.bare>\nreturn systemGlobal", options), "\"system\"");
+    ASSERT_VALUE(bsTestExecuteOptions("include <url.bare>\nreturn urlEncode('a b')", options), "\"a%20b\"");
     bsOptionsFree(options);
 
     /* A missing system include */
@@ -695,19 +690,6 @@ TEST(runtime_system_includes)
     ASSERT_VALUE(bsTestExecuteOptions("include <nope.bare>", options), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Include of \"nope.bare\" failed");
     bsOptionsFree(options);
-
-    /* The system include search path */
-    const char *directory = bsTestTempDir();
-    bsTestTempFile("path.bare", "pathGlobal = 'from path'");
-    bsSystemIncludePath("nonexistent-directory");
-    bsSystemIncludePath(directory);
-    ASSERT_STR_EQ(bsSystemIncludeGet("path.bare"), "pathGlobal = 'from path'");
-    ASSERT_NULL(bsSystemIncludeGet("missing.bare"));
-
-    options = bsTestOptions();
-    ASSERT_VALUE(bsTestExecuteOptions("include <path.bare>\nreturn pathGlobal", options), "\"from path\"");
-    bsOptionsFree(options);
-    bsSystemIncludeClear();
 }
 
 
@@ -834,11 +816,9 @@ TEST(runtime_coverage)
 
     /* Coverage is not recorded for system scripts */
     options = bsTestCoverageOptions(&coverage, true);
-    bsSystemIncludeRegister("cov.bare", "x = 1");
-    ASSERT_VALUE(bsTestExecuteOptions("include <cov.bare>\nreturn x", options), "1");
-    ASSERT_FALSE(bsObjectHas(bsObjectGet(coverage, "scripts"), "cov.bare"));
+    ASSERT_VALUE(bsTestExecuteOptions("include <url.bare>\nreturn urlEncode('a b')", options), "\"a%20b\"");
+    ASSERT_FALSE(bsObjectHas(bsObjectGet(coverage, "scripts"), "url.bare"));
     bsOptionsFree(options);
-    bsSystemIncludeClear();
 
     /* Coverage is not recorded for a script with no name */
     options = bsTestCoverageOptions(&coverage, true);
@@ -1085,27 +1065,6 @@ TEST(runtime_include_lint_debug)
     bsRelease(bsTestExecuteOptions("include 'a.bare'", options));
     ASSERT_STR_NOT_CONTAINS(bsTestLogText(), "static analysis");
     bsOptionsFree(options);
-}
-
-
-TEST(runtime_include_bundled_model)
-{
-    /* A registered system include whose text is an invalid JSON model fails */
-    bsSystemIncludeRegister("badmodel.bare", "{\"statements\":[{}]}");
-    ASSERT_VALUE(bsTestExecute("include <badmodel.bare>"), "null");
-    ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Include of \"badmodel.bare\" failed");
-    bsSystemIncludeClear();
-
-    /* A registered system include whose text is a valid JSON model executes it */
-    bsSystemIncludeRegister("model.bare",
-                            "{\"statements\":[{\"expr\":{\"name\":\"modelGlobal\",\"expr\":{\"string\":\"from model\"}}}]}");
-    ASSERT_VALUE(bsTestExecute("include <model.bare>\nreturn modelGlobal"), "\"from model\"");
-    bsSystemIncludeClear();
-
-    /* A registered system include whose text is source is parsed */
-    bsSystemIncludeRegister("source.bare", "sourceGlobal = 'parsed'");
-    ASSERT_VALUE(bsTestExecute("include <source.bare>\nreturn sourceGlobal"), "\"parsed\"");
-    bsSystemIncludeClear();
 }
 
 

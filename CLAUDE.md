@@ -28,8 +28,9 @@ make perfx          # cross-language application suite -> build/perfx/report.md 
 make perfx-check    # verify every perfx port computes the same result
 make release        # three-stage PGO+LTO build in build/release
 make includes       # regenerate src/includeSource.c (checked in; only after lib/include changes)
-make release INCLUDE="barescriptParser.bare barescriptLint.bare url.bare"  # bundle only these includes
+make release INCLUDE="url.bare"                    # bundle only these includes (and the parser and linter)
 make release INCLUDE_EXCLUDE="qrcode.bare draw.bare"                         # bundle all but these
+                    # both for a library built for an application - tests and training need every include
 ```
 
 Filtering and diagnostics:
@@ -89,7 +90,7 @@ no model objects at all (DESIGN.md's **The Parser and Linter** draws it).
 `src/model.c` compiles a statement from a transient syntax tree (`BSAst`, an arena of nodes) to
 bytecode. A parsed script's model objects are loaded into the tree a statement at a time by
 `bsAstStatement`; a bundled include's binary model is read into it by `bsScriptFromModelBinary`,
-and a system include's JSON model is decoded to objects first. The
+and a JSON model is decoded to objects first. The
 loaders reject a malformed model; the emitter assumes a well-formed tree. A script keeps its model
 only where something will read it - the CLI under static analysis, an include while coverage is
 recording; otherwise `bsScriptForgetModel` drops it and `bsScriptToModel` re-parses the retained
@@ -126,8 +127,9 @@ statement in a cached include's code.
 under a CLI built from the *existing* generated source. DESIGN.md's **The Bundled Include Library**
 describes the encoding. Any include but the parser and linter compiles out under its
 `NO_BARESCRIPT_INCLUDE_<NAME>` macro; the Makefile's `INCLUDE` list sets the macro for every include
-not named, and its `INCLUDE_EXCLUDE` list for every include named. There is no dependency tracking,
-so an include's own includes must be listed with it.
+not named, and its `INCLUDE_EXCLUDE` list for every include named; a change to either needs a
+`make clean` first. There is no dependency tracking, so an include's own includes must be listed
+with it.
 
 ### Values and reference counting
 
@@ -146,9 +148,8 @@ Allocation failure is fatal (`bsAlloc` aborts); do not thread out-of-memory resu
 operations.
 
 All mutable runtime state is `_Thread_local` - the free lists, the intern table, the model keys, the
-library function values, the compiled parser, linter, and include caches, the system include
-registry, the RNG - so each thread is an isolated runtime, and values, scripts, and options never
-cross threads (DESIGN.md's **Threads**). Keep it so: a new file-scope variable is `_Thread_local` or
+library function values, the compiled parser, linter, and include caches, the RNG - so each thread
+is an isolated runtime, and values, scripts, and options never cross threads (DESIGN.md's **Threads**). Keep it so: a new file-scope variable is `_Thread_local` or
 `const`. The one process-wide object is the libcurl loader, behind a C11 atomic once. The cleanups
 are per thread, `bsValueCleanup` last; `test/test_thread.c` runs eight runtimes at once.
 

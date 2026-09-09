@@ -177,18 +177,6 @@ int bsMain(int argc, char **argv)
     if (statusCode == 0 && sourceCount == 0) {
         fputs(bsUsage, stdout);
     } else if (statusCode == 0) {
-        /* Add the BARESCRIPT_INCLUDE_PATH directories to the system include search path */
-        const char *includePath = getenv("BARESCRIPT_INCLUDE_PATH");
-        if (includePath != NULL) {
-            char *paths = bsCliStrdup(includePath);
-            char *state;
-            for (char *path = strtok_r(paths, ":", &state); path != NULL;
-                 path = strtok_r(NULL, ":", &state)) {
-                bsSystemIncludePath(path);
-            }
-            free(paths);
-        }
-
         BSOptions *options = bsOptionsNew();
         options->debug = debug;
         options->fetchFn = bsFetchReadWrite;
@@ -360,7 +348,6 @@ done:
     free(sources);
     free(vars);
     bsParserCleanup();
-    bsSystemIncludeClear();
     bsIncludeCleanup();
     bsLibraryCleanup();
     bsValueCleanup();

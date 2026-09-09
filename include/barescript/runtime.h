@@ -161,21 +161,6 @@ BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue
 
 
 /*
- * The system include library
- *
- * System includes - "include <name.bare>" - resolve against a registry of named scripts, then
- * against the registered search path directories. Both are empty unless the host adds to them, so
- * a system include fails by default. The command-line interface adds every directory in the
- * BARESCRIPT_INCLUDE_PATH environment variable to the search path. The registry and search path
- * belong to the calling thread.
- */
-void bsSystemIncludeRegister(const char *name, const char *text);
-void bsSystemIncludePath(const char *directory);
-const char *bsSystemIncludeGet(const char *name);
-void bsSystemIncludeClear(void);
-
-
-/*
  * The bundled BareScript include library
  *
  * The library embeds the BareScript include library - args.bare, markdown.bare, schema.bare, and

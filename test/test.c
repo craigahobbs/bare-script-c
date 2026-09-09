@@ -319,7 +319,6 @@ int bsTestRun(const char *filter, bool quiet)
     bsTestLogClear();
     bsAssign(&bsTestError, bsNull());
     bsParserCleanup();
-    bsSystemIncludeClear();
     bsIncludeCleanup();
     bsLibraryCleanup();
 

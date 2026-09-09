@@ -7,12 +7,11 @@
  * This is the umbrella header for the BareScript C runtime library.
  *
  * Threads: the runtime keeps its state - the value free lists, the intern table, the compiled
- * parser and include caches, the system include registry - in thread-local storage, so each thread
- * is an independent runtime and threads never contend. Values, scripts, expressions, and options
- * belong to the thread that created them and must not be passed to another; pass text and let the
- * receiving thread parse it. A thread that used the runtime releases its state before it exits
- * with bsParserCleanup, bsSystemIncludeClear, bsIncludeCleanup, bsLibraryCleanup, and last
- * bsValueCleanup.
+ * parser and include caches - in thread-local storage, so each thread is an independent runtime
+ * and threads never contend. Values, scripts, expressions, and options belong to the thread that
+ * created them and must not be passed to another; pass text and let the receiving thread parse it.
+ * A thread that used the runtime releases its state before it exits with bsParserCleanup,
+ * bsIncludeCleanup, bsLibraryCleanup, and last bsValueCleanup.
  */
 
 #ifndef BARESCRIPT_H

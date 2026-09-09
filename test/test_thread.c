@@ -33,7 +33,7 @@ static void bsThreadFail(BSThreadTask *task, const char *what, const char *detai
 
 /*
  * Parse, lint, and execute a script that touches every piece of per-thread state - the parser and
- * linter bootstraps, a bundled include, the thread's own system include registry, the intern table
+ * linter bootstraps, a bundled include, the intern table
  * and an indexed object (past sixteen keys), the regex match keys, mathRandom - and check the result
  */
 static void *bsThreadRun(void *data)
@@ -42,13 +42,9 @@ static void *bsThreadRun(void *data)
     char text[1024];
     char expected[128];
 
-    /* This thread's system include - the registry is per thread, so the main thread never sees it */
-    snprintf(text, sizeof(text), "threadValue = %d\n", task->index);
-    bsSystemIncludeRegister("threadTest.bare", text);
-
     snprintf(text, sizeof(text),
              "include <url.bare>\n"
-             "include <threadTest.bare>\n"
+             "threadValue = %d\n"
              "\n"
              "function keys(count):\n"
              "    obj = {}\n"
@@ -69,7 +65,8 @@ static void *bsThreadRun(void *data)
              "groups = objectGet(match, 'groups')\n"
              "return urlEncodeComponent('a b') + '|' + threadValue + '|' + objectGet(groups, 'name') + '|' + \\\n"
              "    objectGet(groups, '2') + '|' + arrayLength(objectKeys(obj)) + '|' + \\\n"
-             "    jsonStringify({'b': [1, {'c': null}], 'a': objectGet(obj, 'key' + threadValue)})\n");
+             "    jsonStringify({'b': [1, {'c': null}], 'a': objectGet(obj, 'key' + threadValue)})\n",
+             task->index);
     snprintf(expected, sizeof(expected), "a%%20b|%d|thread|%d|%d|{\"a\":%d,\"b\":[1,{\"c\":null}]}",
              task->index, task->index, 100 + task->index, task->index);
 
@@ -142,7 +139,6 @@ static void *bsThreadRun(void *data)
 
     /* Release this thread's runtime state */
     bsParserCleanup();
-    bsSystemIncludeClear();
     bsIncludeCleanup();
     bsLibraryCleanup();
     bsValueCleanup();

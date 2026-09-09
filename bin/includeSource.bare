@@ -578,10 +578,9 @@ async function main():
         ' *\n' + \
         ' * Define NO_BARESCRIPT_INCLUDE_<NAME> - the include file name without ".bare" in upper case, as in\n' + \
         " * NO_BARESCRIPT_INCLUDE_MARKDOWNUP - to leave that include's model out of the library. The include\n" + \
-        ' * keeps its registry entry and accessor, which return no model, so an include statement for it is\n' + \
-        ' * served from the system include path, if one is registered, or fails. An include that an included\n' + \
-        ' * script itself includes must be kept along with it. ' + arrayJoin(includeSourceRequired, ' and ') + '\n' + \
-        ' * are always bundled - the runtime parses with them.\n' + \
+        ' * keeps its registry entry and accessor, which return no model, so an include statement for it\n' + \
+        ' * fails. An include that an included script itself includes must be kept along with it.\n' + \
+        ' * ' + arrayJoin(includeSourceRequired, ' and ') + ' are always bundled - the runtime parses with them.\n' + \
         ' */\n']
 
     # The byte values as C hex literals

@@ -84,26 +84,24 @@ INCLUDE_TEST_SRCS := $(sort $(wildcard $(INCLUDE_TEST_DIR)/*.bare))
 INCLUDE_SOURCE_C := $(SRC_DIR)/includeSource.c
 INCLUDE_SOURCE_H := $(INC_DIR)/barescript/includeSource.h
 
-# The includes to bundle - all of them unless INCLUDE lists them, the parser and linter always
-# among them, or INCLUDE_EXCLUDE lists the ones to leave out:
+# The includes to bundle - all of them, or INCLUDE's list, or all but INCLUDE_EXCLUDE's; the parser
+# and linter are bundled either way, since the runtime parses with them:
 #
-#   make release INCLUDE="barescriptParser.bare barescriptLint.bare markdownUp.bare ..."
-#   make release INCLUDE_EXCLUDE="markdownUp.bare ..."
+#   make release INCLUDE="url.bare"
+#   make release INCLUDE_EXCLUDE="qrcode.bare draw.bare"
 #
 # Every other include is compiled out by its NO_BARESCRIPT_INCLUDE_<NAME> macro, which only
-# src/includeSource.c reads - so a change to either needs a "make clean" first. The test suites
-# need them all.
+# src/includeSource.c reads - so a change to either needs a "make clean" first. For a library built
+# for an application only: the test suites and the release build's training need every include.
 INCLUDE ?=
 INCLUDE_EXCLUDE ?=
-ifneq '$(strip $(INCLUDE_EXCLUDE))' ''
-    INCLUDE := $(filter-out $(INCLUDE_EXCLUDE),$(notdir $(INCLUDE_LIB_SRCS)))
+INCLUDE_NAMES := $(notdir $(INCLUDE_LIB_SRCS))
+INCLUDE_UNKNOWN := $(filter-out $(INCLUDE_NAMES),$(INCLUDE) $(INCLUDE_EXCLUDE))
+ifneq '$(INCLUDE_UNKNOWN)' ''
+    $(error not in $(INCLUDE_LIB_DIR): $(INCLUDE_UNKNOWN))
 endif
-INCLUDE_CFLAGS :=
-ifneq '$(strip $(INCLUDE))' ''
-    INCLUDE_OUT := $(basename $(filter-out $(INCLUDE),$(notdir $(INCLUDE_LIB_SRCS))))
-    INCLUDE_CFLAGS := $(patsubst %,-DNO_BARESCRIPT_INCLUDE_%,$(shell echo '$(INCLUDE_OUT)' | tr '[:lower:]' '[:upper:]'))
-    BASE_CFLAGS += $(INCLUDE_CFLAGS)
-endif
+INCLUDE_OUT := $(basename $(if $(strip $(INCLUDE)),$(filter-out $(INCLUDE),$(INCLUDE_NAMES)),$(INCLUDE_EXCLUDE)))
+BASE_CFLAGS += $(patsubst %,-DNO_BARESCRIPT_INCLUDE_%,$(shell echo '$(INCLUDE_OUT)' | tr '[:lower:]' '[:upper:]'))
 
 
 # Sources
@@ -168,7 +166,7 @@ help:
 	@echo
 	@echo "  TEST=<name>   filter the unit tests by name substring"
 	@echo "  QUIET=1       print a dot per unit test instead of a line"
-	@echo "  INCLUDE=<names>  bundle only these includes, e.g. \"barescriptParser.bare barescriptLint.bare url.bare\""
+	@echo "  INCLUDE=<names>  bundle only these includes, e.g. \"url.bare\""
 	@echo "  INCLUDE_EXCLUDE=<names>  bundle all but these includes, e.g. \"qrcode.bare draw.bare\""
 	@echo "  libcurl HTTP fetch: $(if $(strip $(CURL_LIBS)),enabled,disabled)"
 
@@ -193,7 +191,7 @@ SPACE := $(EMPTY) $(EMPTY)
 
 .PHONY: includes
 includes: $(CLI_BIN)
-	BARESCRIPT_INCLUDE_PATH=$(CURDIR)/$(INCLUDE_LIB_DIR) $(CLI_BIN) $(CURDIR)/bin/includeSource.bare \
+	$(CLI_BIN) $(CURDIR)/bin/includeSource.bare \
 	    -v vFiles "'[$(subst $(SPACE),$(COMMA),$(patsubst %,\"$(CURDIR)/%\",$(INCLUDE_LIB_SRCS)))]'" \
 	    -v vOutputC "'$(CURDIR)/$(INCLUDE_SOURCE_C)'" \
 	    -v vOutputH "'$(CURDIR)/$(INCLUDE_SOURCE_H)'"
@@ -360,11 +358,9 @@ $(PGO_CLI): $(PGO_OBJS)
 # never does since it loads bundled models. A synthetic parse script, the language tests, and a
 # static-analysis run were measured and moved neither workload beyond build-to-build noise. The
 # two are independent, so they run at once; %p so each process writes its own profraw, then merge.
-# With includes compiled out, the training programs read them from lib/include instead.
 # A merge whose check fails must not leave its output behind: make would take it as up to date,
 # and the next run would go straight to stage 3, past the check.
-PROFILE_ENV := LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw" \
-    $(if $(INCLUDE_CFLAGS),BARESCRIPT_INCLUDE_PATH=$(CURDIR)/$(INCLUDE_LIB_DIR))
+PROFILE_ENV := LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw"
 $(PROFILE_DATA): $(PGO_CLI) $(PERF_DIR)/test.bare $(INCLUDE_LIB_SRCS) $(INCLUDE_TEST_SRCS)
 	@rm -rf $(PROFILE_DIR) $(PGO_DIR)/*.gcda
 	@mkdir -p $(PROFILE_DIR)

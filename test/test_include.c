@@ -366,14 +366,9 @@ TEST(include_compiled_out)
     ASSERT_NULL(bsIncludeSource("url.bare", &size));
     ASSERT_NULL(bsIncludeScript("url.bare"));
 
-    /* An include statement for it fails... */
+    /* An include statement for it fails */
     ASSERT_VALUE(bsTestExecute("include <url.bare>\nreturn urlEncode('a b')"), "null");
     ASSERT_STR_CONTAINS(bsTestErrorText(), "url.bare");
-
-    /* ...unless the system include path serves it */
-    bsSystemIncludeRegister("url.bare", "function urlEncode(text):\n    return 'from the path'\nendfunction\n");
-    ASSERT_VALUE(bsTestExecute("include <url.bare>\nreturn urlEncode('a b')"), "\"from the path\"");
-    bsSystemIncludeClear();
     bsIncludeSources[ix] = saved;
 }
 

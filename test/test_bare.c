@@ -212,25 +212,6 @@ TEST(bare_debug_and_static)
 }
 
 
-TEST(bare_include_path)
-{
-    /* The BARESCRIPT_INCLUDE_PATH environment variable adds system include directories */
-    bsTestTempFile("sys.bare", "function sysFn():\n    return 'from system'\nendfunction\n");
-    BSValue path = bsStringNewFormat(":nonexistent-dir:%s", bsTestTempDir());
-    setenv("BARESCRIPT_INCLUDE_PATH", bsStringData(path), 1);
-    bsRelease(path);
-
-    ASSERT_INT_EQ(bsTestBare("-c", "include <sys.bare>\nsystemLog(sysFn())", NULL), 0);
-    ASSERT_STR_EQ(bsTestMainText(), "from system\n");
-
-    setenv("BARESCRIPT_INCLUDE_PATH", "", 1);
-    ASSERT_INT_EQ(bsTestBare("-c", "systemLog('ok')", NULL), 0);
-
-    unsetenv("BARESCRIPT_INCLUDE_PATH");
-    ASSERT_INT_EQ(bsTestBare("-c", "systemLog('ok')", NULL), 0);
-}
-
-
 TEST(bare_multiple_files)
 {
     /* Two file scripts in sequence exercise the URL function replacement between them */

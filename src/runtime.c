@@ -148,76 +148,6 @@ void bsLog(BSOptions *options, const char *format, ...)
 
 
 /*
- * The system include library
- */
-
-
-static _Thread_local BSValue bsSystemIncludes;
-static _Thread_local BSValue bsSystemIncludePaths;
-
-
-/* Register a system include's text, a string value the registry takes */
-static void bsSystemIncludeSet(const char *name, BSValue text)
-{
-    if (bsSystemIncludes.type != BS_OBJECT) {
-        bsSystemIncludes = bsObjectNew();
-    }
-    bsObjectSet(bsSystemIncludes, name, text);
-}
-
-
-void bsSystemIncludeRegister(const char *name, const char *text)
-{
-    bsSystemIncludeSet(name, bsStringNew(text));
-}
-
-
-void bsSystemIncludePath(const char *directory)
-{
-    if (bsSystemIncludePaths.type != BS_ARRAY) {
-        bsSystemIncludePaths = bsArrayNew();
-    }
-    bsArrayPush(bsSystemIncludePaths, bsStringNew(directory));
-}
-
-
-/*
- * A registered system include's text, or a search path directory's - registered once found, so a
- * directory takes precedence over the bundled library and a script can run against an include
- * library checkout. A borrowed string value, or a null value if neither has the include.
- */
-static BSValue bsSystemIncludeText(const char *name)
-{
-    BSValue text = bsObjectGet(bsSystemIncludes, name);
-    for (size_t ix = 0; text.type != BS_STRING && ix < bsArrayCount(bsSystemIncludePaths); ix++) {
-        BSValue directory = bsArrayGet(bsSystemIncludePaths, ix);
-        BSValue path = bsStringNewFormat("%s/%s", bsStringData(directory), name);
-        BSFetchRequest request = {.url = bsStringData(path), .headers = bsNull()};
-        bsFetchReadOnly(&request, &text, 1, NULL);
-        bsRelease(path);
-        if (text.type == BS_STRING) {
-            bsSystemIncludeSet(name, text);
-        }
-    }
-    return text;
-}
-
-
-const char *bsSystemIncludeGet(const char *name)
-{
-    BSValue text = bsSystemIncludeText(name);
-    return text.type == BS_STRING ? bsStringData(text) : NULL;
-}
-
-
-void bsSystemIncludeClear(void)
-{
-    bsAssign(&bsSystemIncludes, bsNull());
-    bsAssign(&bsSystemIncludePaths, bsNull());
-}
-
-
-/*
  * Bytecode interpreter
  */
 
@@ -755,16 +685,15 @@ static bool bsIncludeFailed(BSScript *script, const char *url, int lineNumber, B
 
 
 /*
- * Parse and execute one include - a fetched include's text or a system include's registered text,
- * a string value, or given any other value a system include's bundled compiled script - then lint it
+ * Execute one include - a system include's bundled compiled script, or a fetched include's text,
+ * parsed, executed, and linted
  */
 static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSValue text, int lineNumber,
                              BSOptions *options)
 {
-    BSScript *includeScript;
-    if (text.type != BS_STRING) {
+    if (system) {
         /* The bundled include library's compiled script, cached for the thread */
-        includeScript = system ? bsIncludeScript(url) : NULL;
+        BSScript *includeScript = bsIncludeScript(url);
         if (includeScript == NULL) {
             return bsIncludeFailed(script, url, lineNumber, options);
         }
@@ -772,31 +701,23 @@ static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSV
         bsScriptRelease(includeScript);
         return options->error.type != BS_STRING;
     }
-
-    if (system && bsStringData(text)[0] == '{') {
-        /* A registered system include may be a compiled JSON script model */
-        BSValue model = bsJSONDecode(bsStringData(text), bsStringSize(text), NULL);
-        includeScript = bsScriptFromModel(model, url);
-        bsRelease(model);
-        if (includeScript == NULL) {
-            return bsIncludeFailed(script, url, lineNumber, options);
-        }
-    } else {
-        BSParserError parserError = {0};
-        includeScript = bsParseScriptString(text, 1, url, &parserError);
-        if (includeScript == NULL) {
-            bsErrorSet(options, "%s", bsStringData(parserError.message));
-            bsParserErrorFree(&parserError);
-            return false;
-        }
-
-        /* Only coverage reporting reads an include's model - keep it while coverage is recording */
-        BSValue coverage = bsObjectGet(options->globals, BS_GLOBAL_COVERAGE);
-        if (coverage.type != BS_OBJECT || !bsValueBoolean(bsObjectGet(coverage, "enabled"))) {
-            bsScriptForgetModel(includeScript);
-        }
+    if (text.type != BS_STRING) {
+        return bsIncludeFailed(script, url, lineNumber, options);
     }
-    includeScript->system = system;
+
+    BSParserError parserError = {0};
+    BSScript *includeScript = bsParseScriptString(text, 1, url, &parserError);
+    if (includeScript == NULL) {
+        bsErrorSet(options, "%s", bsStringData(parserError.message));
+        bsParserErrorFree(&parserError);
+        return false;
+    }
+
+    /* Only coverage reporting reads an include's model - keep it while coverage is recording */
+    BSValue coverage = bsObjectGet(options->globals, BS_GLOBAL_COVERAGE);
+    if (coverage.type != BS_OBJECT || !bsValueBoolean(bsObjectGet(coverage, "enabled"))) {
+        bsScriptForgetModel(includeScript);
+    }
 
     /* Execute the include with its own includes and fetches resolved relative to it */
     BSUrlFn savedUrlFn = options->urlFn;
@@ -912,13 +833,11 @@ static bool bsExecuteIncludes(BSScript *script, const BSInclude *includes, size_
         }
         bsObjectSetString(loaded, item->key, bsBoolean(true));
 
-        /* The fetched text, taken from the pending set, or a system include's registered text */
+        /* A fetched include's text, taken from the pending set */
         const char *url = bsStringData(item->url);
         bool system = includes[ix].system;
-        BSValue text;
-        if (system) {
-            text = bsRetain(bsSystemIncludeText(url));
-        } else {
+        BSValue text = bsNull();
+        if (!system) {
             text = bsRetain(bsObjectGetString(bsIncludeTexts, item->key));
             bsObjectDelete(bsIncludeTexts, bsStringData(item->key));
         }
@@ -1454,13 +1373,11 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
     }
 
     /*
-     * Statements count against the limit only outside system includes, and coverage records every
-     * one: a single compare per STMT sends both an exceeded limit and a recording run to the slow
-     * path. A system script's markers - only a registered system include has any, the bundled
-     * library being emitted without them - take the slow path too, which gives the count back.
+     * Statements count against the limit, and coverage records every one: a single compare per
+     * STMT sends both an exceeded limit and a recording run to the slow path. A system script - the
+     * bundled library - is emitted without statement markers, so it is neither counted nor recorded.
      */
-    int64_t statementLimit = !countStatements || hasCoverage ? INT64_MIN :
-        options->maxStatements > 0 ? options->maxStatements : INT64_MAX;
+    int64_t statementLimit = hasCoverage ? INT64_MIN : options->maxStatements > 0 ? options->maxStatements : INT64_MAX;
 
     const BSInst *insts = code->inst;
     const BSInst *inst = insts;
@@ -1708,10 +1625,8 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
         BS_CASE(STMT) {
             int64_t count = ++options->statementCount;
             if (count > statementLimit) {
-                /* The limit is exceeded, coverage is recording, or the script is not counted */
-                if (!countStatements) {
-                    options->statementCount--;
-                } else if (options->maxStatements > 0 && count > options->maxStatements) {
+                /* The limit is exceeded, or coverage is recording */
+                if (options->maxStatements > 0 && count > options->maxStatements) {
                     bsErrorSetStatement(options, script, code->coverLines[inst->a],
                                         "Exceeded maximum script statements (%lld)",
                                         (long long) options->maxStatements);

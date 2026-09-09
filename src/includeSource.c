@@ -13,10 +13,9 @@
  *
  * Define NO_BARESCRIPT_INCLUDE_<NAME> - the include file name without ".bare" in upper case, as in
  * NO_BARESCRIPT_INCLUDE_MARKDOWNUP - to leave that include's model out of the library. The include
- * keeps its registry entry and accessor, which return no model, so an include statement for it is
- * served from the system include path, if one is registered, or fails. An include that an included
- * script itself includes must be kept along with it. barescriptParser.bare and barescriptLint.bare
- * are always bundled - the runtime parses with them.
+ * keeps its registry entry and accessor, which return no model, so an include statement for it
+ * fails. An include that an included script itself includes must be kept along with it.
+ * barescriptParser.bare and barescriptLint.bare are always bundled - the runtime parses with them.
  */
 
 

@@ -300,8 +300,8 @@ fixed codes, and 204 KB for the same models as JSON.
 `src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
 fresh clone builds with no bootstrap. `make includes` regenerates them by running
 `bin/includeSource.bare` - itself a BareScript program - under a CLI built from the *existing*
-generated source, with `BARESCRIPT_INCLUDE_PATH` pointing at `lib/include` so `gzip.bare` is
-available before it is bundled.
+generated source, whose bundled `gzip.bare` and parser it includes; a change to `gzip.bare` itself
+takes a second `make includes` to be compressed by its new copy.
 
 The generated header exports a stub accessor per include, returning its inflated binary model and
 its size:
@@ -319,20 +319,21 @@ Any include but `barescriptParser.bare` and `barescriptLint.bare` - the runtime 
 can be compiled out to make the library smaller. Defining `NO_BARESCRIPT_INCLUDE_<NAME>`, the file
 name without `.bare` in upper case, leaves that include's model out; the Makefile's `INCLUDE`
 variable names the includes to bundle, `INCLUDE_EXCLUDE` the ones to leave out, and either defines
-the macro for every include not bundled:
+the macro for every include not bundled (the parser and linter are bundled either way):
 
 ```sh
-make release INCLUDE="barescriptParser.bare barescriptLint.bare markdownUp.bare url.bare"
+make release INCLUDE="markdownUp.bare url.bare"
 make release INCLUDE_EXCLUDE="qrcode.bare draw.bare"
 ```
 
 A compiled-out include keeps its registry entry and stub accessor, which return no model, so
-`include <name.bare>` is served from the system include path when one is registered and fails
-otherwise. There is no dependency tracking: an include that an included script itself includes has
-to be listed with it - `markdownUp.bare` includes four scripts that include five more - and an
-excluded include is missing from every bundled include that includes it. The parser and linter
-alone make a 321 KB release library, against 438 KB with all thirty-two. A change to `INCLUDE` or
-`INCLUDE_EXCLUDE` needs a `make clean` first, and the test suites need every include.
+`include <name.bare>` fails. There is no dependency tracking: an include that an included script
+itself includes has to be listed with it - `markdownUp.bare` includes four scripts that include five
+more - and an excluded include is missing from every bundled include that includes it. The parser
+and linter alone make a 321 KB release library, against 438 KB with all thirty-two. A change to
+`INCLUDE` or `INCLUDE_EXCLUDE` needs a `make clean` first. Both are for a library built for an
+application: the test suites and the release build's training need every include, so neither is
+for a test or release build of this project.
 
 
 ## JSON
@@ -419,7 +420,7 @@ repeat, whose continuation is only tried on the way back, is not worth the test.
 
 The runtime has no process-wide mutable state. Every free list, the intern table, the interned
 model keys, the library's function values, the compiled parser, linter, and bundled include caches,
-the system include registry and search path, and the random number generator state are
+and the random number generator state are
 `_Thread_local`, so each thread is an independent runtime and threads never contend - there are no
 locks. The one exception is libcurl, which the first thread to fetch a URL loads and globally
 initializes behind a C11 atomic, because `curl_global_init` was not thread-safe before libcurl 7.84.
@@ -437,9 +438,9 @@ Each thread pays for its own copy of what it uses. The parser and linter bootstr
 that parses, an include compiles once per thread that includes it, and the free lists and intern
 table fill per thread - about what the command-line interface's startup costs, a few milliseconds
 and under 2 MB. A thread that used the runtime releases that state before it exits with
-`bsParserCleanup`, `bsSystemIncludeClear`, `bsIncludeCleanup`, `bsLibraryCleanup`, and last
+`bsParserCleanup`, `bsIncludeCleanup`, `bsLibraryCleanup`, and last
 `bsValueCleanup`, which frees the free lists and the intern table; a thread that exits without them
-leaks its copy. The command-line interface is single-threaded and calls the five at exit. The C
+leaks its copy. The command-line interface is single-threaded and calls the four at exit. The C
 unit tests run eight threads through the parser, linter, includes, and library at once, and the
 suite passes under ThreadSanitizer.
 
