@@ -76,6 +76,72 @@ char *bsStrdup(const char *text)
 
 
 /*
+ * The thread's value state
+ *
+ * The free lists and the intern table are per thread, so threads never
+ * share a value and never contend - see README's "Threads". They are one struct so a function that
+ * touches several of them computes the thread-local address once.
+ */
+#define BS_STRING_POOL_CLASSES 5
+#define BS_ARRAY_BUF_CLASS_COUNT 6
+#define BS_ENTRY_POOL_CLASS_COUNT 2
+
+typedef struct {
+    BSString *string;
+    uint32_t hash;
+} BSInternSlot;
+
+/* The scratch a string builder starts in - past it, and for the results the pool does not take, a heap block */
+#define BS_SB_SCRATCH 256
+
+typedef struct {
+    BSString *stringPool[BS_STRING_POOL_CLASSES];
+    unsigned stringPoolCount[BS_STRING_POOL_CLASSES];
+    BSArray *arrayPool;
+    unsigned arrayPoolCount;
+    BSValue *arrayBufPool[BS_ARRAY_BUF_CLASS_COUNT];
+    unsigned arrayBufPoolCount[BS_ARRAY_BUF_CLASS_COUNT];
+    BSObject *objectPool;
+    unsigned objectPoolCount;
+    BSObjectEntry *entryPool[BS_ENTRY_POOL_CLASS_COUNT];
+    unsigned entryPoolCount[BS_ENTRY_POOL_CLASS_COUNT];
+    BSInternSlot *internSlots; /* NULL until the thread's first intern */
+    size_t internMask;
+    size_t internCount;
+    BSString *shortStrings[128 + 1]; /* the empty string, then each one-byte ASCII string, once created */
+    char sbScratch[BS_SB_SCRATCH];  /* where a string builder's small result takes shape - see bsSBReserve */
+    bool sbScratchBusy;
+} BSValueState;
+
+static _Thread_local BSValueState bsTS;
+
+
+/* Put an item on a pool's free list - "next" is the item's link - or free it when the list holds "max" */
+#define BS_POOL_GIVE(head, count, max, item, next) \
+    do { \
+        if ((count) < (max)) { \
+            (next) = (void *) (head); \
+            (head) = (item); \
+            (count)++; \
+        } else { \
+            free(item); \
+        } \
+    } while (0)
+
+
+/* Free every item on a pool's free list - "next" is the item's link, through "item" - and zero its count */
+#define BS_POOL_DRAIN(head, count, type, next) \
+    do { \
+        while ((head) != NULL) { \
+            type *item = (head); \
+            (head) = (type *) (next); \
+            free(item); \
+        } \
+        (count) = 0; \
+    } while (0)
+
+
+/*
  * Value constructors
  */
 
@@ -232,49 +298,288 @@ size_t bsUTF8Length(const char *data, size_t size)
 
 
 /*
- * String values
+ * Numbers - formatting per JavaScript's Number.prototype.toString, and parsing
  */
+
+
+/* Copy formatted text into the caller's buffer, NUL-terminated and truncated as snprintf would */
+static size_t bsNumberEmit(char *buffer, size_t bufferSize, const char *text, size_t size)
+{
+    if (bufferSize != 0) {
+        size_t copy = size < bufferSize - 1 ? size : bufferSize - 1;
+        memcpy(buffer, text, copy);
+        buffer[copy] = '\0';
+    }
+    return size;
+}
+
+
+/* A non-integer, or one past the fixed range: NaN, an infinity, or the shortest round-tripping digits */
+static BS_NOINLINE size_t bsNumberFormatSlow(double number, char *buffer, size_t bufferSize)
+{
+    if (isnan(number)) {
+        return bsNumberEmit(buffer, bufferSize, "NaN", 3);
+    }
+    if (isinf(number)) {
+        return number > 0 ? bsNumberEmit(buffer, bufferSize, "Infinity", 8) :
+            bsNumberEmit(buffer, bufferSize, "-Infinity", 9);
+    }
+
+    /*
+     * Find the shortest round-tripping decimal representation
+     *
+     * Round-tripping is monotone in precision - if p digits round-trip then so do p + 1 - so the
+     * shortest precision is found by binary search rather than by trying each in turn.
+     */
+    char digits[40];
+    int low = 1;
+    int high = 17;
+    while (low < high) {
+        int middle = low + (high - low) / 2;
+        snprintf(digits, sizeof(digits), "%.*e", middle - 1, number);
+        if (strtod(digits, NULL) == number) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    snprintf(digits, sizeof(digits), "%.*e", low - 1, number);
+
+    /* Split the "d.dddde+XX" form into its digits and exponent */
+    char mantissa[24];
+    size_t digitCount = 0;
+    const char *cursor = digits;
+    bool negative = false;
+    if (*cursor == '-') {
+        negative = true;
+        cursor++;
+    }
+    for (; *cursor != '\0' && *cursor != 'e'; cursor++) {
+        if (*cursor != '.') {
+            mantissa[digitCount++] = *cursor;
+        }
+    }
+    int exponent = (int) strtol(cursor + 1, NULL, 10);
+
+    /*
+     * Strip trailing zeroes from the mantissa
+     *
+     * The shortest round-tripping representation cannot end in a zero - dropping it would give the
+     * same value at one less precision, which the search above would have found first - so this is
+     * defensive against a libc whose rounding disagrees.
+     */
+    /* GCOV_EXCL_START */
+    while (digitCount > 1 && mantissa[digitCount - 1] == '0') {
+        digitCount--;
+    }
+    /* GCOV_EXCL_STOP */
+
+    /* Format per the ECMAScript Number::toString algorithm - "n" is the decimal point position */
+    int n = exponent + 1;
+    int k = (int) digitCount;
+    char text[64];
+    size_t size = 0;
+    if (negative) {
+        text[size++] = '-';
+    }
+    if (k <= n && n <= 21) {
+        memcpy(text + size, mantissa, (size_t) k);
+        size += (size_t) k;
+        for (int ix = 0; ix < n - k; ix++) {
+            text[size++] = '0';
+        }
+    } else if (0 < n && n <= 21) {
+        memcpy(text + size, mantissa, (size_t) n);
+        size += (size_t) n;
+        text[size++] = '.';
+        memcpy(text + size, mantissa + n, (size_t) (k - n));
+        size += (size_t) (k - n);
+    } else if (-6 < n && n <= 0) {
+        text[size++] = '0';
+        text[size++] = '.';
+        for (int ix = 0; ix < -n; ix++) {
+            text[size++] = '0';
+        }
+        memcpy(text + size, mantissa, (size_t) k);
+        size += (size_t) k;
+    } else {
+        text[size++] = mantissa[0];
+        if (k > 1) {
+            text[size++] = '.';
+            memcpy(text + size, mantissa + 1, (size_t) (k - 1));
+            size += (size_t) (k - 1);
+        }
+        size += (size_t) snprintf(text + size, sizeof(text) - size, "e%+d", n - 1);
+    }
+    return bsNumberEmit(buffer, bufferSize, text, size);
+}
 
 
 /*
- * The thread's value state
- *
- * The free lists and the intern table are per thread, so threads never
- * share a value and never contend - see README's "Threads". They are one struct so a function that
- * touches several of them computes the thread-local address once.
+ * Format a number: an integer that prints without an exponent - the common case by far - by a
+ * digit loop in place, anything else through the round-trip search, which is kept out of line so
+ * the string concatenation, append, join, and JSON encoder bodies that inline this stay small
  */
-#define BS_STRING_POOL_CLASSES 5
-#define BS_ARRAY_BUF_CLASS_COUNT 6
-#define BS_ENTRY_POOL_CLASS_COUNT 2
+static inline size_t bsNumberFormatFast(double number, char *buffer, size_t bufferSize)
+{
+    if (number == trunc(number) && number > -1e15 && number < 1e15) {
+        char text[24];
+        size_t begin = sizeof(text);
+        bool negative = number < 0;
+        uint64_t magnitude = (uint64_t) (negative ? -number : number);
+        do {
+            text[--begin] = (char) ('0' + (magnitude % 10));
+            magnitude /= 10;
+        } while (magnitude != 0);
+        if (negative) {
+            text[--begin] = '-';
+        }
+        return bsNumberEmit(buffer, bufferSize, text + begin, sizeof(text) - begin);
+    }
+    return bsNumberFormatSlow(number, buffer, bufferSize);
+}
 
-typedef struct {
-    BSString *string;
-    uint32_t hash;
-} BSInternSlot;
 
-/* The scratch a string builder starts in - past it, and for the results the pool does not take, a heap block */
-#define BS_SB_SCRATCH 256
+size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
+{
+    return bsNumberFormatFast(number, buffer, bufferSize);
+}
 
-typedef struct {
-    BSString *stringPool[BS_STRING_POOL_CLASSES];
-    unsigned stringPoolCount[BS_STRING_POOL_CLASSES];
-    BSArray *arrayPool;
-    unsigned arrayPoolCount;
-    BSValue *arrayBufPool[BS_ARRAY_BUF_CLASS_COUNT];
-    unsigned arrayBufPoolCount[BS_ARRAY_BUF_CLASS_COUNT];
-    BSObject *objectPool;
-    unsigned objectPoolCount;
-    BSObjectEntry *entryPool[BS_ENTRY_POOL_CLASS_COUNT];
-    unsigned entryPoolCount[BS_ENTRY_POOL_CLASS_COUNT];
-    BSInternSlot *internSlots; /* NULL until the thread's first intern */
-    size_t internMask;
-    size_t internCount;
-    BSString *shortStrings[128 + 1]; /* the empty string, then each one-byte ASCII string, once created */
-    char sbScratch[BS_SB_SCRATCH];  /* where a string builder's small result takes shape - see bsSBReserve */
-    bool sbScratchBusy;
-} BSValueState;
 
-static _Thread_local BSValueState bsTS;
+bool bsNumberRound(double number, double digits, double *result)
+{
+    double multiplier = pow(10, digits);
+    double rounded = trunc(number * multiplier + (number >= 0 ? 0.5 : -0.5)) / multiplier;
+    if (!isfinite(rounded)) {
+        return false;
+    }
+    *result = rounded;
+    return true;
+}
+
+
+/*
+ * strtod over an unterminated span, copied out since strtod needs a terminator. Almost every
+ * number fits the stack buffer; a longer one - a very long run of digits - takes a heap copy.
+ */
+double bsStrtod(const char *text, size_t size)
+{
+    char buffer[64];
+    char *number = size < sizeof(buffer) ? buffer : bsAlloc(size + 1);
+    memcpy(number, text, size);
+    number[size] = '\0';
+    double value = strtod(number, NULL);
+    if (number != buffer) {
+        free(number);
+    }
+    return value;
+}
+
+
+/* The offset past the Unicode spaces at "ix" */
+static size_t bsSkipSpaces(const char *text, size_t size, size_t ix)
+{
+    while (ix < size) {
+        size_t codeSize;
+        if (!bsIsSpaceCode(bsUTF8Decode(text, size, ix, &codeSize))) {
+            break;
+        }
+        ix += codeSize;
+    }
+    return ix;
+}
+
+
+bool bsNumberParse(const char *text, size_t size, double *result)
+{
+    /* ^\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*$ */
+    size_t ix = bsSkipSpaces(text, size, 0);
+    size_t begin = ix;
+    if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
+        ix++;
+    }
+    size_t integerDigits = 0;
+    while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
+        ix++;
+        integerDigits++;
+    }
+    size_t fractionDigits = 0;
+    if (ix < size && text[ix] == '.') {
+        ix++;
+        while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
+            ix++;
+            fractionDigits++;
+        }
+    }
+    if (integerDigits == 0 && fractionDigits == 0) {
+        return false;
+    }
+    if (ix < size && (text[ix] == 'e' || text[ix] == 'E')) {
+        ix++;
+        if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
+            ix++;
+        }
+        size_t exponentDigits = 0;
+        while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
+            ix++;
+            exponentDigits++;
+        }
+        if (exponentDigits == 0) {
+            return false;
+        }
+    }
+    size_t end = ix;
+    ix = bsSkipSpaces(text, size, ix);
+    if (ix != size) {
+        return false;
+    }
+
+    double value = bsStrtod(text + begin, end - begin);
+    if (!isfinite(value)) {
+        return false;
+    }
+    *result = value;
+    return true;
+}
+
+
+bool bsIntegerParse(const char *text, size_t size, int radix, double *result)
+{
+    if (radix < 2 || radix > 36) {
+        return false;
+    }
+    size_t ix = bsSkipSpaces(text, size, 0);
+    bool negative = false;
+    if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
+        negative = (text[ix] == '-');
+        ix++;
+    }
+    size_t digits = 0;
+    double value = 0;
+    while (ix < size) {
+        int digit = bsDigitValue(text[ix]);
+        if (digit < 0 || digit >= radix) {
+            break;
+        }
+        value = value * radix + digit;
+        digits++;
+        ix++;
+    }
+    if (digits == 0) {
+        return false;
+    }
+    ix = bsSkipSpaces(text, size, ix);
+    if (ix != size || !isfinite(value)) {
+        return false;
+    }
+    *result = negative ? -value : value;
+    return true;
+}
+
+
+/*
+ * String values
+ */
 
 
 /*
@@ -288,19 +593,6 @@ static _Thread_local BSValueState bsTS;
 #define BS_STRING_POOL_MAX 4096
 #define BS_STR_POOL_SHIFT 8
 static const size_t bsStringPoolSize[BS_STRING_POOL_CLASSES] = {48, 64, 96, 128, 192};
-
-
-/* Put an item on a pool's free list - "next" is the item's link - or free it when the list holds "max" */
-#define BS_POOL_GIVE(head, count, max, item, next) \
-    do { \
-        if ((count) < (max)) { \
-            (next) = (void *) (head); \
-            (head) = (item); \
-            (count)++; \
-        } else { \
-            free(item); \
-        } \
-    } while (0)
 
 
 /*
@@ -546,34 +838,6 @@ BSValue bsStringNewFormat(const char *format, ...)
 }
 
 
-static size_t bsNumberFormatSlow(double number, char *buffer, size_t bufferSize);
-static size_t bsNumberEmit(char *buffer, size_t bufferSize, const char *text, size_t size);
-
-/*
- * Format a number: an integer that prints without an exponent - the common case by far - by a
- * digit loop in place, anything else through the round-trip search, which is kept out of line so
- * the string concatenation, append, join, and JSON encoder bodies that inline this stay small
- */
-static inline size_t bsNumberFormatFast(double number, char *buffer, size_t bufferSize)
-{
-    if (number == trunc(number) && number > -1e15 && number < 1e15) {
-        char text[24];
-        size_t begin = sizeof(text);
-        bool negative = number < 0;
-        uint64_t magnitude = (uint64_t) (negative ? -number : number);
-        do {
-            text[--begin] = (char) ('0' + (magnitude % 10));
-            magnitude /= 10;
-        } while (magnitude != 0);
-        if (negative) {
-            text[--begin] = '-';
-        }
-        return bsNumberEmit(buffer, bufferSize, text + begin, sizeof(text) - begin);
-    }
-    return bsNumberFormatSlow(number, buffer, bufferSize);
-}
-
-
 /*
  * A value's string bytes - "text" is an owned string value for the types that format into a new
  * string, and null when the bytes point at the caller's buffer or at an existing string
@@ -796,6 +1060,151 @@ uint32_t bsStringCodePoint(BSValue value, size_t index)
     }
     size_t codeSize;
     return bsUTF8Decode(value.u.string->data, value.u.string->size, offset, &codeSize);
+}
+
+
+/*
+ * Interned strings
+ *
+ * Short C-string keys (script names, bsObjectSet) and compiled names are interned so a lookup can
+ * compare pointers. The table holds one reference; interned strings live until bsValueCleanup.
+ * New intern entries stop at COUNT_MAX.
+ */
+#define BS_INTERN_MAX 64
+#define BS_INTERN_INITIAL 32
+#define BS_INTERN_COUNT_MAX 65536
+
+
+/*
+ * The content hash of a string's bytes
+ *
+ * FNV-1a a word at a time, then mixed: a multiply alone leaves the hash's low bits depending on
+ * each word's low byte only, and the object index probes by the low bits, so keys that differ in
+ * their other bytes - "/item/123", "10.0.0.7" - would share slots.
+ */
+static BS_NOINLINE uint32_t bsHashBytes(const char *data, size_t size)
+{
+    const unsigned char *bytes = (const unsigned char *) data;
+    uint32_t hash = 2166136261u;
+    size_t ix = 0;
+    while (ix + 4 <= size) {
+        uint32_t word;
+        memcpy(&word, bytes + ix, 4);
+        hash ^= word;
+        hash *= 16777619u;
+        ix += 4;
+    }
+    while (ix < size) {
+        hash ^= bytes[ix++];
+        hash *= 16777619u;
+    }
+    hash ^= hash >> 16;
+    hash *= 0x85ebca6bu;
+    hash ^= hash >> 13;
+    hash *= 0xc2b2ae35u;
+    hash ^= hash >> 16;
+    return hash;
+}
+
+
+/* A string's content hash, computed once and kept on the string */
+static uint32_t bsStringHash(BSString *string)
+{
+    uint32_t *hash = (string->flags & BS_STR_INDEXED) != 0 ? &string->index[0] : &string->hash;
+    if ((string->flags & BS_STR_HASHED) == 0) {
+        *hash = bsHashBytes(string->data, string->size);
+        string->flags |= BS_STR_HASHED;
+    }
+    return *hash;
+}
+
+
+/* Store an interned string in the first empty slot of its probe sequence */
+static void bsInternPut(BSString *string, uint32_t hash)
+{
+    for (size_t probe = 0;; probe++) {
+        size_t slot = (hash + probe) & bsTS.internMask;
+        if (bsTS.internSlots[slot].string == NULL) {
+            bsTS.internSlots[slot].string = string;
+            bsTS.internSlots[slot].hash = hash;
+            return;
+        }
+    }
+}
+
+
+/* Double the table - or create it, at the thread's first intern */
+static void bsInternGrow(void)
+{
+    BSInternSlot *old = bsTS.internSlots;
+    size_t oldCapacity = old != NULL ? bsTS.internMask + 1 : 0;
+    size_t capacity = old != NULL ? oldCapacity * 2 : BS_INTERN_INITIAL;
+    bsTS.internMask = capacity - 1;
+    bsTS.internSlots = bsAlloc(capacity * sizeof(BSInternSlot));
+    memset(bsTS.internSlots, 0, capacity * sizeof(BSInternSlot));
+    for (size_t ix = 0; ix < oldCapacity; ix++) {
+        BSString *string = old[ix].string;
+        if (string == NULL) {
+            continue;
+        }
+        bsInternPut(string, old[ix].hash);
+    }
+    free(old);
+}
+
+static BSString *bsInternLookupHash(const char *data, size_t size, uint32_t hash)
+{
+    if (bsTS.internSlots == NULL) {
+        return NULL;
+    }
+    for (size_t probe = 0;; probe++) {
+        size_t slot = (hash + probe) & bsTS.internMask;
+        BSString *string = bsTS.internSlots[slot].string;
+        if (string == NULL) {
+            return NULL;
+        }
+        if (bsTS.internSlots[slot].hash == hash && string->size == size &&
+            (size == 0 || memcmp(string->data, data, size) == 0)) {
+            return string;
+        }
+    }
+}
+
+BSValue bsStringIntern(const char *data, size_t size)
+{
+    if (size > BS_INTERN_MAX) {
+        return bsStringNewSize(data, size);
+    }
+    uint32_t hash = bsHashBytes(data, size);
+    BSString *found = bsInternLookupHash(data, size, hash);
+    if (found != NULL) {
+        return bsRetainInline(bsStringTake(found));
+    }
+    BSValue value = bsStringNewSize(data, size);
+    value.u.string->hash = hash;
+    value.u.string->flags |= BS_STR_HASHED;
+    if (bsTS.internCount >= BS_INTERN_COUNT_MAX) {
+        return value;
+    }
+    if ((bsTS.internCount + 1) * 4 >= (bsTS.internMask + 1) * 3) {
+        bsInternGrow();
+    }
+    value.u.string->flags |= BS_STR_INTERNED;
+    value.u.string->refcount++;
+    bsInternPut(value.u.string, hash);
+    bsTS.internCount++;
+    return value;
+}
+
+BSValue bsStringInternExisting(const char *data, size_t size)
+{
+    if (size <= BS_INTERN_MAX) {
+        BSString *found = bsInternLookupHash(data, size, bsHashBytes(data, size));
+        if (found != NULL) {
+            return bsRetainInline(bsStringTake(found));
+        }
+    }
+    return bsStringNewSize(data, size);
 }
 
 
@@ -1245,212 +1654,15 @@ static void bsEntriesFree(BSObjectEntry *entries, size_t capacity)
 }
 
 
-/*
- * Interned strings
- *
- * Short C-string keys (script names, bsObjectSet) and compiled names are interned so a lookup can
- * compare pointers. The table holds one reference; interned strings live until bsValueCleanup.
- * New intern entries stop at COUNT_MAX.
- */
-#define BS_INTERN_MAX 64
-#define BS_INTERN_INITIAL 32
-#define BS_INTERN_COUNT_MAX 65536
-
-
-/*
- * The content hash of a string's bytes
- *
- * FNV-1a a word at a time, then mixed: a multiply alone leaves the hash's low bits depending on
- * each word's low byte only, and the object index probes by the low bits, so keys that differ in
- * their other bytes - "/item/123", "10.0.0.7" - would share slots.
- */
-static BS_NOINLINE uint32_t bsHashBytes(const char *data, size_t size)
+static int bsKeyCompare(const BSString *key1, const BSString *key2)
 {
-    const unsigned char *bytes = (const unsigned char *) data;
-    uint32_t hash = 2166136261u;
-    size_t ix = 0;
-    while (ix + 4 <= size) {
-        uint32_t word;
-        memcpy(&word, bytes + ix, 4);
-        hash ^= word;
-        hash *= 16777619u;
-        ix += 4;
-    }
-    while (ix < size) {
-        hash ^= bytes[ix++];
-        hash *= 16777619u;
-    }
-    hash ^= hash >> 16;
-    hash *= 0x85ebca6bu;
-    hash ^= hash >> 13;
-    hash *= 0xc2b2ae35u;
-    hash ^= hash >> 16;
-    return hash;
-}
-
-
-/* A string's content hash, computed once and kept on the string */
-static uint32_t bsStringHash(BSString *string)
-{
-    uint32_t *hash = (string->flags & BS_STR_INDEXED) != 0 ? &string->index[0] : &string->hash;
-    if ((string->flags & BS_STR_HASHED) == 0) {
-        *hash = bsHashBytes(string->data, string->size);
-        string->flags |= BS_STR_HASHED;
-    }
-    return *hash;
-}
-
-
-/* Store an interned string in the first empty slot of its probe sequence */
-static void bsInternPut(BSString *string, uint32_t hash)
-{
-    for (size_t probe = 0;; probe++) {
-        size_t slot = (hash + probe) & bsTS.internMask;
-        if (bsTS.internSlots[slot].string == NULL) {
-            bsTS.internSlots[slot].string = string;
-            bsTS.internSlots[slot].hash = hash;
-            return;
-        }
-    }
-}
-
-
-/* Double the table - or create it, at the thread's first intern */
-static void bsInternGrow(void)
-{
-    BSInternSlot *old = bsTS.internSlots;
-    size_t oldCapacity = old != NULL ? bsTS.internMask + 1 : 0;
-    size_t capacity = old != NULL ? oldCapacity * 2 : BS_INTERN_INITIAL;
-    bsTS.internMask = capacity - 1;
-    bsTS.internSlots = bsAlloc(capacity * sizeof(BSInternSlot));
-    memset(bsTS.internSlots, 0, capacity * sizeof(BSInternSlot));
-    for (size_t ix = 0; ix < oldCapacity; ix++) {
-        BSString *string = old[ix].string;
-        if (string == NULL) {
-            continue;
-        }
-        bsInternPut(string, old[ix].hash);
-    }
-    free(old);
-}
-
-static BSString *bsInternLookupHash(const char *data, size_t size, uint32_t hash)
-{
-    if (bsTS.internSlots == NULL) {
-        return NULL;
-    }
-    for (size_t probe = 0;; probe++) {
-        size_t slot = (hash + probe) & bsTS.internMask;
-        BSString *string = bsTS.internSlots[slot].string;
-        if (string == NULL) {
-            return NULL;
-        }
-        if (bsTS.internSlots[slot].hash == hash && string->size == size &&
-            (size == 0 || memcmp(string->data, data, size) == 0)) {
-            return string;
-        }
-    }
-}
-
-BSValue bsStringIntern(const char *data, size_t size)
-{
-    if (size > BS_INTERN_MAX) {
-        return bsStringNewSize(data, size);
-    }
-    uint32_t hash = bsHashBytes(data, size);
-    BSString *found = bsInternLookupHash(data, size, hash);
-    if (found != NULL) {
-        return bsRetainInline(bsStringTake(found));
-    }
-    BSValue value = bsStringNewSize(data, size);
-    value.u.string->hash = hash;
-    value.u.string->flags |= BS_STR_HASHED;
-    if (bsTS.internCount >= BS_INTERN_COUNT_MAX) {
-        return value;
-    }
-    if ((bsTS.internCount + 1) * 4 >= (bsTS.internMask + 1) * 3) {
-        bsInternGrow();
-    }
-    value.u.string->flags |= BS_STR_INTERNED;
-    value.u.string->refcount++;
-    bsInternPut(value.u.string, hash);
-    bsTS.internCount++;
-    return value;
-}
-
-BSValue bsStringInternExisting(const char *data, size_t size)
-{
-    if (size <= BS_INTERN_MAX) {
-        BSString *found = bsInternLookupHash(data, size, bsHashBytes(data, size));
-        if (found != NULL) {
-            return bsRetainInline(bsStringTake(found));
-        }
-    }
-    return bsStringNewSize(data, size);
-}
-
-
-/* Free every item on a pool's free list - "next" is the item's link, through "item" - and zero its count */
-#define BS_POOL_DRAIN(head, count, type, next) \
-    do { \
-        while ((head) != NULL) { \
-            type *item = (head); \
-            (head) = (type *) (next); \
-            free(item); \
-        } \
-        (count) = 0; \
-    } while (0)
-
-void bsValueCleanup(void)
-{
-    bsRegexScratchFree();
-
-    /* The intern table's references - a string still held elsewhere lives on as an ordinary string */
-    if (bsTS.internSlots != NULL) {
-        for (size_t ix = 0; ix <= bsTS.internMask; ix++) {
-            BSString *string = bsTS.internSlots[ix].string;
-            if (string != NULL) {
-                string->flags &= (uint8_t) ~BS_STR_INTERNED;
-                bsReleaseInline(bsStringTake(string));
-            }
-        }
-        free(bsTS.internSlots);
-        bsTS.internSlots = NULL;
-        bsTS.internMask = 0;
-        bsTS.internCount = 0;
-    }
-
-    /* The shared short strings - one still held elsewhere lives on as an ordinary string */
-    for (size_t ix = 0; ix < sizeof(bsTS.shortStrings) / sizeof(bsTS.shortStrings[0]); ix++) {
-        if (bsTS.shortStrings[ix] != NULL) {
-            bsReleaseInline(bsStringTake(bsTS.shortStrings[ix]));
-            bsTS.shortStrings[ix] = NULL;
-        }
-    }
-
-    /* The free lists */
-    for (unsigned ix = 0; ix < BS_STRING_POOL_CLASSES; ix++) {
-        BS_POOL_DRAIN(bsTS.stringPool[ix], bsTS.stringPoolCount[ix], BSString, item->index);
-    }
-    BS_POOL_DRAIN(bsTS.arrayPool, bsTS.arrayPoolCount, BSArray, item->values);
-    for (int ix = 0; ix < BS_ARRAY_BUF_CLASS_COUNT; ix++) {
-        BS_POOL_DRAIN(bsTS.arrayBufPool[ix], bsTS.arrayBufPoolCount[ix], BSValue, item[0].u.ref);
-    }
-    BS_POOL_DRAIN(bsTS.objectPool, bsTS.objectPoolCount, BSObject, item->entries);
-    for (int ix = 0; ix < BS_ENTRY_POOL_CLASS_COUNT; ix++) {
-        BS_POOL_DRAIN(bsTS.entryPool[ix], bsTS.entryPoolCount[ix], BSObjectEntry, item[0].key);
-    }
-}
-
-
-static int bsKeyCompare(const BSString *key1, const char *key2, size_t size2)
-{
-    if (key1->data == key2) {
+    if (key1 == key2) {
         return 0;
     }
     size_t size1 = key1->size;
+    size_t size2 = key2->size;
     size_t size = size1 < size2 ? size1 : size2;
-    int result = size != 0 ? memcmp(key1->data, key2, size) : 0;
+    int result = size != 0 ? memcmp(key1->data, key2->data, size) : 0;
     if (result != 0) {
         return result;
     }
@@ -1625,12 +1837,6 @@ BSValue bsObjectNewCapacity(size_t count)
 }
 
 
-void bsObjectAppend(BSValue value, BSValue key, BSValue item)
-{
-    bsObjectEntryAdd(value.u.object, key, item);
-}
-
-
 /* Release an object's entries and their buffer */
 static void bsObjectEntriesFree(BSObject *object)
 {
@@ -1645,6 +1851,12 @@ static void bsObjectEntriesFree(BSObject *object)
     if (object->index != NULL) {
         free(object->index);
     }
+}
+
+
+void bsObjectAppend(BSValue value, BSValue key, BSValue item)
+{
+    bsObjectEntryAdd(value.u.object, key, item);
 }
 
 
@@ -1772,7 +1984,7 @@ static BS_NOINLINE void bsObjectSortIndexes(const BSObjectEntry *entries, uint32
             uint32_t item = order[i];
             const BSString *key = entries[item].key;
             size_t j = i;
-            while (j > 0 && bsKeyCompare(entries[order[j - 1]].key, key->data, key->size) > 0) {
+            while (j > 0 && bsKeyCompare(entries[order[j - 1]].key, key) > 0) {
                 order[j] = order[j - 1];
                 j--;
             }
@@ -1787,8 +1999,7 @@ static BS_NOINLINE void bsObjectSortIndexes(const BSObjectEntry *entries, uint32
     size_t ixRight = half;
     size_t ixOut = 0;
     while (ixLeft < half && ixRight < count) {
-        const BSString *right = entries[order[ixRight]].key;
-        if (bsKeyCompare(entries[order[ixLeft]].key, right->data, right->size) <= 0) {
+        if (bsKeyCompare(entries[order[ixLeft]].key, entries[order[ixRight]].key) <= 0) {
             scratch[ixOut++] = order[ixLeft++];
         } else {
             scratch[ixOut++] = order[ixRight++];
@@ -1907,7 +2118,7 @@ BSValue bsFunctionNew(const char *name, BSFunctionFn fn, void *data, void (*data
     function->fn = fn;
     function->data = data;
     function->dataFree = dataFree;
-    function->intrinsic = 0;
+    function->intrinsic = BS_INTRIN_NONE;
 
     return (BSValue) {.type = BS_FUNCTION, .u.function = function};
 }
@@ -1984,258 +2195,45 @@ void bsAssign(BSValue *target, BSValue value)
 }
 
 
-/*
- * Number formatting - JavaScript's Number.prototype.toString
- */
-
-
-/* Copy formatted text into the caller's buffer, NUL-terminated and truncated as snprintf would */
-static size_t bsNumberEmit(char *buffer, size_t bufferSize, const char *text, size_t size)
+void bsValueCleanup(void)
 {
-    if (bufferSize != 0) {
-        size_t copy = size < bufferSize - 1 ? size : bufferSize - 1;
-        memcpy(buffer, text, copy);
-        buffer[copy] = '\0';
-    }
-    return size;
-}
+    bsRegexScratchFree();
 
-
-size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
-{
-    return bsNumberFormatFast(number, buffer, bufferSize);
-}
-
-
-/* A non-integer, or one past the fixed range: NaN, an infinity, or the shortest round-tripping digits */
-static BS_NOINLINE size_t bsNumberFormatSlow(double number, char *buffer, size_t bufferSize)
-{
-    if (isnan(number)) {
-        return bsNumberEmit(buffer, bufferSize, "NaN", 3);
-    }
-    if (isinf(number)) {
-        return number > 0 ? bsNumberEmit(buffer, bufferSize, "Infinity", 8) :
-            bsNumberEmit(buffer, bufferSize, "-Infinity", 9);
+    /* The intern table's references - a string still held elsewhere lives on as an ordinary string */
+    if (bsTS.internSlots != NULL) {
+        for (size_t ix = 0; ix <= bsTS.internMask; ix++) {
+            BSString *string = bsTS.internSlots[ix].string;
+            if (string != NULL) {
+                string->flags &= (uint8_t) ~BS_STR_INTERNED;
+                bsReleaseInline(bsStringTake(string));
+            }
+        }
+        free(bsTS.internSlots);
+        bsTS.internSlots = NULL;
+        bsTS.internMask = 0;
+        bsTS.internCount = 0;
     }
 
-    /*
-     * Find the shortest round-tripping decimal representation
-     *
-     * Round-tripping is monotone in precision - if p digits round-trip then so do p + 1 - so the
-     * shortest precision is found by binary search rather than by trying each in turn.
-     */
-    char digits[40];
-    int low = 1;
-    int high = 17;
-    while (low < high) {
-        int middle = low + (high - low) / 2;
-        snprintf(digits, sizeof(digits), "%.*e", middle - 1, number);
-        if (strtod(digits, NULL) == number) {
-            high = middle;
-        } else {
-            low = middle + 1;
+    /* The shared short strings - one still held elsewhere lives on as an ordinary string */
+    for (size_t ix = 0; ix < BS_COUNT_OF(bsTS.shortStrings); ix++) {
+        if (bsTS.shortStrings[ix] != NULL) {
+            bsReleaseInline(bsStringTake(bsTS.shortStrings[ix]));
+            bsTS.shortStrings[ix] = NULL;
         }
     }
-    snprintf(digits, sizeof(digits), "%.*e", low - 1, number);
 
-    /* Split the "d.dddde+XX" form into its digits and exponent */
-    char mantissa[24];
-    size_t digitCount = 0;
-    const char *cursor = digits;
-    bool negative = false;
-    if (*cursor == '-') {
-        negative = true;
-        cursor++;
+    /* The free lists */
+    for (unsigned ix = 0; ix < BS_STRING_POOL_CLASSES; ix++) {
+        BS_POOL_DRAIN(bsTS.stringPool[ix], bsTS.stringPoolCount[ix], BSString, item->index);
     }
-    for (; *cursor != '\0' && *cursor != 'e'; cursor++) {
-        if (*cursor != '.') {
-            mantissa[digitCount++] = *cursor;
-        }
+    BS_POOL_DRAIN(bsTS.arrayPool, bsTS.arrayPoolCount, BSArray, item->values);
+    for (int ix = 0; ix < BS_ARRAY_BUF_CLASS_COUNT; ix++) {
+        BS_POOL_DRAIN(bsTS.arrayBufPool[ix], bsTS.arrayBufPoolCount[ix], BSValue, item[0].u.ref);
     }
-    int exponent = (int) strtol(cursor + 1, NULL, 10);
-
-    /*
-     * Strip trailing zeroes from the mantissa
-     *
-     * The shortest round-tripping representation cannot end in a zero - dropping it would give the
-     * same value at one less precision, which the search above would have found first - so this is
-     * defensive against a libc whose rounding disagrees.
-     */
-    /* GCOV_EXCL_START */
-    while (digitCount > 1 && mantissa[digitCount - 1] == '0') {
-        digitCount--;
+    BS_POOL_DRAIN(bsTS.objectPool, bsTS.objectPoolCount, BSObject, item->entries);
+    for (int ix = 0; ix < BS_ENTRY_POOL_CLASS_COUNT; ix++) {
+        BS_POOL_DRAIN(bsTS.entryPool[ix], bsTS.entryPoolCount[ix], BSObjectEntry, item[0].key);
     }
-    /* GCOV_EXCL_STOP */
-
-    /* Format per the ECMAScript Number::toString algorithm - "n" is the decimal point position */
-    int n = exponent + 1;
-    int k = (int) digitCount;
-    char text[64];
-    size_t size = 0;
-    if (negative) {
-        text[size++] = '-';
-    }
-    if (k <= n && n <= 21) {
-        memcpy(text + size, mantissa, (size_t) k);
-        size += (size_t) k;
-        for (int ix = 0; ix < n - k; ix++) {
-            text[size++] = '0';
-        }
-    } else if (0 < n && n <= 21) {
-        memcpy(text + size, mantissa, (size_t) n);
-        size += (size_t) n;
-        text[size++] = '.';
-        memcpy(text + size, mantissa + n, (size_t) (k - n));
-        size += (size_t) (k - n);
-    } else if (-6 < n && n <= 0) {
-        text[size++] = '0';
-        text[size++] = '.';
-        for (int ix = 0; ix < -n; ix++) {
-            text[size++] = '0';
-        }
-        memcpy(text + size, mantissa, (size_t) k);
-        size += (size_t) k;
-    } else {
-        text[size++] = mantissa[0];
-        if (k > 1) {
-            text[size++] = '.';
-            memcpy(text + size, mantissa + 1, (size_t) (k - 1));
-            size += (size_t) (k - 1);
-        }
-        size += (size_t) snprintf(text + size, sizeof(text) - size, "e%+d", n - 1);
-    }
-    return bsNumberEmit(buffer, bufferSize, text, size);
-}
-
-
-bool bsNumberRound(double number, double digits, double *result)
-{
-    double multiplier = pow(10, digits);
-    double rounded = trunc(number * multiplier + (number >= 0 ? 0.5 : -0.5)) / multiplier;
-    if (!isfinite(rounded)) {
-        return false;
-    }
-    *result = rounded;
-    return true;
-}
-
-
-/*
- * strtod over an unterminated span, copied out since strtod needs a terminator. Almost every
- * number fits the stack buffer; a longer one - a very long run of digits - takes a heap copy.
- */
-double bsStrtod(const char *text, size_t size)
-{
-    char buffer[64];
-    char *number = size < sizeof(buffer) ? buffer : bsAlloc(size + 1);
-    memcpy(number, text, size);
-    number[size] = '\0';
-    double value = strtod(number, NULL);
-    if (number != buffer) {
-        free(number);
-    }
-    return value;
-}
-
-
-/* The offset past the Unicode spaces at "ix" */
-static size_t bsSkipSpaces(const char *text, size_t size, size_t ix)
-{
-    while (ix < size) {
-        size_t codeSize;
-        if (!bsIsSpaceCode(bsUTF8Decode(text, size, ix, &codeSize))) {
-            break;
-        }
-        ix += codeSize;
-    }
-    return ix;
-}
-
-
-bool bsNumberParse(const char *text, size_t size, double *result)
-{
-    /* ^\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*$ */
-    size_t ix = bsSkipSpaces(text, size, 0);
-    size_t begin = ix;
-    if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
-        ix++;
-    }
-    size_t integerDigits = 0;
-    while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
-        ix++;
-        integerDigits++;
-    }
-    size_t fractionDigits = 0;
-    if (ix < size && text[ix] == '.') {
-        ix++;
-        while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
-            ix++;
-            fractionDigits++;
-        }
-    }
-    if (integerDigits == 0 && fractionDigits == 0) {
-        return false;
-    }
-    if (ix < size && (text[ix] == 'e' || text[ix] == 'E')) {
-        ix++;
-        if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
-            ix++;
-        }
-        size_t exponentDigits = 0;
-        while (ix < size && text[ix] >= '0' && text[ix] <= '9') {
-            ix++;
-            exponentDigits++;
-        }
-        if (exponentDigits == 0) {
-            return false;
-        }
-    }
-    size_t end = ix;
-    ix = bsSkipSpaces(text, size, ix);
-    if (ix != size) {
-        return false;
-    }
-
-    double value = bsStrtod(text + begin, end - begin);
-    if (!isfinite(value)) {
-        return false;
-    }
-    *result = value;
-    return true;
-}
-
-
-bool bsIntegerParse(const char *text, size_t size, int radix, double *result)
-{
-    if (radix < 2 || radix > 36) {
-        return false;
-    }
-    size_t ix = bsSkipSpaces(text, size, 0);
-    bool negative = false;
-    if (ix < size && (text[ix] == '-' || text[ix] == '+')) {
-        negative = (text[ix] == '-');
-        ix++;
-    }
-    size_t digits = 0;
-    double value = 0;
-    while (ix < size) {
-        int digit = bsDigitValue(text[ix]);
-        if (digit < 0 || digit >= radix) {
-            break;
-        }
-        value = value * radix + digit;
-        digits++;
-        ix++;
-    }
-    if (digits == 0) {
-        return false;
-    }
-    ix = bsSkipSpaces(text, size, ix);
-    if (ix != size || !isfinite(value)) {
-        return false;
-    }
-    *result = negative ? -value : value;
-    return true;
 }
 
 
@@ -2472,11 +2470,11 @@ BSValue bsValueString(BSValue value)
     char buffer[64];
     switch (value.type) {
     case BS_NULL:
-        return bsStringNew("null");
     case BS_BOOLEAN:
-        return bsStringNew(value.u.boolean ? "true" : "false");
-    case BS_NUMBER:
-        return bsStringNewAscii(buffer, bsNumberFormatFast(value.u.number, buffer, sizeof(buffer)));
+    case BS_NUMBER: {
+        BSStringBytes bytes = bsStringBytes(value, buffer, sizeof(buffer));
+        return bsStringNewAscii(bytes.data, bytes.size);
+    }
     case BS_DATETIME: {
         BSDatetimeParts parts;
         bsDatetimeParts(value.u.datetime, &parts);
@@ -2560,7 +2558,7 @@ int bsValueCompare(BSValue left, BSValue right)
     case BS_NULL:
         return 0;
     case BS_STRING: {
-        int compare = bsKeyCompare(left.u.string, right.u.string->data, right.u.string->size);
+        int compare = bsKeyCompare(left.u.string, right.u.string);
         return BS_COMPARE(compare, 0);
     }
     case BS_BOOLEAN:

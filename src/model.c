@@ -1238,7 +1238,7 @@ static uint8_t bsCallOpcode(const char *name, size_t argCount)
         {"mathAbs", 1, 1, BS_OP_CALL_MATH}, {"mathCeil", 1, 1, BS_OP_CALL_MATH}, {"mathFloor", 1, 1, BS_OP_CALL_MATH},
         {"mathSign", 1, 1, BS_OP_CALL_MATH}, {"mathSqrt", 1, 1, BS_OP_CALL_MATH}
     };
-    for (size_t ix = 0; ix < sizeof(table) / sizeof(table[0]); ix++) {
+    for (size_t ix = 0; ix < BS_COUNT_OF(table); ix++) {
         if (argCount >= table[ix].argMin && argCount <= table[ix].argMax && bsNameIs(name, table[ix].name)) {
             return table[ix].opcode;
         }

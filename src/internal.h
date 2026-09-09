@@ -43,6 +43,9 @@ char *bsStrdup(const char *text);
         } \
     } while (0)
 
+/* The element count of an array */
+#define BS_COUNT_OF(array) (sizeof(array) / sizeof((array)[0]))
+
 /* Destroy a heap value whose refcount has reached zero */
 void bsReleaseDestroyed(BSValue value);
 

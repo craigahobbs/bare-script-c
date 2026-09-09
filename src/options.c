@@ -189,7 +189,7 @@ static const BSCurl *bsCurlLoad(void)
     int state = 0;
     if (atomic_compare_exchange_strong(&bsCurlState, &state, 1)) {
         void *handle = NULL;
-        for (size_t ix = 0; handle == NULL && ix < sizeof(bsCurlLibraries) / sizeof(bsCurlLibraries[0]); ix++) {
+        for (size_t ix = 0; handle == NULL && ix < BS_COUNT_OF(bsCurlLibraries); ix++) {
             handle = dlopen(bsCurlLibraries[ix], RTLD_LAZY | RTLD_LOCAL);
         }
         /* GCOV_EXCL_START - a libcurl that is missing or incomplete at runtime */

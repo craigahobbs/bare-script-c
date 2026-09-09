@@ -55,10 +55,9 @@ typedef struct BSCasePair {
     uint16_t member;
 } BSCasePair;
 
-#define BS_TABLE_COUNT(table) (sizeof(table) / sizeof((table)[0]))
 
 /* A table's two forms and their counts, as a lookup's arguments */
-#define BS_TABLE(name) name##16, BS_TABLE_COUNT(name##16), name##32, BS_TABLE_COUNT(name##32)
+#define BS_TABLE(name) name##16, BS_COUNT_OF(name##16), name##32, BS_COUNT_OF(name##32)
 
 /* The simple upper-case mappings - one code point to one - as runs of a shared delta */
 static const BSCaseRange16 bsUnicodeUpper16[] = {
@@ -1337,7 +1336,7 @@ static bool bsCodeRangeHas(const BSCodeRange16 *bmp, size_t bmpCount, const BSCo
 static size_t bsCaseMapFull(bool upper, uint32_t code, uint32_t *mapped)
 {
     const BSCaseSpecial *specials = upper ? bsUnicodeUpperSpecial : bsUnicodeLowerSpecial;
-    size_t specialCount = upper ? BS_TABLE_COUNT(bsUnicodeUpperSpecial) : BS_TABLE_COUNT(bsUnicodeLowerSpecial);
+    size_t specialCount = upper ? BS_COUNT_OF(bsUnicodeUpperSpecial) : BS_COUNT_OF(bsUnicodeLowerSpecial);
     size_t low;
     BS_TABLE_FIND(specials, code < 0x10000 ? specialCount : 0, code, low);
     if (low != 0 && specials[low - 1].first == code) {
@@ -1423,7 +1422,7 @@ size_t bsUnicodeCanonMembers(uint32_t canon, uint32_t *members)
         members[count++] = lower;
     }
     size_t low = 0;
-    size_t high = BS_TABLE_COUNT(bsUnicodeCaseMembers);
+    size_t high = BS_COUNT_OF(bsUnicodeCaseMembers);
     while (low < high) {
         size_t mid = (low + high) / 2;
         if (bsUnicodeCaseMembers[mid].canonical < canon) {
@@ -1432,7 +1431,7 @@ size_t bsUnicodeCanonMembers(uint32_t canon, uint32_t *members)
             high = mid;
         }
     }
-    for (; low < BS_TABLE_COUNT(bsUnicodeCaseMembers) && bsUnicodeCaseMembers[low].canonical == canon; low++) {
+    for (; low < BS_COUNT_OF(bsUnicodeCaseMembers) && bsUnicodeCaseMembers[low].canonical == canon; low++) {
         if (bsUnicodeCaseMembers[low].member != lower) {
             members[count++] = bsUnicodeCaseMembers[low].member;
         }

@@ -17,21 +17,22 @@
 #include "internal.h"
 
 
-/* The thread's compiled include scripts and inflated models - the registry itself is never written */
-static _Thread_local BSScript *bsIncludeScripts[BS_INCLUDE_COUNT];
-static _Thread_local unsigned char *bsIncludeDecoded[BS_INCLUDE_COUNT];
-static _Thread_local size_t bsIncludeDecodedSize[BS_INCLUDE_COUNT];
-
-/* The shared string table, inflated on the first reference: each string's span in the text */
+/* A shared string's span in the inflated shared string table */
 typedef struct {
     uint32_t offset;
     uint32_t length;
 } BSIncludeSharedSpan;
 
-static _Thread_local unsigned char *bsIncludeSharedText;
-static _Thread_local BSIncludeSharedSpan *bsIncludeSharedSpans;
-static _Thread_local BSValue *bsIncludeSharedStrings;   /* interned on first use, else null */
-static _Thread_local size_t bsIncludeSharedCount;
+/* The thread's compiled include scripts, inflated models, and shared string table - the registry itself is never written */
+static _Thread_local struct {
+    BSScript *scripts[BS_INCLUDE_COUNT];
+    unsigned char *decoded[BS_INCLUDE_COUNT];
+    size_t decodedSize[BS_INCLUDE_COUNT];
+    unsigned char *sharedText;  /* the shared string table, inflated on the first reference */
+    BSIncludeSharedSpan *sharedSpans;
+    BSValue *sharedStrings;     /* interned on first use, else null */
+    size_t sharedCount;
+} bsIncludeTS;
 
 
 /*
@@ -375,12 +376,12 @@ unsigned char *bsGzipUncompress(const unsigned char *src, size_t srcSize, size_t
 
 const unsigned char *bsIncludeSourceDecode(size_t index, size_t *size)
 {
-    if (bsIncludeDecoded[index] == NULL) {
+    if (bsIncludeTS.decoded[index] == NULL) {
         const BSIncludeSource *source = &bsIncludeSources[index];
-        bsIncludeDecoded[index] = bsGzipUncompress(source->gzip, source->gzipSize, &bsIncludeDecodedSize[index]);
+        bsIncludeTS.decoded[index] = bsGzipUncompress(source->gzip, source->gzipSize, &bsIncludeTS.decodedSize[index]);
     }
-    *size = bsIncludeDecodedSize[index];
-    return bsIncludeDecoded[index];
+    *size = bsIncludeTS.decodedSize[index];
+    return bsIncludeTS.decoded[index];
 }
 
 
@@ -424,8 +425,8 @@ BSScript *bsIncludeScript(const char *name)
     if (ix == BS_INCLUDE_COUNT) {
         return NULL;
     }
-    if (bsIncludeScripts[ix] != NULL) {
-        return bsScriptRetain(bsIncludeScripts[ix]);
+    if (bsIncludeTS.scripts[ix] != NULL) {
+        return bsScriptRetain(bsIncludeTS.scripts[ix]);
     }
     size_t size;
     const unsigned char *model = bsIncludeSourceDecode(ix, &size);
@@ -433,12 +434,12 @@ BSScript *bsIncludeScript(const char *name)
         return NULL; /* the include is compiled out */
     }
     BSScript *script = bsScriptFromModelBinary(model, size, name);
-    free(bsIncludeDecoded[ix]);
-    bsIncludeDecoded[ix] = NULL;
+    free(bsIncludeTS.decoded[ix]);
+    bsIncludeTS.decoded[ix] = NULL;
     if (script == NULL) {
         return NULL; /* GCOV_EXCL_LINE - bundled models always convert */
     }
-    bsIncludeScripts[ix] = bsScriptRetain(script);
+    bsIncludeTS.scripts[ix] = bsScriptRetain(script);
     return script;
 }
 
@@ -460,51 +461,46 @@ static size_t bsIncludeSharedVarint(const unsigned char **text)
 
 bool bsIncludeSharedString(size_t index, BSValue *string)
 {
-    if (bsIncludeSharedText == NULL) {
+    if (bsIncludeTS.sharedText == NULL) {
         size_t size;
-        bsIncludeSharedText = bsGzipUncompress(bsIncludeSourceShared.gzip, bsIncludeSourceShared.gzipSize, &size);
-        const unsigned char *text = bsIncludeSharedText;
-        bsIncludeSharedCount = bsIncludeSharedVarint(&text);
-        bsIncludeSharedSpans = bsAlloc(bsIncludeSharedCount * sizeof(BSIncludeSharedSpan));
-        bsIncludeSharedStrings = bsAlloc(bsIncludeSharedCount * sizeof(BSValue));
-        for (size_t ix = 0; ix < bsIncludeSharedCount; ix++) {
+        bsIncludeTS.sharedText = bsGzipUncompress(bsIncludeSourceShared.gzip, bsIncludeSourceShared.gzipSize, &size);
+        const unsigned char *text = bsIncludeTS.sharedText;
+        bsIncludeTS.sharedCount = bsIncludeSharedVarint(&text);
+        bsIncludeTS.sharedSpans = bsAlloc(bsIncludeTS.sharedCount * sizeof(BSIncludeSharedSpan));
+        bsIncludeTS.sharedStrings = bsAlloc(bsIncludeTS.sharedCount * sizeof(BSValue));
+        for (size_t ix = 0; ix < bsIncludeTS.sharedCount; ix++) {
             size_t length = bsIncludeSharedVarint(&text);
-            bsIncludeSharedSpans[ix].offset = (uint32_t) (text - bsIncludeSharedText);
-            bsIncludeSharedSpans[ix].length = (uint32_t) length;
-            bsIncludeSharedStrings[ix] = bsNull();
+            bsIncludeTS.sharedSpans[ix].offset = (uint32_t) (text - bsIncludeTS.sharedText);
+            bsIncludeTS.sharedSpans[ix].length = (uint32_t) length;
+            bsIncludeTS.sharedStrings[ix] = bsNull();
             text += length;
         }
     }
-    if (index >= bsIncludeSharedCount) {
+    if (index >= bsIncludeTS.sharedCount) {
         return false;
     }
-    if (bsIncludeSharedStrings[index].type != BS_STRING) {
-        const BSIncludeSharedSpan *span = &bsIncludeSharedSpans[index];
-        bsIncludeSharedStrings[index] = bsStringIntern((const char *) bsIncludeSharedText + span->offset, span->length);
+    if (bsIncludeTS.sharedStrings[index].type != BS_STRING) {
+        const BSIncludeSharedSpan *span = &bsIncludeTS.sharedSpans[index];
+        bsIncludeTS.sharedStrings[index] = bsStringIntern((const char *) bsIncludeTS.sharedText + span->offset, span->length);
     }
-    *string = bsIncludeSharedStrings[index];
+    *string = bsIncludeTS.sharedStrings[index];
     return true;
 }
 
 
 void bsIncludeCleanup(void)
 {
-    for (size_t ix = 0; ix < bsIncludeSharedCount; ix++) {
-        bsRelease(bsIncludeSharedStrings[ix]);
+    for (size_t ix = 0; ix < bsIncludeTS.sharedCount; ix++) {
+        bsRelease(bsIncludeTS.sharedStrings[ix]);
     }
-    free(bsIncludeSharedStrings);
-    free(bsIncludeSharedSpans);
-    free(bsIncludeSharedText);
-    bsIncludeSharedStrings = NULL;
-    bsIncludeSharedSpans = NULL;
-    bsIncludeSharedText = NULL;
-    bsIncludeSharedCount = 0;
+    free(bsIncludeTS.sharedStrings);
+    free(bsIncludeTS.sharedSpans);
+    free(bsIncludeTS.sharedText);
     for (size_t ix = 0; ix < BS_INCLUDE_COUNT; ix++) {
-        free(bsIncludeDecoded[ix]);
-        bsIncludeDecoded[ix] = NULL;
-        if (bsIncludeScripts[ix] != NULL) {
-            bsScriptRelease(bsIncludeScripts[ix]);
-            bsIncludeScripts[ix] = NULL;
+        free(bsIncludeTS.decoded[ix]);
+        if (bsIncludeTS.scripts[ix] != NULL) {
+            bsScriptRelease(bsIncludeTS.scripts[ix]);
         }
     }
+    memset(&bsIncludeTS, 0, sizeof(bsIncludeTS));
 }

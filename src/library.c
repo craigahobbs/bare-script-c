@@ -169,8 +169,8 @@ void bsArgsFree(const BSArgModel *argModel, size_t argModelCount, BSValue *value
  * validated value per model entry - or return "failValue"
  */
 #define BS_ARGS(model, failValue) \
-    BSValue values[sizeof(model) / sizeof((model)[0])]; \
-    if (!bsArgsValidate(model, sizeof(model) / sizeof((model)[0]), args, argCount, values, options)) { \
+    BSValue values[BS_COUNT_OF(model)]; \
+    if (!bsArgsValidate(model, BS_COUNT_OF(model), args, argCount, values, options)) { \
         return failValue; \
     }
 
@@ -2038,7 +2038,7 @@ static const BSLibraryEntry bsScriptFunctionTable[] = {
     {"systemType", bsFnSystemType, NULL, BS_INTRIN_SYSTEM_TYPE}
 };
 
-#define BS_SCRIPT_FUNCTION_COUNT (sizeof(bsScriptFunctionTable) / sizeof(bsScriptFunctionTable[0]))
+#define BS_SCRIPT_FUNCTION_COUNT BS_COUNT_OF(bsScriptFunctionTable)
 
 
 /*
