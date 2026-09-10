@@ -118,6 +118,13 @@ void bsObjectAppend(BSValue object, BSValue key, BSValue item);
 /* Copy src's pairs onto dest, overwriting matching keys */
 void bsObjectAssign(BSValue dest, BSValue src);
 
+/*
+ * A new object expecting "count" keys: "pooled" rounds its entries up to a recycled buffer's size, for
+ * an object built and dropped by the thousand; an object that lives on - a decoded record - fits its
+ * count exactly
+ */
+BSValue bsObjectNewSized(size_t count, bool pooled);
+
 /* A string reference as a value - takes ownership of the reference */
 BSValue bsStringTake(BSString *string);
 

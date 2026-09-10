@@ -1789,15 +1789,18 @@ static BS_NOINLINE void bsObjectEntriesGrow(BSObject *object)
 }
 
 
-BSValue bsObjectNewCapacity(size_t count)
+BSValue bsObjectNewSized(size_t count, bool pooled)
 {
     BSValue value = bsObjectNew();
     BSObject *object = value.u.object;
     if (count > BS_OBJECT_INLINE) {
         /* Born with entries for every key, and past the scan threshold its index, so appends never rebuild */
-        size_t capacity = BS_ENTRY_POOL_CAPACITY;
-        while (capacity < count) {
-            capacity *= 2;
+        size_t capacity = count;
+        if (pooled) {
+            capacity = BS_ENTRY_POOL_CAPACITY;
+            while (capacity < count) {
+                capacity *= 2;
+            }
         }
         object->entries = bsEntriesAlloc(capacity);
         object->capacity = (uint32_t) capacity;
@@ -1806,6 +1809,12 @@ BSValue bsObjectNewCapacity(size_t count)
         }
     }
     return value;
+}
+
+
+BSValue bsObjectNewCapacity(size_t count)
+{
+    return bsObjectNewSized(count, true);
 }
 
 

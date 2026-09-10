@@ -219,7 +219,22 @@ typedef struct BSJSONParser {
     bool memoHit;      /* the key at hand came from the memo */
     size_t memoCount[BS_JSON_MEMO_DEPTH];   /* the last object at each depth: its key count, and whether */
     bool memoDistinct[BS_JSON_MEMO_DEPTH];  /* every key was new to it - so a record repeating its keys in */
-} BSJSONParser;                             /* order has distinct keys too, and appends without a scan */
+    size_t memoItems[BS_JSON_MEMO_DEPTH];   /* order has distinct keys too, and appends without a scan; and */
+} BSJSONParser;                             /* the last array's item count, which sizes the next one */
+
+
+/*
+ * A container's capacity from the memo's count for its depth: records and the arrays in them repeat
+ * a shape, so the next one is born at the last one's size and grows through nothing. Capped so a
+ * large container does not size every small one that follows it.
+ */
+#define BS_JSON_PRESIZE_MAX 64
+
+static size_t bsJSONPresize(const size_t *memo, int depth)
+{
+    size_t count = depth < BS_JSON_MEMO_DEPTH ? memo[depth] : 0;
+    return count <= BS_JSON_PRESIZE_MAX ? count : 0;
+}
 
 
 /* Record a decoding error and its position. Always returns false, for the caller to return. */
@@ -455,8 +470,11 @@ static int bsJSONSeparator(BSJSONParser *parser, char close)
 static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
 {
     parser->offset++;
-    BSValue array = bsArrayNew();
+    BSValue array = bsArrayNewCapacity(bsJSONPresize(parser->memoItems, depth));
     if (bsJSONSkipTake(parser, ']')) {
+        if (depth < BS_JSON_MEMO_DEPTH) {
+            parser->memoItems[depth] = 0;
+        }
         *result = array;
         return true;
     }
@@ -475,6 +493,9 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
         if (separator > 0) {
             break;
         }
+    }
+    if (depth < BS_JSON_MEMO_DEPTH) {
+        parser->memoItems[depth] = bsArrayCount(array);
     }
     *result = array;
     return true;
@@ -502,8 +523,11 @@ static bool bsJSONDecodeKey(BSJSONParser *parser, BSValue *key)
 static bool bsJSONDecodeObject(BSJSONParser *parser, int depth, BSValue *result)
 {
     parser->offset++;
-    BSValue object = bsObjectNew();
+    BSValue object = bsObjectNewSized(bsJSONPresize(parser->memoCount, depth), false);
     if (bsJSONSkipTake(parser, '}')) {
+        if (depth < BS_JSON_MEMO_DEPTH) {
+            parser->memoCount[depth] = 0;
+        }
         *result = object;
         return true;
     }

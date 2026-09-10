@@ -184,7 +184,7 @@ TEST(json_decode_key_memo)
                        "\"k8\": 8, \"k9\": 9, \"k10\": 10, \"k11\": 11, \"k12\": 12}, "
                        "{\"d\": {\"d\": {\"d\": {\"d\": {\"d\": {\"d\": {\"d\": 8}}}}}}}]";
     BSValue value = bsJSONDecode(text, strlen(text), NULL);
-    ASSERT_VALUE(value, "[{\"a\":1,\"b\":{\"c\":2}},{\"a\":3,\"b\":{\"c\":4}},{\"a\":5,\"bb\":{\"c\":6}},"
+    ASSERT_VALUE_KEEP(value, "[{\"a\":1,\"b\":{\"c\":2}},{\"a\":3,\"b\":{\"c\":4}},{\"a\":5,\"bb\":{\"c\":6}},"
                         "{\"ab\":7,\"k0\":0,\"k1\":1,\"k10\":10,\"k11\":11,\"k12\":12,\"k2\":2,\"k3\":3,\"k4\":4,\"k5\":5,"
                         "\"k6\":6,\"k7\":7,\"k8\":8,\"k9\":9},{\"d\":{\"d\":{\"d\":{\"d\":{\"d\":{\"d\":{\"d\":8}}}}}}}]");
     /* A record repeating a record with a repeated key still keeps the last value; one repeating a
@@ -205,6 +205,20 @@ TEST(json_decode_key_memo)
 
     /* A decode with no object allocates no memo */
     ASSERT_VALUE(bsJSONDecode("[1, \"x\"]", 8, NULL), "[1,\"x\"]");
+}
+
+
+TEST(json_decode_presize)
+{
+    /* A container is born at the size of the last one at its depth - not when that one was large, and an
+       empty one counts as the last */
+    ASSERT_VALUE(bsTestExecute(
+        "big = '[' + arrayJoin(arrayNewSize(65, 1), ',') + ']'\n"
+        "a = jsonParse('[' + big + ',[2],[3,3],[],[4],{},{\"z\":0}]')\n"
+        "keys = []\nfor i in arrayNewSize(65, 0):\n    arrayPush(keys, '\"k' + arrayLength(keys) + '\":1')\nendfor\n"
+        "o = jsonParse('[{' + arrayJoin(keys, ',') + '},{\"a\":1},{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5}]')\n"
+        "return [arrayLength(arrayGet(a, 0)), arraySlice(a, 1), objectGet(arrayGet(o, 0), 'k64'), arrayGet(o, 1), arrayGet(o, 2)]"),
+        "[65,[[2],[3,3],[],[4],{},{\"z\":0}],1,{\"a\":1},{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5}]");
 }
 
 

@@ -356,6 +356,13 @@ for a test or release build of this project.
 free. Datetime and function values encode as their `bsValueString` representation and regex values
 as null, matching the reference implementations. `bsJSONDecode` parses into a `BSValue`; an
 unpaired surrogate in a `\uXXXX` escape becomes U+FFFD so every decoded string is valid UTF-8.
+Records repeat a shape, so the decoder keeps a memo per nesting depth: the last object's keys by
+position, so a key is usually one compare rather than a hash and an intern-table probe, and a record
+whose keys repeat the last one's in order appends them without a duplicate scan; and the last
+object's key count and the last array's item count, so the next one is born at that size - an
+object's entries fitted exactly rather than rounded up to a recycled buffer's class, since a decoded
+record lives on - and grows through nothing. A container of more than sixty-four sizes nothing, so
+one large object does not size every small one after it.
 
 
 ## Regular Expressions
