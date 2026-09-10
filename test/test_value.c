@@ -217,6 +217,12 @@ TEST(value_string_slice)
     ASSERT_INT_EQ(bsStringLength(wideCopy), 5);
     BSValue wideKnown = bsStringSliceBytes(wide, 2, 10, 5);
     ASSERT_INT_EQ(bsStringLength(wideKnown), 5);
+    BSValue mixed = bsTestRepeat("\xc3\xa9", "a", 100, "");
+    BSValue asciiSpan = bsStringSliceBytes(mixed, 2, 100, SIZE_MAX);
+    ASSERT_TRUE((asciiSpan.u.string->flags & BS_STR_SLICE) != 0);
+    ASSERT_INT_EQ(bsStringLength(asciiSpan), 100);
+    bsRelease(asciiSpan);
+    bsRelease(mixed);
     bsRelease(wideKnown);
     bsRelease(wideCopy);
     bsRelease(wideSlice);
