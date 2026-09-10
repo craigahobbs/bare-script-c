@@ -2494,11 +2494,14 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, bool scan)
                         end++;
                     }
                     break;
-                case RXI_ANY:
-                    while (end < limit && bytes[end] != '\n' && bytes[end] != '\r') {
-                        end++;
-                    }
+                case RXI_ANY: {
+                    /* To the line's end in two vector scans rather than a compare per byte */
+                    const void *nl = memchr(bytes + end, '\n', limit - end);
+                    const void *cr = memchr(bytes + end, '\r', limit - end);
+                    const unsigned char *stop = nl == NULL ? cr : (cr == NULL || nl < cr ? nl : cr);
+                    end = stop != NULL ? (size_t) (stop - bytes) : limit;
                     break;
+                }
                 case RXI_ANY_ALL:
                     end = limit;
                     break;
