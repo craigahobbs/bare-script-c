@@ -400,6 +400,14 @@ TEST(regex_search_start)
     bsRegexSubjectFree(&subject);
     bsRelease(string);
     bsRelease(regex);
+
+    /* An anchored pattern runs at the start position alone, where "^" fails past the first; an
+       alternative's "^" is reached by the scanning run at each position a match can begin */
+    ASSERT_VALUE(bsTestExecute("return regexMatchAll(regexNew('^a'), 'aaa')"),
+                 "[{\"groups\":{\"0\":\"a\"},\"index\":0,\"input\":\"aaa\"}]");
+    ASSERT_VALUE(bsTestExecute("return regexMatch(regexNew('b|^a'), 'xa')"), "null");
+    ASSERT_VALUE(bsTestExecute("return regexMatch(regexNew('b|^a'), 'xab')"),
+                 "{\"groups\":{\"0\":\"b\"},\"index\":2,\"input\":\"xab\"}");
 }
 
 

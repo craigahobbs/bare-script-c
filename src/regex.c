@@ -1955,6 +1955,9 @@ typedef struct RxState {
     const unsigned char *bytes;
     size_t length;
     BSRegexMatch *match;
+    const BSRegex *regex;
+    bool scanning;  /* the run is the unanchored search: a failed start position moves on to the next */
+    size_t start;   /* the run's start position - the match's, once it matches */
     size_t end;
     long steps;
     RxTrailEntry *trail;
@@ -2116,6 +2119,38 @@ static inline bool rxGiveBackTo(const RxState *state, uint32_t ch, size_t stop, 
 }
 
 
+/*
+ * The first position at or after "pos" where a match can begin, or SIZE_MAX when none remains: with
+ * a usable first set, a position before the end holding one of its code points - over an ASCII
+ * subject by memchr for a set of one byte and by the byte table otherwise; without one, every
+ * position up to and including the end, where an empty match may still begin
+ */
+static inline size_t rxScan(const RxState *state, size_t pos)
+{
+    const BSRegex *regex = state->regex;
+    size_t length = state->length;
+    if (regex->first.any) {
+        return pos <= length ? pos : SIZE_MAX;
+    }
+    if (state->codes != NULL) {
+        const uint32_t *codes = state->codes;
+        while (pos < length && !rxFirstHas(&regex->first, codes[pos])) {
+            pos++;
+        }
+    } else if (regex->firstByte >= 0) {
+        const unsigned char *at = pos < length ? memchr(state->bytes + pos, regex->firstByte, length - pos) : NULL;
+        pos = at != NULL ? (size_t) (at - state->bytes) : length;
+    } else {
+        const unsigned char *bytes = state->bytes;
+        const uint8_t *firstBytes = regex->firstBytes;
+        while (pos < length && !firstBytes[bytes[pos]]) {
+            pos++;
+        }
+    }
+    return pos < length ? pos : SIZE_MAX;
+}
+
+
 /* Whether an encoded single-code-point atom matches at a position */
 static inline bool rxAtomAt(const RxState *state, unsigned kind, uint32_t operand, size_t pos)
 {
@@ -2140,10 +2175,12 @@ static inline bool rxAtomAt(const RxState *state, unsigned kind, uint32_t operan
 
 /*
  * Run the program from "pc" at "pos" to RXI_MATCH - the pattern, or a lookaround's body. Returns
- * whether the program matched - the pattern's end position is left in state->end - with the
- * backtrack entries the run pushed discarded either way.
+ * whether the program matched - the match's start and end positions are left in state->start and
+ * state->end - with the backtrack entries the run pushed discarded either way. A scanning run is
+ * the unanchored search itself: when a start position fails it moves on to the next position a
+ * match can begin at, with a fresh step budget, and fails only when none remains.
  */
-static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
+static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, bool scan)
 {
     const RxInst *prog = state->prog;
     const size_t length = state->length;
@@ -2151,6 +2188,11 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
     const size_t trailBase = state->trailCount;
     uint32_t pc = startPc;
     size_t pos = startPos;
+
+    /* The start and the scanning flag live on the state, read only when a start position fails,
+       so the loop carries no more than it did; a lookaround body's run keeps the pattern's */
+    state->start = startPos;
+    state->scanning = scan;
 
 #ifdef RX_THREADED_DISPATCH
     /* Indexed by opcode - the order is the RxOp enumeration's */
@@ -2393,7 +2435,11 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
         RX_CASE(LOOK) {
             /* The body runs from here - forward, or backward for a lookbehind, as it was emitted */
             size_t mark = state->trailCount;
-            bool matched = rxRun(state, inst->a, pos);
+            size_t start = state->start;
+            bool scanning = state->scanning;
+            bool matched = rxRun(state, inst->a, pos, false);
+            state->start = start;
+            state->scanning = scanning;
             bool negate = inst->aux != 0;
             if (negate || !matched) {
                 rxTrailUnwind(state, mark);
@@ -2588,15 +2634,12 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
 
     backtrack:
         for (;;) {
-            /* A failed run leaves no capture or counter behind - the next attempt would read a stale span */
             if (state->btCount == btBase) {
-                rxTrailUnwind(state, trailBase);
-                return false;
+                goto failed;
             }
             if (++state->steps > RX_STEPS_MAX) {
                 state->btCount = btBase;
-                rxTrailUnwind(state, trailBase);
-                return false;
+                goto failed;
             }
             RxBacktrack *bt = &state->bt[state->btCount - 1];
             /* Every attempt from an entry starts at its trail mark - and so does the next entry's, once
@@ -2721,6 +2764,21 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos)
             }
             break;
         }
+        continue;
+
+    failed:
+        /* A failed run leaves no capture or counter behind - the next attempt would read a stale span */
+        rxTrailUnwind(state, trailBase);
+        if (!state->scanning) {
+            return false;
+        }
+        pos = rxScan(state, state->start + 1);
+        if (pos == SIZE_MAX) {
+            return false;
+        }
+        state->start = pos;
+        state->steps = 0;
+        pc = 0;
     }
     return false; /* GCOV_EXCL_LINE - the loop leaves only by returning; this satisfies the compiler */
 }
@@ -2784,6 +2842,7 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
     state.bytes = subject->bytes;
     state.length = subject->length;
     state.match = match;
+    state.regex = compiled;
     state.trail = scratch->trail;
     state.trailCapacity = scratch->trailCapacity;
     state.prog = compiled->prog;
@@ -2802,40 +2861,29 @@ bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, B
      */
     memset(match->matched, 0, sizeof(match->matched));
     match->groupCount = compiled->groupCount;
-    size_t length = subject->length;
-    size_t last = compiled->anchored ? start : length;
+
+    /*
+     * An anchored pattern - every alternative begins with "^" - can only match at the subject's
+     * first position, so it runs there once, and only when the code point there can begin a match;
+     * any other runs from the first position a match can begin at and moves on through the rest
+     * itself
+     */
+    size_t pos = SIZE_MAX;
+    if (!compiled->anchored) {
+        pos = rxScan(&state, start);
+    } else if (start == 0 && (compiled->first.any || (state.length != 0 && rxFirstHas(&compiled->first, rxCode(&state, 0))))) {
+        pos = 0;
+    }
     bool found = false;
-    for (size_t pos = start; pos <= last && !found; pos++) {
-        /* Skip positions whose code point cannot begin a match */
-        if (!compiled->first.any) {
-            if (subject->codes != NULL) {
-                const uint32_t *codes = subject->codes;
-                while (pos < length && !rxFirstHas(&compiled->first, codes[pos])) {
-                    pos++;
-                }
-            } else if (compiled->firstByte >= 0) {
-                const unsigned char *at = pos < length ?
-                    memchr(subject->bytes + pos, compiled->firstByte, length - pos) : NULL;
-                pos = at != NULL ? (size_t) (at - subject->bytes) : length;
-            } else {
-                const unsigned char *bytes = subject->bytes;
-                const uint8_t *firstBytes = compiled->firstBytes;
-                while (pos < length && !firstBytes[bytes[pos]]) {
-                    pos++;
-                }
-            }
-            if (pos >= length) {
-                break;
-            }
-        }
+    if (pos != SIZE_MAX) {
         state.steps = 0;
         state.trailCount = 0;
         state.btCount = 0;
-        found = rxRun(&state, 0, pos);
+        found = rxRun(&state, 0, pos, !compiled->anchored);
         if (found) {
-            match->begin = pos;
+            match->begin = state.start;
             match->end = state.end;
-            match->groups[0].begin = pos;
+            match->groups[0].begin = state.start;
             match->groups[0].end = state.end;
             match->matched[0] = true;
         }

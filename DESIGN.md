@@ -400,13 +400,16 @@ ASCII subjects match the original bytes without widening to a `uint32_t` buffer.
 keep it well-behaved on real input - which matters more here than in the reference implementations,
 because the parser is itself regex-driven:
 
-- A pattern whose every alternative begins with `^` only tries the search start position. Every
-  pattern the parser uses is anchored this way, so this is the difference between a linear and a
-  quadratic scan of each line it parses.
+- A pattern whose every alternative begins with `^` only tries the subject's first position, and
+  only when the code point there can begin a match. Every pattern the parser uses is anchored this
+  way, so this is the difference between a linear and a quadratic scan of each line it parses - and
+  most of the parser's searches end at that one test, without running the program.
 - An unanchored pattern computes the set of code points a match can begin with - a character
   class contributes its finished membership, predefined classes included - and the search skips
   every position whose code point is not in it: over an ASCII subject with `memchr` for a set of
-  one byte and a byte table otherwise. An alternation indexes its alternatives by first code
+  one byte and a byte table otherwise. The search is one run of the program: a start position
+  that fails moves on to the next the set admits inside the matcher, with a fresh step budget,
+  rather than returning to be called again. An alternation indexes its alternatives by first code
   point - a byte of alternative bits per ASCII code point for up to eight alternatives, a word
   for up to sixty-four, one mask for the code points past ASCII - so it tries only the
   alternatives that can begin at a position: the markdown span alternation has sixteen, a
