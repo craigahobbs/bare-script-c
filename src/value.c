@@ -462,19 +462,6 @@ double bsStrtod(const char *text, size_t size)
 
 
 /* The offset past the Unicode spaces at "ix" */
-static size_t bsSkipSpaces(const char *text, size_t size, size_t ix)
-{
-    while (ix < size) {
-        size_t codeSize;
-        if (!bsIsSpaceCode(bsUTF8Decode(text, size, ix, &codeSize))) {
-            break;
-        }
-        ix += codeSize;
-    }
-    return ix;
-}
-
-
 bool bsNumberParse(const char *text, size_t size, double *result)
 {
     /* ^\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*$ */
@@ -1541,14 +1528,11 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
 /*
  * Object values
  *
- * An object is an insertion-ordered array of key/value entries. Up to three entries live in the
- * object itself; past that they move to a heap buffer that doubles as it fills. An object of more
- * than sixteen keys also carries a hash index over its entries - an open-addressing table of
- * (hash, entry) slots keyed by the content hash the key string caches - so a lookup probes the
- * index and compares one key, while a smaller object scans its entries. Iteration is entry order,
- * which is insertion order (matching the reference implementations, whose objects are JavaScript
- * objects and Python dictionaries); the operations defined over sorted keys sort an index of the
- * entries on demand.
+ * value.h gives the shape - insertion-ordered entries, three of them in the object itself, a hash
+ * index past sixteen keys. The index is an open-addressing table of (hash, entry) slots keyed by the
+ * content hash the key string caches, so a lookup probes it and compares one key, while a smaller
+ * object scans its entries; the operations defined over sorted keys sort an index of the entries on
+ * demand.
  *
  * A lookup compares an entry's key to the key sought by pointer first - interned names, which
  * compiled code and the library use, hit that way - and by content only when the two are not both
@@ -1823,6 +1807,13 @@ static void bsObjectEntriesFree(BSObject *object)
 
 
 /* Append a key known to be absent. Takes ownership of "item" and retains "key". */
+/* The entry holding a key string, or NULL if the object has no such key */
+BSObjectEntry *bsObjectEntryFind(BSObject *object, BSString *key)
+{
+    return bsObjectFind(object, key, key->data, key->size);
+}
+
+
 void bsObjectAppend(BSValue value, BSValue key, BSValue item)
 {
     BSObject *object = bsObjectOf(value);
@@ -1848,7 +1839,7 @@ void bsObjectAppend(BSValue value, BSValue key, BSValue item)
 void bsObjectSetString(BSValue value, BSValue key, BSValue item)
 {
     BSObject *object = bsObjectOf(value);
-    BSObjectEntry *entry = bsObjectFind(object, bsStringOf(key), bsStringOf(key)->data, bsStringOf(key)->size);
+    BSObjectEntry *entry = bsObjectEntryFind(object, bsStringOf(key));
     if (entry != NULL) {
         bsReleaseInline(entry->value);
         entry->value = item;
@@ -1875,14 +1866,8 @@ BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size)
 
 BSValue *bsObjectValuePtrString(BSValue object, BSValue key)
 {
-    BSObjectEntry *entry = bsObjectFind(bsObjectOf(object), bsStringOf(key), bsStringOf(key)->data, bsStringOf(key)->size);
+    BSObjectEntry *entry = bsObjectEntryFind(bsObjectOf(object), bsStringOf(key));
     return entry != NULL ? &entry->value : NULL;
-}
-
-
-BSObjectEntry *bsObjectEntryFind(BSObject *object, BSString *key)
-{
-    return bsObjectFind(object, key, key->data, key->size);
 }
 
 
@@ -2121,6 +2106,18 @@ BSValue bsFunctionCall(BSValue function, const BSValue *args, size_t argCount, B
 BSValue bsRetain(BSValue value)
 {
     return bsRetainInline(value);
+}
+
+
+void bsValuesFree(BSValue *values, size_t count)
+{
+    if (values == NULL) {
+        return;
+    }
+    for (size_t ix = 0; ix < count; ix++) {
+        bsRelease(values[ix]);
+    }
+    free(values);
 }
 
 

@@ -1746,12 +1746,7 @@ static void bsRegexFree(BSRegex *regex)
     free(regex->repeatGroups);
     free(regex->backrefGroups);
     free(regex->prog);
-    if (regex->groupNames != NULL) {
-        for (size_t ix = 0; ix < regex->groupCount; ix++) {
-            bsRelease(regex->groupNames[ix]);
-        }
-        free(regex->groupNames);
-    }
+    bsValuesFree(regex->groupNames, regex->groupCount);
     free(regex);
 }
 

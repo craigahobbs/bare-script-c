@@ -77,6 +77,19 @@ static void bsPrintError(const char *text)
 }
 
 
+/* Print and clear a pending runtime error. Returns true if there was one. */
+static bool bsCliError(BSOptions *options)
+{
+    const char *error = bsErrorGet(options);
+    if (error == NULL) {
+        return false;
+    }
+    bsPrintError(error);
+    bsErrorClear(options);
+    return true;
+}
+
+
 static bool bsCliFlag(const char *arg, const char *shortOpt, const char *longOpt)
 {
     return strcmp(arg, shortOpt) == 0 || strcmp(arg, longOpt) == 0;
@@ -212,10 +225,7 @@ int bsMain(int argc, char **argv)
             BSValue value = bsEvaluateExpression(expr, options, bsNull(), true);
             bsExprFree(expr);
             bsObjectSet(sharedGlobals, vars[ix].name, value);
-            const char *error = bsErrorGet(options);
-            if (error != NULL) {
-                bsPrintError(error);
-                bsErrorClear(options);
+            if (bsCliError(options)) {
                 statusCode = 1;
             }
         }
@@ -294,10 +304,7 @@ int bsMain(int argc, char **argv)
                 int64_t timeBegin = bsDatetimeNow();
                 BSValue result = bsExecuteScript(script, options);
                 staticGlobals = options->globals;
-                const char *error = bsErrorGet(options);
-                if (error != NULL) {
-                    bsPrintError(error);
-                    bsErrorClear(options);
+                if (bsCliError(options)) {
                     statusCode = 1;
                     runtimeFailed = true;
                 } else {

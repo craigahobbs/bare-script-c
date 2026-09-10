@@ -490,10 +490,7 @@ bool bsIncludeSharedString(size_t index, BSValue *string)
 
 void bsIncludeCleanup(void)
 {
-    for (size_t ix = 0; ix < bsIncludeTS.sharedCount; ix++) {
-        bsRelease(bsIncludeTS.sharedStrings[ix]);
-    }
-    free(bsIncludeTS.sharedStrings);
+    bsValuesFree(bsIncludeTS.sharedStrings, bsIncludeTS.sharedCount);
     free(bsIncludeTS.sharedSpans);
     free(bsIncludeTS.sharedText);
     for (size_t ix = 0; ix < BS_INCLUDE_COUNT; ix++) {

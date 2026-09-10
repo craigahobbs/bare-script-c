@@ -21,14 +21,8 @@
 static void bsCodeFree(BSCode *code)
 {
     free(code->inst);
-    for (size_t ix = 0; ix < code->constantCount; ix++) {
-        bsRelease(code->constants[ix]);
-    }
-    free(code->constants);
-    for (size_t ix = 0; ix < code->nameCount; ix++) {
-        bsRelease(code->names[ix]);
-    }
-    free(code->names);
+    bsValuesFree(code->constants, code->constantCount);
+    bsValuesFree(code->names, code->nameCount);
     free(code->caches);
     for (size_t ix = 0; ix < code->includeCount; ix++) {
         bsRelease(code->includes[ix].url);
@@ -38,10 +32,7 @@ static void bsCodeFree(BSCode *code)
     free(code->coverLines);
     free(code->coverPcs);
     free(code->coverCounts);
-    for (size_t ix = 0; ix < code->slotCount; ix++) {
-        bsRelease(code->slotNames[ix]);
-    }
-    free(code->slotNames);
+    bsValuesFree(code->slotNames, code->slotCount);
     free(code->unsetSlots);
     memset(code, 0, sizeof(*code));
 }
@@ -358,18 +349,8 @@ static uint16_t bsBinaryNodeOp(const char *op)
 
 static uint8_t bsUnaryOpcode(const char *op)
 {
-    if (op[0] != '\0' && op[1] == '\0') {
-        if (op[0] == '-') {
-            return BS_OP_NEG;
-        }
-        if (op[0] == '!') {
-            return BS_OP_NOT;
-        }
-        if (op[0] == '~') {
-            return BS_OP_BNOT;
-        }
-    }
-    return 0;
+    char first = op[0] != '\0' && op[1] == '\0' ? op[0] : '\0';
+    return first == '-' ? BS_OP_NEG : first == '!' ? BS_OP_NOT : first == '~' ? BS_OP_BNOT : 0;
 }
 
 
@@ -652,6 +633,11 @@ typedef struct {
 
 
 /* The null constant's operand: constant zero, which bsEmitInit allocates first */
+/* The operand encoding the emitter works in: the high bit names a constant, the rest its index */
+#define BS_OPERAND_CONST 0x8000u  /* an operand naming a constant rather than a register */
+#define BS_OPERAND_MAX 0x7fffu    /* the largest register or constant index an operand can name */
+#define BS_OPERAND_INDEX(o) ((o) & BS_OPERAND_MAX)
+#define BS_INDEX_MAX 0xffffu      /* the largest name or function index an instruction's a field holds */
 #define BS_OPERAND_NULL BS_OPERAND_CONST
 
 
@@ -713,11 +699,11 @@ static BSOperand bsEmitConst(BSEmit *e, BSValue value)
 {
     bool interned = bsIsType(value, BS_STRING) && (bsStringOf(value)->flags & BS_STR_INTERNED) != 0;
     if (interned) {
-        int index = bsMapNumber(bsEmitMap(&e->constMap), value);
+        int index = bsMapNumber(e->constMap, value);
         if (index >= 0) {
             return (BSOperand) (BS_OPERAND_CONST | (uint32_t) index);
         }
-        bsObjectSetString(e->constMap, value, bsNumber((double) e->constCount));
+        bsObjectSetString(bsEmitMap(&e->constMap), value, bsNumber((double) e->constCount));
     }
     bsEmitLimit(e, e->constCount, BS_OPERAND_MAX);
     BS_GROW(e->constants, e->constCount, e->constCap, 16);
@@ -729,12 +715,12 @@ static BSOperand bsEmitConst(BSEmit *e, BSValue value)
 /* A name's index in the chunk's names, each held once - the name is interned */
 static uint16_t bsEmitName(BSEmit *e, BSValue name)
 {
-    int index = bsMapNumber(bsEmitMap(&e->nameMap), name);
+    int index = bsMapNumber(e->nameMap, name);
     if (index >= 0) {
         return (uint16_t) index;
     }
     bsEmitLimit(e, e->nameCount, BS_INDEX_MAX);
-    bsObjectSetString(e->nameMap, name, bsNumber((double) e->nameCount));
+    bsObjectSetString(bsEmitMap(&e->nameMap), name, bsNumber((double) e->nameCount));
     BS_GROW(e->names, e->nameCount, e->nameCap, 8);
     e->names[e->nameCount] = bsRetain(name);
     return (uint16_t) e->nameCount++;
@@ -941,10 +927,10 @@ static BSValue bsStatementAssignName(const BSAst *ast, uint32_t statement)
 
 static void bsAssignedAnalyze(BSEmit *e, const BSAst *ast, const uint32_t *statements, size_t count, size_t argCount)
 {
-    size_t words = (e->slotCount + 31) / 32;
     if (e->slotCount == 0 || count == 0) {
         return;
     }
+    size_t words = (e->slotCount + 31) / 32;
 
     /* Blocks: the first statement, each label, and each statement after a jump or return start one */
     BSValue labelBlocks = bsObjectNew(); /* label name -> the array of block indexes that define it */
@@ -993,8 +979,7 @@ static void bsAssignedAnalyze(BSEmit *e, const BSAst *ast, const uint32_t *state
         changed = false;
         for (size_t ix = 0; ix < count; ix++) {
             uint32_t block = blockOf[ix];
-            bool last = ix + 1 == count || blockOf[ix + 1] != block;
-            if (!last) {
+            if (ix + 1 != count && blockOf[ix + 1] == block) {
                 continue;
             }
             const uint32_t *blockGen = &gen[block * words];
@@ -1164,9 +1149,9 @@ static void bsEmitCondition(BSEmit *e, const BSAst *ast, uint32_t expr, bool jum
         return;
     }
 
-    uint16_t base = e->tempTop;
     uint8_t compareJump = bsCompareJumpOpcode(node, jumpIfTrue);
     if (compareJump != 0) {
+        uint16_t base = e->tempTop;
         BSOperand leftOperand = bsEmitExprOperand(e, ast, node->a);
         BSOperand rightOperand = bsEmitExprOperand(e, ast, node->b);
         e->tempTop = base;
@@ -1399,9 +1384,9 @@ int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc)
  */
 static void bsEmitCover(BSEmit *e, const BSNode *node)
 {
-    if (e->coverCount == e->coverCap) {
-        e->coverCap = e->coverCap != 0 ? e->coverCap * 2 : 8;
-        e->cover = bsRealloc(e->cover, e->coverCap * sizeof(BSValue));
+    size_t coverCap = e->coverCap;
+    BS_GROW(e->cover, e->coverCount, e->coverCap, 8);
+    if (e->coverCap != coverCap) {
         e->coverLines = bsRealloc(e->coverLines, e->coverCap * sizeof(int));
         e->coverPcs = bsRealloc(e->coverPcs, e->coverCap * sizeof(uint32_t));
     }
@@ -1783,10 +1768,13 @@ BSScript *bsScriptFromModelJSON(const char *text, size_t size, const char *scrip
 /*
  * The binary model
  *
- * The bundled include library's encoding, which bin/includeSource.bare writes: a version byte, 1;
- * the string table - a count, then each string as a length and its UTF-8 bytes; the statements -
+ * The bundled include library's encoding, which bin/includeSource.bare writes: a version byte, 1 or
+ * 2; the string table - a count, then each string as a length and its UTF-8 bytes; the statements -
  * a count, then each. Counts, lengths, indexes, and line numbers are unsigned LEB128 varints; a
- * string is referred to by its table index plus one, zero meaning none. A statement is a kind byte
+ * string is referred to by its table index plus one, zero meaning none - and under version 2 that
+ * reference's low bit instead says which table it indexes, the model's own or the one the includes
+ * share, so a string common to several includes is stored once (the parser and linter stay
+ * version 1, having no table to share). A statement is a kind byte
  * (1 expr, 2 jump, 3 return, 4 label, 5 function, 6 include), its line number, then its members:
  * expr - the name assigned or none, the expression; jump - the label, the condition or none;
  * return - the expression or none; label - the name; function - the name, a flags byte (1: the
@@ -2099,10 +2087,7 @@ BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const 
     }
     decoded = decoded && !reader.failed && reader.offset == size;
     bsAstFree(&ast);
-    for (size_t ix = 0; ix < reader.stringCount; ix++) {
-        bsRelease(reader.strings[ix]);
-    }
-    free(reader.strings);
+    bsValuesFree(reader.strings, reader.stringCount);
     script = bsEmitScriptEnd(script, &e, decoded);
     if (script != NULL) {
         script->scriptName = bsStringNew(scriptName);

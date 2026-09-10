@@ -471,27 +471,22 @@ static bool bsJSONDecodeArray(BSJSONParser *parser, int depth, BSValue *result)
 {
     parser->offset++;
     BSValue array = bsArrayNewCapacity(bsJSONPresize(parser->memoItems, depth));
-    if (bsJSONSkipTake(parser, ']')) {
-        if (depth < BS_JSON_MEMO_DEPTH) {
-            parser->memoItems[depth] = 0;
-        }
-        *result = array;
-        return true;
-    }
-    while (true) {
-        BSValue item;
-        if (!bsJSONDecodeValue(parser, depth + 1, &item)) {
-            bsRelease(array);
-            return false;
-        }
-        bsArrayPush(array, item);
-        int separator = bsJSONSeparator(parser, ']');
-        if (separator < 0) {
-            bsRelease(array);
-            return false;
-        }
-        if (separator > 0) {
-            break;
+    if (!bsJSONSkipTake(parser, ']')) {
+        while (true) {
+            BSValue item;
+            if (!bsJSONDecodeValue(parser, depth + 1, &item)) {
+                bsRelease(array);
+                return false;
+            }
+            bsArrayPush(array, item);
+            int separator = bsJSONSeparator(parser, ']');
+            if (separator < 0) {
+                bsRelease(array);
+                return false;
+            }
+            if (separator > 0) {
+                break;
+            }
         }
     }
     if (depth < BS_JSON_MEMO_DEPTH) {
@@ -682,12 +677,7 @@ BSValue bsJSONDecodeEx(const char *text, size_t size, const char **error, size_t
     BSJSONParser parser = {.text = text, .size = size};
     BSValue result;
     bool decoded = bsJSONDecodeValue(&parser, 0, &result);
-    if (parser.memo != NULL) {
-        for (size_t ix = 0; ix < BS_JSON_MEMO_DEPTH * BS_JSON_MEMO_KEYS; ix++) {
-            bsRelease(parser.memo[ix]);
-        }
-        free(parser.memo);
-    }
+    bsValuesFree(parser.memo, BS_JSON_MEMO_DEPTH * BS_JSON_MEMO_KEYS);
     if (decoded) {
         bsJSONSkipSpace(&parser);
         if (parser.offset != parser.size) {

@@ -46,6 +46,9 @@ char *bsStrdup(const char *text);
 /* The element count of an array */
 #define BS_COUNT_OF(array) (sizeof(array) / sizeof((array)[0]))
 
+/* Release every value of an array, then free the array - which may be NULL, whatever the count */
+void bsValuesFree(BSValue *values, size_t count);
+
 /* Destroy a heap value whose refcount has reached zero */
 void bsReleaseDestroyed(BSValue value);
 
@@ -296,6 +299,19 @@ static inline bool bsIsSpaceCode(uint32_t code)
         code == 0x2029 || code == 0x202F || code == 0x205F || code == 0x3000 || code == 0xFEFF;
 }
 
+/* The offset past the Unicode spaces at "ix" - the leading scan of stringTrim and of number parsing */
+static inline size_t bsSkipSpaces(const char *text, size_t size, size_t ix)
+{
+    while (ix < size) {
+        size_t codeSize;
+        if (!bsIsSpaceCode(bsUTF8Decode(text, size, ix, &codeSize))) {
+            break;
+        }
+        ix += codeSize;
+    }
+    return ix;
+}
+
 /* True if "string" begins or ends with "search". Both must be strings. */
 static inline bool bsStringStartsWith(BSValue string, BSValue search)
 {
@@ -420,10 +436,6 @@ struct BSCallCache {
 };
 
 
-#define BS_OPERAND_CONST 0x8000u           /* while emitting, an operand naming a constant rather than a register */
-#define BS_OPERAND_MAX 0x7fffu             /* the largest register or constant index an operand can name */
-#define BS_OPERAND_INDEX(o) ((o) & BS_OPERAND_MAX)
-#define BS_INDEX_MAX 0xffffu                /* the largest name or function index an instruction's a field holds */
 #define BS_REG_DISCARD 0xffffu              /* a call destination that drops the result */
 #define BS_OPERANDS_PER_DATA 3              /* call argument operands per DATA word */
 
@@ -592,7 +604,7 @@ BSValue bsRegexGroupNameValue(BSValue regex, size_t group);
 
 
 /*
- * The bundled include library (include.c; bsIncludeSourceDecode is in the generated includeSource.c)
+ * The bundled include library (include.c; the generated includeSource.c holds the per-include stubs)
  */
 
 /* Inflate a bundled include model. Returns a NUL-terminated, malloc-allocated buffer, or NULL. */

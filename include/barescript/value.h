@@ -4,9 +4,9 @@
 /*
  * The BareScript value system
  *
- * Values are 16-byte tagged structs passed by value. Null, boolean, number, and datetime values
- * are immediate - they never allocate. String, array, object, function, and regex values point at
- * a reference-counted heap object.
+ * A value is one 64-bit word passed by value - see BSValue below for the layout. Null, boolean, and
+ * number values are immediate: they never allocate. Datetime, string, array, object, function, and
+ * regex values carry a pointer to a reference-counted heap object.
  *
  * Reference counting rules:
  *

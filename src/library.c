@@ -45,7 +45,7 @@ static void bsArgsError(BSOptions *options, const char *argName, BSValue argValu
 }
 
 
-/* The value type each argument type requires, indexed by BSArgType; any and boolean never consult it */
+/* The value type each argument type requires, indexed by BSArgType; any, number, and boolean never consult it */
 static const BSType bsArgValueTypes[] = {
     BS_NULL, BS_NUMBER, BS_STRING, BS_ARRAY, BS_OBJECT, BS_DATETIME, BS_REGEX, BS_FUNCTION, BS_BOOLEAN
 };
@@ -494,7 +494,7 @@ static BSValue bsFnArrayPush(const BSValue *args, size_t argCount, BSOptions *op
 {
     BS_ARGS(arrayPushArgs, bsNull());
     bsArrayPushRange(values[0], values[1], 0, bsArrayCount(values[1]));
-    bsArgsFree(arrayPushArgs, 2, values);
+    bsArgsFree(arrayPushArgs, BS_COUNT_OF(arrayPushArgs), values);
     return bsRetain(values[0]);
 }
 
@@ -1683,12 +1683,9 @@ BS_NOINLINE BSValue bsStringTrimValue(BSValue string)
 {
     const char *text = bsStringSpan(string);
     size_t size = bsStringSize(string);
-    size_t begin = 0;
+    size_t begin = bsSkipSpaces(text, size, 0);
     size_t end = size;
     size_t codeSize;
-    while (begin < end && bsIsSpaceCode(bsUTF8Decode(text, end, begin, &codeSize))) {
-        begin += codeSize;
-    }
     while (end > begin) {
         size_t lead = end - 1;
         while (lead > begin && ((unsigned char) text[lead] & 0xC0) == 0x80) {
@@ -1902,13 +1899,13 @@ static BSValue bsFnSystemPartial(const BSValue *args, size_t argCount, BSOptions
 {
     BS_ARGS(systemPartialArgs, bsNull());
     if (bsArrayCount(values[1]) < 1) {
-        bsArgsInvalid(systemPartialArgs, 2, values, options, "args", values[1]);
+        bsArgsInvalid(systemPartialArgs, BS_COUNT_OF(systemPartialArgs), values, options, "args", values[1]);
         return bsNull();
     }
     BSPartial *partial = bsAlloc(sizeof(BSPartial));
     partial->function = bsRetain(values[0]);
     partial->args = bsRetain(values[1]);
-    bsArgsFree(systemPartialArgs, 2, values);
+    bsArgsFree(systemPartialArgs, BS_COUNT_OF(systemPartialArgs), values);
     return bsFunctionNew("systemPartial", bsPartialCall, partial, bsPartialFree);
 }
 
@@ -2081,7 +2078,7 @@ static void bsLibraryInit(void)
     bsMatchKeys.groups = bsStringInternLiteral("groups");
     bsMatchKeys.empty = bsStringInternLiteral("");
     bsMatchKeyGroupGrow(10);
-    for (int ix = 0; ix <= (int) BS_REGEX; ix++) {
+    for (size_t ix = 0; ix < BS_COUNT_OF(bsSystemTypeNames); ix++) {
         bsSystemTypeNames[ix] = bsStringIntern(bsTypeNames[ix], strlen(bsTypeNames[ix]));
     }
 }
@@ -2127,13 +2124,10 @@ void bsLibraryCleanup(void)
     bsRelease(bsMatchKeys.input);
     bsRelease(bsMatchKeys.groups);
     bsRelease(bsMatchKeys.empty);
-    for (size_t ix = 0; ix < bsMatchKeys.groupCount; ix++) {
-        bsRelease(bsMatchKeys.group[ix]);
-    }
-    free(bsMatchKeys.group);
+    bsValuesFree(bsMatchKeys.group, bsMatchKeys.groupCount);
     bsMatchKeys.group = NULL;
     bsMatchKeys.groupCount = 0;
-    for (int ix = 0; ix <= (int) BS_REGEX; ix++) {
+    for (size_t ix = 0; ix < BS_COUNT_OF(bsSystemTypeNames); ix++) {
         bsRelease(bsSystemTypeNames[ix]);
     }
 }
