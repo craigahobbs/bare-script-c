@@ -177,8 +177,10 @@ through to the function itself. The single-shape intrinsics (`arrayGet`, `arrayL
 and the one-argument math functions, which share one opcode) compile to call opcodes of their own
 (`bsCallOpcode` in `src/model.c`, the `bsIntrin*` functions in `src/runtime.c`), guarded by the
 site's *warm* cache - valid for the activation's globals object, its global carrying that intrinsic
-id - with a cold site, or one an expression's locals object could shadow, taking the general call,
-which resolves the cache; they have no case in `bsIntrinsicCall`, which serves the rest through the
+id, which the site verifies once per value (`BSCallCache.verified` holds the function value's bits,
+and the library's functions live as long as the thread, so the compare that admits one reads nothing
+past the cache and the slot) - with a cold site, or one an expression's locals object could shadow,
+taking the general call, which resolves the cache; they have no case in `bsIntrinsicCall`, which serves the rest through the
 general call path (`arrayPush` has both: its opcode takes the two-argument shape, its case the rest).
 
 ### Regular expressions

@@ -980,14 +980,23 @@ static inline BSValue bsOperandTake(BSValue *regs, size_t slotCount, size_t owne
 static inline const BSInst *bsIntrinArgs(const BSCode *code, const BSInst *inst, const BSObject *globals,
                                          const BSOptions *options, unsigned char id)
 {
-    const BSCallCache *cache = &code->caches[inst->b];
+    BSCallCache *cache = &code->caches[inst->b];
     if (globals == NULL || cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
         return NULL;
     }
+    /*
+     * The global is verified once per value rather than per call: the library holds its functions for
+     * the thread's life, so a value carrying this opcode's intrinsic id cannot come to mean anything
+     * else, and the compare that admits it reads no memory past the cache and the slot
+     */
     const BSValue *hit = cache->slot;
+    if (hit != NULL && hit->bits == cache->verified) {
+        return inst + 1;
+    }
     if (hit == NULL || !bsIsType(*hit, BS_FUNCTION) || bsFunctionOf(*hit)->intrinsic != id) {
         return NULL;
     }
+    cache->verified = hit->bits;
     return inst + 1;
 }
 

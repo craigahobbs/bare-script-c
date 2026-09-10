@@ -221,6 +221,11 @@ TEST(runtime_functions)
     ASSERT_VALUE(bsTestExecute(
         "i = 0\nr = 0\nwhile i < 2:\n    if i == 1:\n        arrayGet = 1\n    endif\n"
         "    r = arrayGet([9], 0)\n    i = i + 1\nendwhile\nreturn r"), "null");
+    /* The global set back to the library function: the site's verified value is its own again */
+    ASSERT_VALUE(bsTestExecute(
+        "saved = arrayGet\nr = []\ni = 0\nwhile i < 3:\n    if i == 1:\n        arrayGet = 1\n    endif\n"
+        "    if i == 2:\n        arrayGet = saved\n    endif\n"
+        "    arrayPush(r, arrayGet([9], 0))\n    i = i + 1\nendwhile\nreturn r"), "[9,null,9]");
     ASSERT_VALUE(bsTestExecute(
         "i = 0\nr = 0\nwhile i < 2:\n    if i == 1:\n        function arrayGet(a, i):\n"
         "            return 99\n        endfunction\n    endif\n"

@@ -158,8 +158,9 @@ to the function: those with one shape - `arrayGet`, `arrayLength`, `arrayPush`, 
 functions, which share an opcode and are told apart by the site's function - as call opcodes of their own, which the emitter chooses by a call's
 name and argument count and whose handler first checks that the site's cache is warm for the
 activation's globals object and holds that library function (the one function value carrying the
-id) - a cold site, or one an expression's locals object could shadow, takes the general call,
-which resolves the cache; the rest in the call path's intrinsic switch. An opcode takes about fifteen instructions
+id, verified once per value - the cache keeps its bits, and the library's functions live as long as
+the thread, so no other value can come to carry them) - a cold site, or one an expression's locals
+object could shadow, takes the general call, which resolves the cache; the rest in the call path's intrinsic switch. An opcode takes about fifteen instructions
 off a global `arrayGet` call of ninety-five, which is a tenth of an object-heavy program such as
 the `nbody` port.
 
