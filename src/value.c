@@ -2179,12 +2179,16 @@ void bsValueCleanup(void)
 {
     bsRegexScratchFree();
 
-    /* The intern table's references - a string still held elsewhere lives on as an ordinary string */
+    /*
+     * The intern table's references - a string still held elsewhere lives on as an ordinary string,
+     * and out of its pool size class too: the free lists are drained here, so its block goes back to
+     * the allocator when the last reference goes rather than onto a list nothing will drain again.
+     */
     if (bsTS.internSlots != NULL) {
         for (size_t ix = 0; ix <= bsTS.internMask; ix++) {
             BSString *string = bsTS.internSlots[ix].string;
             if (string != NULL) {
-                string->flags &= (uint8_t) ~BS_STR_INTERNED;
+                string->flags &= (uint16_t) (((1u << BS_STR_POOL_SHIFT) - 1) & ~BS_STR_INTERNED);
                 bsReleaseInline(bsStringTake(string));
             }
         }

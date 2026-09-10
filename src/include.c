@@ -23,7 +23,7 @@ typedef struct {
     uint32_t length;
 } BSIncludeSharedSpan;
 
-/* The thread's compiled include scripts, inflated models, and shared string table - the registry itself is never written */
+/* The thread's compiled include scripts, inflated models, and shared string table - the runtime never writes the registry */
 static _Thread_local struct {
     BSScript *scripts[BS_INCLUDE_COUNT];
     unsigned char *decoded[BS_INCLUDE_COUNT];
