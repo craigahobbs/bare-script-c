@@ -543,6 +543,8 @@ other, this implementation's behavior is the one shown in bold.
 | `\w`, `\d`, `\b`                       | ASCII             | Unicode letters and digits | **ASCII**     |
 | `.` and multi-line `^` `$` at CR, U+2028, U+2029 | line terminators | LF only    | **line terminators** |
 | `$` before a trailing LF               | no match          | matches         | **no match**        |
+| The statements before the one that passes the statement limit | run | run | **not run** - a block is charged as a whole; the error names the same statement |
+| Coverage of the statements after one that raises a runtime error | not recorded | not recorded | **recorded**, to the end of their block |
 | The `i` flag on ß, ı, İ, K (Kelvin), ſ | not folded        | folded to ẞ, I, i, k, s | **not folded** |
 
 `objectKeys` returns keys in insertion order, matching both references for ordinary keys.

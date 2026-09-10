@@ -337,16 +337,36 @@ static void bsRecordCoverage(BSScript *script, const BSCode *code, uint32_t inde
 
 
 /*
- * A backward jump lands on the statement it repeats without executing that statement's STMT, so a
- * loop body would be counted once. Only reached when coverage is recording - see BS_JUMP_COVER,
- * which keeps the call itself out of the interpreter's jumps, about a quarter of all dispatches.
+ * A block marker past the statement limit, out of the interpreter loop. The statements before the
+ * one that passes the limit run in the references; here the block stops before any of them, and
+ * the error names that statement.
+ */
+static BS_NOINLINE void bsStatementLimit(const BSCode *code, const BSInst *inst, BSScript *script, BSOptions *options,
+                                         BSValue coverage, bool hasCoverage)
+{
+    /* The count before this block is under the limit, unless a native function lowered the limit mid-run */
+    int64_t room = options->maxStatements - (options->statementCount - inst->b);
+    size_t allowed = room > 0 ? (size_t) room : 0;
+    for (size_t ix = 0; hasCoverage && ix < allowed; ix++) {
+        bsRecordCoverage(script, code, inst->a + (uint32_t) ix, coverage);
+    }
+    bsErrorSetStatement(options, script, code->coverLines[inst->a + allowed],
+                        "Exceeded maximum script statements (%lld)", (long long) options->maxStatements);
+}
+
+
+/*
+ * A jump lands past the label statement's marker, so the label is never run or counted - as in the
+ * references, which resume at the statement after it - but its coverage is recorded. Only reached
+ * when coverage is recording - see BS_JUMP_COVER, which keeps the call itself out of the
+ * interpreter's jumps, about a quarter of all dispatches.
  */
 static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, BSValue coverage)
 {
     /*
      * Only a target that lands just past a STMT records anything. Target zero never does - a
-     * covered script emits a STMT for its first statement, so every label it can jump back to sits
-     * beyond it - and testing for it here is also what keeps the index below from underflowing.
+     * covered script emits a marker before its first statement, so every label it can jump back to
+     * sits beyond it - and testing for it here is also what keeps the index below from underflowing.
      */
     if (target == 0 || code->inst[target - 1].op != BS_OP_STMT) {
         return;
@@ -1623,16 +1643,17 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
             BS_NEXT();
 
         BS_CASE(STMT) {
-            int64_t count = ++options->statementCount;
-            if (count > statementLimit) {
+            /* The block's statements are charged together - see bsEmitCover */
+            size_t count = inst->b;
+            int64_t total = options->statementCount += (int64_t) count;
+            if (total > statementLimit) {
                 /* The limit is exceeded, or coverage is recording */
-                if (options->maxStatements > 0 && count > options->maxStatements) {
-                    bsErrorSetStatement(options, script, code->coverLines[inst->a],
-                                        "Exceeded maximum script statements (%lld)",
-                                        (long long) options->maxStatements);
+                if (options->maxStatements > 0 && total > options->maxStatements) {
+                    bsStatementLimit(code, inst, script, options, coverage, hasCoverage);
                     goto fail;
-                } else {
-                    bsRecordCoverage(script, code, inst->a, coverage);
+                }
+                for (size_t ix = 0; ix < count; ix++) {
+                    bsRecordCoverage(script, code, inst->a + (uint32_t) ix, coverage);
                 }
             }
         }

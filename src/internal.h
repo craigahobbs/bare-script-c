@@ -439,7 +439,7 @@ enum {
     BS_OP_BNOT,
     BS_OP_FUNCTION,    /* define script function a as a global */
     BS_OP_INCLUDE,     /* run the b includes from include a */
-    BS_OP_STMT,        /* statement a begins */
+    BS_OP_STMT,        /* the b statements from cover index a begin - a basic block, or a label statement alone */
     BS_OP_LOAD_SLOT,   /* a = slot b, or the global of its name if the slot is unset */
     /*
      * A CALL_NAME whose name is a library intrinsic's and whose argument count is its happy path's:

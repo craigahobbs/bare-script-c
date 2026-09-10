@@ -254,9 +254,18 @@ from the globals object (its *structural generation*), so an assignment to a glo
 invalidates other sites. Under GNU C the interpreter dispatches through a label table, one indirect
 branch per opcode. A runtime error is detected at entry, after each call, and at the statements
 that raise one; the statement's line number is found from a per-chunk table only when an error
-message needs it. Bundled include scripts - the parser, the linter, and the library - are never
-statement-counted or coverage-recorded, so the emitter writes no statement markers into their
-code.
+message needs it. Statements are counted against the limit, and recorded for coverage, a basic
+block at a time: one marker at the start of each run of statements between labels, jumps, and
+returns charges the whole run, since the run either executes to its end or stops the script with an
+error - in which case the statements after the one that raised it stay recorded; taking them back
+cost every workload one to two percent, the interpreter loop's layout shifting under the cold path,
+so the error case is left as it is. A label statement is a block of its own, its marker before the
+label, so a jump - which in the references resumes at the statement after the label - lands past it
+and on the marker of the statements that follow. The one observable difference from counting each
+statement: a block that passes the statement limit stops before any of its statements, where the
+references run those before the one that passes it; the error names that statement either way.
+Bundled include scripts - the parser, the linter, and the library - are never statement-counted or
+coverage-recorded, so the emitter writes no statement markers into their code.
 
 When `__barescriptCoverage` is enabled, each compiled script keeps a line-indexed array of
 pointers into the coverage object's per-line counts, so a loop increments a number instead of

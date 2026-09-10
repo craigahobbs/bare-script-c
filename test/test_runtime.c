@@ -330,6 +330,14 @@ TEST(runtime_errors)
 }
 
 
+/* A native function that sets the statement limit to one, below the statements already counted */
+static BSValue bsTestLowerLimit(const BSValue *args, size_t argCount, BSOptions *options, void *data)
+{
+    options->maxStatements = 1;
+    return bsNull();
+}
+
+
 TEST(runtime_max_statements)
 {
     BSOptions *options = bsTestOptions();
@@ -343,6 +351,21 @@ TEST(runtime_max_statements)
     options->maxStatements = 0;
     ASSERT_VALUE(bsTestExecuteOptions("i = 0\nwhile i < 100:\n    i = i + 1\nendwhile\nreturn i", options),
                  "100");
+    bsOptionsFree(options);
+
+    /* The limit passed inside a block names the statement that passes it; the block's earlier statements do not run */
+    options = bsTestOptions();
+    options->maxStatements = 3;
+    ASSERT_VALUE(bsTestExecuteOptions("a = 1\nb = 2\nsystemGlobalSet('c', 3)\nd = 4\nreturn a", options), "null");
+    ASSERT_STR_EQ(bsTestErrorText(), "test.bare:4: Exceeded maximum script statements (3)");
+    ASSERT_FALSE(bsObjectHas(options->globals, "c"));
+    bsOptionsFree(options);
+
+    /* A native function that lowers the limit below the count already taken: the next activation's first statement fails */
+    options = bsTestOptions();
+    bsObjectSet(options->globals, "lowerLimit", bsFunctionNew("lowerLimit", bsTestLowerLimit, NULL, NULL));
+    ASSERT_VALUE(bsTestExecuteOptions("function f():\n    c = 3\n    return c\nendfunction\na = 1\nlowerLimit()\nreturn f()", options), "null");
+    ASSERT_STR_EQ(bsTestErrorText(), "test.bare:2: Exceeded maximum script statements (1)");
     bsOptionsFree(options);
 }
 
@@ -832,6 +855,29 @@ TEST(runtime_coverage)
     options = bsTestCoverageOptions(&coverage, false);
     ASSERT_VALUE(bsTestExecuteOptions("return 1", options), "1");
     ASSERT_FALSE(bsObjectHas(coverage, "scripts"));
+    bsOptionsFree(options);
+}
+
+
+TEST(runtime_coverage_block)
+{
+    /* A block's statements are recorded together; the limit passed inside one records those before it */
+    BSValue coverage;
+    BSOptions *options = bsTestCoverageOptions(&coverage, true);
+    options->maxStatements = 10;
+    ASSERT_VALUE(bsTestExecuteOptions("i = 0\nwhile i < 100:\n    i = i + 1\nendwhile", options), "null");
+    ASSERT_STR_EQ(bsTestErrorText(), "test.bare:4: Exceeded maximum script statements (10)");
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "test.bare", "2"), 5);
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "test.bare", "3"), 4);
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "test.bare", "4"), 3);
+    bsOptionsFree(options);
+
+    /* A runtime error inside a block leaves the block's later statements recorded - see README's Compatibility */
+    options = bsTestCoverageOptions(&coverage, true);
+    ASSERT_VALUE(bsTestExecuteOptions("a = 1\nundefinedFn()\nb = 2\nreturn b", options), "null");
+    ASSERT_STR_EQ(bsTestErrorText(), "test.bare:2: Undefined function \"undefinedFn\"");
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "test.bare", "2"), 1);
+    ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "test.bare", "3"), 1);
     bsOptionsFree(options);
 }
 

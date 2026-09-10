@@ -641,6 +641,8 @@ typedef struct {
     size_t patchCap;
     BSScript *script;
     size_t *functionCap;
+    uint32_t blockMarker; /* the open block's STMT, whose count grows with each statement the block takes */
+    bool blockOpen;
 } BSEmit;
 
 
@@ -1356,7 +1358,17 @@ int bsCoverLine(const uint32_t *pcs, const int *lines, size_t count, size_t pc)
 }
 
 
-/* Record a statement's model and line */
+/*
+ * Record a statement's model and line, and give it its statement marker
+ *
+ * A basic block - the statements from a label or the statement after a jump or return, up to the
+ * next such boundary - runs as a whole, so one STMT at its start charges and records every
+ * statement in it: "a" is the first statement's cover index and "b" their count, which grows as
+ * the block takes statements. A label statement is a block of its own, its marker before its pc, so
+ * a jump to the label lands past it - a jump never runs the label statement, as in the references -
+ * and on the marker of the block that follows. A system script is never statement-counted or
+ * coverage-recorded, so it has no markers.
+ */
 static void bsEmitCover(BSEmit *e, const BSNode *node)
 {
     if (e->coverCount == e->coverCap) {
@@ -1369,8 +1381,19 @@ static void bsEmitCover(BSEmit *e, const BSNode *node)
     e->coverLines[e->coverCount] = node->line;
     e->coverPcs[e->coverCount] = (uint32_t) e->count;
     if (!e->script->system) {
-        /* A system script is never statement-counted or coverage-recorded, so it has no markers */
-        bsEmitInst(e, BS_OP_STMT, (uint16_t) e->coverCount, 0, 0);
+        if (node->kind == BS_NODE_LABEL) {
+            bsEmitInst(e, BS_OP_STMT, (uint16_t) e->coverCount, 1, 0);
+            e->blockOpen = false;
+        } else {
+            if (!e->blockOpen) {
+                e->blockMarker = bsEmitInst(e, BS_OP_STMT, (uint16_t) e->coverCount, 0, 0);
+                e->blockOpen = true;
+            }
+            e->inst[e->blockMarker].b++;
+            if (node->kind == BS_NODE_JUMP || node->kind == BS_NODE_RETURN) {
+                e->blockOpen = false;
+            }
+        }
     }
     e->coverCount++;
 }
