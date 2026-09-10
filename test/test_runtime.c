@@ -736,7 +736,7 @@ static BSValue bsTestCovered(BSValue coverage, const char *script)
 /* A covered line's hit count */
 static double bsTestCoveredCount(BSValue coverage, const char *script, const char *line)
 {
-    return bsObjectGet(bsObjectGet(bsTestCovered(coverage, script), line), "count").u.number;
+    return bsNumberOf(bsObjectGet(bsObjectGet(bsTestCovered(coverage, script), line), "count"));
 }
 
 
@@ -798,11 +798,11 @@ TEST(runtime_coverage_forgotten_model)
     ASSERT_DOUBLE_EQ(bsTestCoveredCount(coverage, "forget.bare", "3"), 1);
     BSValue covered = bsTestCovered(coverage, "forget.bare");
     BSValue statement = bsObjectGet(bsObjectGet(covered, "3"), "statement");
-    ASSERT_INT_EQ(statement.type, BS_OBJECT);
+    ASSERT_INT_EQ(bsValueType(statement), BS_OBJECT);
     ASSERT_TRUE(bsObjectHas(statement, "return"));
     ASSERT_NOT_NULL(script->code.cover);
     ASSERT_NOT_NULL(script->functions[0]->code.cover);
-    ASSERT_INT_EQ(script->model.type, BS_OBJECT);
+    ASSERT_INT_EQ(bsValueType(script->model), BS_OBJECT);
     bsScriptRelease(script);
     bsOptionsFree(options);
 }

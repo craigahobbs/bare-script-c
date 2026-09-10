@@ -17,7 +17,7 @@
 
 
 /* The captured output of the most recent bsTestMain call */
-static BSValue bsTestMainOutput = {BS_NULL, {0}};
+static BSValue bsTestMainOutput;
 
 
 /*
@@ -65,7 +65,7 @@ static int bsTestBare(const char *arg, ...)
     BSFetchRequest request = {.url = path, .headers = bsNull()};
     BSValue output = bsNull();
     bsFetchReadOnly(&request, &output, 1, NULL);
-    bsAssign(&bsTestMainOutput, output.type == BS_STRING ? output : bsStringNew(""));
+    bsAssign(&bsTestMainOutput, bsIsType(output, BS_STRING) ? output : bsStringNew(""));
     return status;
 }
 

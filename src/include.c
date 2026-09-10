@@ -479,7 +479,7 @@ bool bsIncludeSharedString(size_t index, BSValue *string)
     if (index >= bsIncludeTS.sharedCount) {
         return false;
     }
-    if (bsIncludeTS.sharedStrings[index].type != BS_STRING) {
+    if (!bsIsType(bsIncludeTS.sharedStrings[index], BS_STRING)) {
         const BSIncludeSharedSpan *span = &bsIncludeTS.sharedSpans[index];
         bsIncludeTS.sharedStrings[index] = bsStringIntern((const char *) bsIncludeTS.sharedText + span->offset, span->length);
     }

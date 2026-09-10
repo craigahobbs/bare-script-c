@@ -105,8 +105,8 @@ void bsModelKeysInit(void)
      * Interned once per thread - and again after a runtime cleanup, which leaves the strings held
      * here as ordinary ones that no longer compare by pointer
      */
-    if (bsKeys.expr.type == BS_STRING) {
-        if ((bsKeys.expr.u.string->flags & BS_STR_INTERNED) != 0) {
+    if (bsIsType(bsKeys.expr, BS_STRING)) {
+        if ((bsStringOf(bsKeys.expr)->flags & BS_STR_INTERNED) != 0) {
             return;
         }
         BSValue *keys = (BSValue *) &bsKeys;
@@ -150,7 +150,7 @@ void bsModelKeysInit(void)
 /* Retain an interned name; intern an ordinary one. Model strings are interned on decode. */
 static BSValue bsInternName(BSValue name)
 {
-    if ((name.u.string->flags & BS_STR_INTERNED) != 0) {
+    if ((bsStringOf(name)->flags & BS_STR_INTERNED) != 0) {
         return bsRetain(name);
     }
     return bsStringIntern(bsStringSpan(name), bsStringSize(name));
@@ -245,6 +245,7 @@ static uint32_t bsAstNode(BSAst *ast, uint8_t kind)
     BSNode *node = &ast->nodes[ast->count];
     memset(node, 0, sizeof(*node));
     node->kind = kind;
+    node->model = bsNull();
     return ast->count++;
 }
 
@@ -275,7 +276,7 @@ static inline bool bsNameIs(const char *name, const char *word)
 static inline bool bsStringIs(BSValue value, const char *word)
 {
     size_t size = strlen(word);
-    return value.u.string->size == size && memcmp(value.u.string->data, word, size) == 0;
+    return bsStringOf(value)->size == size && memcmp(bsStringOf(value)->data, word, size) == 0;
 }
 
 
@@ -297,12 +298,12 @@ static void bsAstAppend(BSAst *ast, uint32_t *head, uint32_t *tail, uint32_t nod
  */
 static BSString *bsModelKind(BSValue node, BSValue *member)
 {
-    if (node.type != BS_OBJECT || node.u.object->count != 1) {
+    if (!bsIsType(node, BS_OBJECT) || bsObjectOf(node)->count != 1) {
         *member = bsNull();
         return NULL;
     }
-    *member = node.u.object->entries->value;
-    return node.u.object->entries->key;
+    *member = bsObjectOf(node)->entries->value;
+    return bsObjectOf(node)->entries->key;
 }
 
 /* Whether a node's kind key is the model key "field" */
@@ -376,15 +377,15 @@ static uint32_t bsAstExpr(BSAst *ast, BSValue model)
     BSValue member;
     BSString *kind = bsModelKind(model, &member);
     if (BS_KIND(kind, number)) {
-        if (member.type != BS_NUMBER) {
+        if (!bsIsNumber(member)) {
             return 0;
         }
         uint32_t node = bsAstNode(ast, BS_NODE_NUMBER);
-        ast->nodes[node].number = member.u.number;
+        ast->nodes[node].number = bsNumberOf(member);
         return node;
     }
     if (BS_KIND(kind, string) || BS_KIND(kind, variable)) {
-        if (member.type != BS_STRING) {
+        if (!bsIsType(member, BS_STRING)) {
             return 0;
         }
         uint32_t node = bsAstNode(ast, BS_KIND(kind, string) ? BS_NODE_STRING : BS_NODE_VARIABLE);
@@ -400,12 +401,12 @@ static uint32_t bsAstExpr(BSAst *ast, BSValue model)
         ast->nodes[node].a = sub;
         return node;
     }
-    if (member.type != BS_OBJECT) {
+    if (!bsIsType(member, BS_OBJECT)) {
         return 0;
     }
     if (BS_KIND(kind, function)) {
         BSValue name = bsObjectGetString(member, bsKeys.name);
-        if (name.type != BS_STRING) {
+        if (!bsIsType(name, BS_STRING)) {
             return 0;
         }
         /* The conditional reads its first three arguments and no more, so a fourth of any shape stands */
@@ -429,7 +430,7 @@ static uint32_t bsAstExpr(BSAst *ast, BSValue model)
     }
     if (BS_KIND(kind, binary)) {
         BSValue op = bsObjectGetString(member, bsKeys.op);
-        uint16_t nodeOp = op.type == BS_STRING ? bsBinaryNodeOp(bsStringData(op)) : 0;
+        uint16_t nodeOp = bsIsType(op, BS_STRING) ? bsBinaryNodeOp(bsStringData(op)) : 0;
         if (nodeOp == 0) {
             return 0;
         }
@@ -446,7 +447,7 @@ static uint32_t bsAstExpr(BSAst *ast, BSValue model)
     }
     if (BS_KIND(kind, unary)) {
         BSValue op = bsObjectGetString(member, bsKeys.op);
-        uint8_t opcode = op.type == BS_STRING ? bsUnaryOpcode(bsStringData(op)) : 0;
+        uint8_t opcode = bsIsType(op, BS_STRING) ? bsUnaryOpcode(bsStringData(op)) : 0;
         if (opcode == 0) {
             return 0;
         }
@@ -479,7 +480,7 @@ static uint32_t bsAstStatement(BSAst *ast, BSValue model)
 {
     BSValue value;
     BSString *kind = bsModelKind(model, &value);
-    if (kind == NULL || value.type != BS_OBJECT) {
+    if (kind == NULL || !bsIsType(value, BS_OBJECT)) {
         return 0;
     }
     uint32_t node;
@@ -492,12 +493,12 @@ static uint32_t bsAstStatement(BSAst *ast, BSValue model)
         node = bsAstNode(ast, BS_NODE_EXPR);
         ast->nodes[node].a = expr;
         BSValue name = bsObjectGetString(value, bsKeys.name);
-        if (name.type == BS_STRING) {
+        if (bsIsType(name, BS_STRING)) {
             ast->nodes[node].text = bsAstString(ast, bsInternName(name));
         }
     } else if (BS_KIND(kind, jump)) {
         BSValue label = bsObjectGetString(value, bsKeys.label);
-        if (label.type != BS_STRING) {
+        if (!bsIsType(label, BS_STRING)) {
             return 0;
         }
         uint32_t cond;
@@ -516,7 +517,7 @@ static uint32_t bsAstStatement(BSAst *ast, BSValue model)
         ast->nodes[node].a = expr;
     } else if (BS_KIND(kind, label)) {
         BSValue name = bsObjectGetString(value, bsKeys.name);
-        if (name.type != BS_STRING) {
+        if (!bsIsType(name, BS_STRING)) {
             return 0;
         }
         node = bsAstNode(ast, BS_NODE_LABEL);
@@ -524,13 +525,13 @@ static uint32_t bsAstStatement(BSAst *ast, BSValue model)
     } else if (BS_KIND(kind, function)) {
         BSValue name = bsObjectGetString(value, bsKeys.name);
         BSValue statements = bsObjectGetString(value, bsKeys.statements);
-        if (name.type != BS_STRING || statements.type != BS_ARRAY) {
+        if (!bsIsType(name, BS_STRING) || !bsIsType(statements, BS_ARRAY)) {
             return 0;
         }
         BSValue args = bsObjectGetString(value, bsKeys.args);
         size_t argCount = bsArrayCount(args);
         for (size_t ix = 0; ix < argCount; ix++) {
-            if (bsArrayGet(args, ix).type != BS_STRING) {
+            if (!bsIsType(bsArrayGet(args, ix), BS_STRING)) {
                 return 0;
             }
         }
@@ -561,7 +562,7 @@ static uint32_t bsAstStatement(BSAst *ast, BSValue model)
         for (size_t ix = 0; ix < count; ix++) {
             BSValue include = bsArrayGet(includes, ix);
             BSValue url = bsObjectGetString(include, bsKeys.url);
-            if (url.type != BS_STRING) {
+            if (!bsIsType(url, BS_STRING)) {
                 return 0;
             }
             uint32_t item = bsAstNode(ast, BS_NODE_INCLUDE_ITEM);
@@ -573,7 +574,7 @@ static uint32_t bsAstStatement(BSAst *ast, BSValue model)
         return 0;
     }
     BSValue line = bsObjectGetString(value, bsKeys.lineNumber);
-    ast->nodes[node].line = line.type == BS_NUMBER ? (int) line.u.number : 0;
+    ast->nodes[node].line = bsIsNumber(line) ? (int) bsNumberOf(line) : 0;
     ast->nodes[node].model = model;
     return node;
 }
@@ -689,7 +690,7 @@ static inline void bsEmitLimit(BSEmit *e, size_t count, size_t max)
 /* One of the emitter's lookup objects, created on its first store - the reads tolerate a null value */
 static BSValue bsEmitMap(BSValue *map)
 {
-    if (map->type != BS_OBJECT) {
+    if (!bsIsType(*map, BS_OBJECT)) {
         *map = bsObjectNew();
     }
     return *map;
@@ -699,14 +700,14 @@ static BSValue bsEmitMap(BSValue *map)
 static int bsMapNumber(BSValue map, BSValue key)
 {
     BSValue value = bsObjectGetString(map, key);
-    return value.type == BS_NUMBER ? (int) value.u.number : -1;
+    return bsIsNumber(value) ? (int) bsNumberOf(value) : -1;
 }
 
 
 /* A constant's operand. Interned strings - literals - are shared, so a chunk holds each once. */
 static BSOperand bsEmitConst(BSEmit *e, BSValue value)
 {
-    bool interned = value.type == BS_STRING && (value.u.string->flags & BS_STR_INTERNED) != 0;
+    bool interned = bsIsType(value, BS_STRING) && (bsStringOf(value)->flags & BS_STR_INTERNED) != 0;
     if (interned) {
         int index = bsMapNumber(bsEmitMap(&e->constMap), value);
         if (index >= 0) {
@@ -740,6 +741,10 @@ static uint16_t bsEmitName(BSEmit *e, BSValue name)
 static void bsEmitInit(BSEmit *e, BSScript *script, size_t *functionCap)
 {
     memset(e, 0, sizeof(*e));
+    e->slotMap = bsNull();
+    e->constMap = bsNull();
+    e->nameMap = bsNull();
+    e->labels = bsNull();
     e->script = script;
     e->functionCap = functionCap;
     bsEmitConst(e, bsNull());
@@ -936,7 +941,7 @@ static void bsAssignedAnalyze(BSEmit *e, const BSAst *ast, const uint32_t *state
         if (isLabel) {
             BSValue name = bsNodeText(ast, node);
             BSValue blocks = bsObjectGetString(labelBlocks, name);
-            if (blocks.type != BS_ARRAY) {
+            if (!bsIsType(blocks, BS_ARRAY)) {
                 blocks = bsArrayNew();
                 bsObjectSetString(labelBlocks, name, blocks);
             }
@@ -955,7 +960,7 @@ static void bsAssignedAnalyze(BSEmit *e, const BSAst *ast, const uint32_t *state
     }
     for (size_t ix = 0; ix < count; ix++) {
         BSValue name = bsStatementAssignName(ast, statements[ix]);
-        int slot = name.type == BS_STRING ? bsSlotFind(e, name) : -1;
+        int slot = bsIsType(name, BS_STRING) ? bsSlotFind(e, name) : -1;
         if (slot >= 0) {
             gen[blockOf[ix] * words + (size_t) slot / 32] |= (uint32_t) 1 << (slot % 32);
         }
@@ -977,9 +982,9 @@ static void bsAssignedAnalyze(BSEmit *e, const BSAst *ast, const uint32_t *state
             bool isJump = node->kind == BS_NODE_JUMP;
             bool fallsThrough = isJump ? node->a != 0 : node->kind != BS_NODE_RETURN;
             BSValue targets = isJump ? bsObjectGetString(labelBlocks, bsNodeText(ast, node)) : bsNull();
-            size_t targetCount = targets.type == BS_ARRAY ? bsArrayCount(targets) : 0;
+            size_t targetCount = bsIsType(targets, BS_ARRAY) ? bsArrayCount(targets) : 0;
             for (size_t succIx = 0; succIx < targetCount + (fallsThrough ? 1 : 0); succIx++) {
-                uint32_t succ = succIx < targetCount ? (uint32_t) bsArrayGet(targets, succIx).u.number :
+                uint32_t succ = succIx < targetCount ? (uint32_t) bsNumberOf(bsArrayGet(targets, succIx)) :
                     block + 1;
                 if (succ >= blockCount) {
                     continue;
@@ -1621,7 +1626,7 @@ static void bsEmitFunction(BSEmit *e, const BSAst *ast, uint32_t id)
         BS_GROW(statements, count, capacity, 16);
         statements[count++] = statement;
         BSValue assign = bsStatementAssignName(ast, statement);
-        if (assign.type == BS_STRING) {
+        if (bsIsType(assign, BS_STRING)) {
             bsSlotAdd(&body, assign, false);
         }
     }
@@ -1665,8 +1670,11 @@ static BSScript *bsScriptNew(BSValue lines)
     BSScript *script = bsAlloc(sizeof(BSScript));
     memset(script, 0, sizeof(*script));
     script->refcount = 1;
+    script->scriptName = bsNull();
+    script->model = bsNull();
+    script->coverageCovered = bsNull();
     script->startLineNumber = 1;
-    script->scriptLines = lines.type == BS_ARRAY ? bsRetain(lines) : bsArrayNew();
+    script->scriptLines = bsIsType(lines, BS_ARRAY) ? bsRetain(lines) : bsArrayNew();
     return script;
 }
 
@@ -1689,7 +1697,7 @@ static void bsScriptInfo(BSScript *script, BSValue model, const char *scriptName
     BSValue modelName = bsObjectGetString(model, bsKeys.scriptName);
     if (scriptName != NULL) {
         script->scriptName = bsStringNew(scriptName);
-    } else if (modelName.type == BS_STRING) {
+    } else if (bsIsType(modelName, BS_STRING)) {
         script->scriptName = bsRetain(modelName);
     }
 }
@@ -1697,12 +1705,12 @@ static void bsScriptInfo(BSScript *script, BSValue model, const char *scriptName
 
 BSScript *bsScriptFromModel(BSValue model, const char *scriptName)
 {
-    if (model.type != BS_OBJECT) {
+    if (!bsIsType(model, BS_OBJECT)) {
         return NULL;
     }
     bsModelKeysInit();
     BSValue statements = bsObjectGetString(model, bsKeys.statements);
-    if (statements.type != BS_ARRAY) {
+    if (!bsIsType(statements, BS_ARRAY)) {
         return NULL;
     }
 
@@ -1840,7 +1848,7 @@ static BSValue bsModelString(BSModelReader *reader)
 static uint32_t bsModelText(BSModelReader *reader)
 {
     BSValue string = bsModelString(reader);
-    if (string.type != BS_STRING) {
+    if (!bsIsType(string, BS_STRING)) {
         reader->failed = true;
         return 0;
     }
@@ -1874,7 +1882,7 @@ static uint32_t bsModelExpr(BSModelReader *reader, int depth, bool required)
     case 2: {
         BSValue text = bsModelString(reader);
         double number;
-        if (text.type != BS_STRING || !bsNumberParse(bsStringSpan(text), bsStringSize(text), &number)) {
+        if (!bsIsType(text, BS_STRING) || !bsNumberParse(bsStringSpan(text), bsStringSize(text), &number)) {
             reader->failed = true;
             return 0;
         }
@@ -1904,7 +1912,7 @@ static uint32_t bsModelExpr(BSModelReader *reader, int depth, bool required)
     case 7: {
         BSValue op = bsModelString(reader);
         uint16_t nodeOp = 0;
-        if (op.type == BS_STRING) {
+        if (bsIsType(op, BS_STRING)) {
             nodeOp = tag == 6 ? bsBinaryNodeOp(bsStringData(op)) : bsUnaryOpcode(bsStringData(op));
         }
         if (nodeOp == 0) {
@@ -1950,7 +1958,7 @@ static uint32_t bsModelStatement(BSModelReader *reader, int depth)
     case 1: {
         node = bsAstNode(ast, BS_NODE_EXPR);
         BSValue name = bsModelString(reader);
-        if (name.type == BS_STRING) {
+        if (bsIsType(name, BS_STRING)) {
             ast->nodes[node].text = bsAstString(ast, bsRetain(name));
         }
         uint32_t expr = bsModelExpr(reader, depth + 1, true);
@@ -2110,7 +2118,7 @@ bool bsScriptRestoreCover(BSScript *script)
 {
     /* Parse the lines again and compile the model once more - its chunks mirror this script's */
     BSValue model = bsScriptReparse(script);
-    BSScript *twin = model.type == BS_OBJECT ? bsScriptFromModel(model, NULL) : NULL;
+    BSScript *twin = bsIsType(model, BS_OBJECT) ? bsScriptFromModel(model, NULL) : NULL;
     bool restored = twin != NULL && twin->functionCount == script->functionCount &&
         bsCodeTakeCover(&script->code, &twin->code);
     for (size_t ix = 0; restored && ix < script->functionCount; ix++) {
@@ -2137,12 +2145,12 @@ BSValue bsExprToModel(const BSExpr *expr)
 BSValue bsScriptToModel(const BSScript *script)
 {
     /* A parsed script keeps its lines, not its model - parse them again */
-    BSValue source = script->model.type == BS_OBJECT ? bsRetain(script->model) : bsScriptReparse(script);
+    BSValue source = bsIsType(script->model, BS_OBJECT) ? bsRetain(script->model) : bsScriptReparse(script);
     BSValue statements = bsObjectGetString(source, bsKeys.statements);
     BSValue model = bsObjectNew();
-    bsObjectSetString(model, bsKeys.statements, statements.type == BS_ARRAY ? bsRetain(statements) : bsArrayNew());
+    bsObjectSetString(model, bsKeys.statements, bsIsType(statements, BS_ARRAY) ? bsRetain(statements) : bsArrayNew());
     bsRelease(source);
-    if (script->scriptName.type == BS_STRING) {
+    if (bsIsType(script->scriptName, BS_STRING)) {
         bsObjectSetString(model, bsKeys.scriptName, bsRetain(script->scriptName));
     }
     if (bsArrayCount(script->scriptLines) != 0) {

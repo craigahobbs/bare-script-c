@@ -45,8 +45,8 @@ static void bsOutOfMemory(void)
 BS_NOINLINE void *bsAlloc(size_t size)
 {
     void *ptr = malloc(size);
-    /* GCOV_EXCL_START */
-    if (ptr == NULL) {
+    /* GCOV_EXCL_START - a value holds a pointer in 47 bits, which every supported platform's user space fits */
+    if (ptr == NULL || ((uintptr_t) ptr & ~BS_VALUE_PAYLOAD) != 0) {
         bsOutOfMemory();
     }
     /* GCOV_EXCL_STOP */
@@ -58,7 +58,7 @@ BS_NOINLINE void *bsRealloc(void *ptr, size_t size)
 {
     void *result = realloc(ptr, size);
     /* GCOV_EXCL_START */
-    if (result == NULL) {
+    if (result == NULL || ((uintptr_t) result & ~BS_VALUE_PAYLOAD) != 0) {
         bsOutOfMemory();
     }
     /* GCOV_EXCL_STOP */
@@ -146,27 +146,12 @@ static _Thread_local BSValueState bsTS;
  */
 
 
-BSValue bsNull(void)
-{
-    return (BSValue) {.type = BS_NULL, .u.ref = NULL};
-}
-
-
-BSValue bsBoolean(bool boolean)
-{
-    return (BSValue) {.type = BS_BOOLEAN, .u.boolean = boolean};
-}
-
-
-BSValue bsNumber(double number)
-{
-    return (BSValue) {.type = BS_NUMBER, .u.number = number};
-}
-
-
 BSValue bsDatetime(int64_t milliseconds)
 {
-    return (BSValue) {.type = BS_DATETIME, .u.datetime = milliseconds};
+    BSDatetime *datetime = bsAlloc(sizeof(BSDatetime));
+    datetime->refcount = 1;
+    datetime->milliseconds = milliseconds;
+    return bsRefValue(BS_DATETIME, datetime);
 }
 
 
@@ -735,7 +720,7 @@ BSValue bsStringNewAscii(const char *text, size_t size)
 /* The sharing half of bsStringSliceBytes: the span is long enough to slice */
 BSValue bsStringSliceShare(BSValue parent, size_t offset, size_t size, size_t length)
 {
-    BSString *source = parent.u.string;
+    BSString *source = bsStringOf(parent);
     char *text = source->data + offset;
     if (length == SIZE_MAX) {
         /* A span of a valid non-ASCII string at code point boundaries is valid itself - and usually
@@ -750,7 +735,7 @@ BSValue bsStringSliceShare(BSValue parent, size_t offset, size_t size, size_t le
     slice->size = (uint32_t) size;
     slice->length = (uint32_t) length;
     slice->data = text;
-    BS_STRING_PARENT(slice) = bsRetainInline(bsStringTake(root)).u.string;
+    BS_STRING_PARENT(slice) = bsStringOf(bsRetainInline(bsStringTake(root)));
     return bsStringTake(slice);
 }
 
@@ -798,12 +783,6 @@ BSValue bsStringNew(const char *text)
 }
 
 
-BSValue bsStringTake(BSString *string)
-{
-    return (BSValue) {.type = BS_STRING, .u.string = string};
-}
-
-
 BSValue bsStringNewVFormat(const char *format, va_list args)
 {
     va_list argsCopy;
@@ -846,22 +825,23 @@ typedef struct BSStringBytes {
 /* Resolve a value to its string bytes, formatting a number into a caller-supplied buffer */
 static BSStringBytes bsStringBytes(BSValue value, char *buffer, size_t bufferSize)
 {
-    switch (value.type) {
-    case BS_STRING:
-        return (BSStringBytes) {value.u.string->data, value.u.string->size, value.u.string->length, bsNull()};
-    case BS_NUMBER: {
-        size_t size = bsNumberFormatFast(value.u.number, buffer, bufferSize);
+    /* One tag compare each, the likeliest first */
+    if (bsIsType(value, BS_STRING)) {
+        const BSString *string = bsStringOf(value);
+        return (BSStringBytes) {string->data, string->size, string->length, bsNull()};
+    }
+    if (bsIsNumber(value)) {
+        size_t size = bsNumberFormatFast(bsNumberOf(value), buffer, bufferSize);
         return (BSStringBytes) {buffer, size, size, bsNull()};
     }
-    case BS_NULL:
+    if (bsIsType(value, BS_NULL)) {
         return (BSStringBytes) {"null", 4, 4, bsNull()};
-    case BS_BOOLEAN:
-        return value.u.boolean ? (BSStringBytes) {"true", 4, 4, bsNull()} : (BSStringBytes) {"false", 5, 5, bsNull()};
-    default: {
-        BSValue text = bsValueString(value);
-        return (BSStringBytes) {text.u.string->data, text.u.string->size, text.u.string->length, text};
     }
+    if (bsIsType(value, BS_BOOLEAN)) {
+        return bsBoolOf(value) ? (BSStringBytes) {"true", 4, 4, bsNull()} : (BSStringBytes) {"false", 5, 5, bsNull()};
     }
+    BSValue text = bsValueString(value);
+    return (BSStringBytes) {bsStringOf(text)->data, bsStringOf(text)->size, bsStringOf(text)->length, text};
 }
 
 
@@ -943,10 +923,10 @@ BSString *bsStringAppendValue(BSString *string, BSValue value)
 
 const char *bsStringData(BSValue value)
 {
-    if (value.type != BS_STRING) {
+    if (!bsIsType(value, BS_STRING)) {
         return "";
     }
-    BSString *string = value.u.string;
+    BSString *string = bsStringOf(value);
     if ((string->flags & BS_STR_SLICE) != 0) {
         bsStringFlatten(string);
     }
@@ -956,13 +936,13 @@ const char *bsStringData(BSValue value)
 
 size_t bsStringSize(BSValue value)
 {
-    return value.type == BS_STRING ? value.u.string->size : 0;
+    return bsIsType(value, BS_STRING) ? bsStringOf(value)->size : 0;
 }
 
 
 size_t bsStringLength(BSValue value)
 {
-    return value.type == BS_STRING ? value.u.string->length : 0;
+    return bsIsType(value, BS_STRING) ? bsStringOf(value)->length : 0;
 }
 
 
@@ -1011,7 +991,7 @@ static uint32_t *bsStringIndex(BSString *string)
 
 size_t bsStringOffsetSlow(BSValue value, size_t index)
 {
-    BSString *string = value.u.string;
+    BSString *string = bsStringOf(value);
     size_t length = string->length;
     if (index >= length) {
         return string->size;
@@ -1053,7 +1033,7 @@ uint32_t bsStringCodePoint(BSValue value, size_t index)
         return 0;
     }
     size_t codeSize;
-    return bsUTF8Decode(value.u.string->data, value.u.string->size, offset, &codeSize);
+    return bsUTF8Decode(bsStringOf(value)->data, bsStringOf(value)->size, offset, &codeSize);
 }
 
 
@@ -1175,17 +1155,17 @@ BSValue bsStringIntern(const char *data, size_t size)
         return bsRetainInline(bsStringTake(found));
     }
     BSValue value = bsStringNewSize(data, size);
-    value.u.string->hash = hash;
-    value.u.string->flags |= BS_STR_HASHED;
+    bsStringOf(value)->hash = hash;
+    bsStringOf(value)->flags |= BS_STR_HASHED;
     if (bsTS.internCount >= BS_INTERN_COUNT_MAX) {
         return value;
     }
     if ((bsTS.internCount + 1) * 4 >= (bsTS.internMask + 1) * 3) {
         bsInternGrow();
     }
-    value.u.string->flags |= BS_STR_INTERNED;
-    value.u.string->refcount++;
-    bsInternPut(value.u.string, hash);
+    bsStringOf(value)->flags |= BS_STR_INTERNED;
+    bsStringOf(value)->refcount++;
+    bsInternPut(bsStringOf(value), hash);
     bsTS.internCount++;
     return value;
 }
@@ -1348,6 +1328,12 @@ BS_NOINLINE BSValue bsSBToValue(BSStringBuilder *sb)
  */
 #define BS_ARRAY_BUF_POOL_MAX 64
 
+/* A recycled buffer's link to the next one on its free list is kept in its first value's word */
+static inline BSValue *bsArrayBufNext(const BSValue *values)
+{
+    return (BSValue *) (uintptr_t) values[0].bits;
+}
+
 /* The pool class of a buffer capacity, or -1 for a capacity the pool does not hold */
 static int bsArrayBufClassIndex(size_t capacity)
 {
@@ -1374,7 +1360,7 @@ static BS_NOINLINE BSValue *bsArrayBufAlloc(size_t capacity)
     int classIndex = bsArrayBufClassIndex(capacity);
     if (classIndex >= 0 && bsTS.arrayBufPool[classIndex] != NULL) {
         BSValue *values = bsTS.arrayBufPool[classIndex];
-        bsTS.arrayBufPool[classIndex] = (BSValue *) values[0].u.ref;
+        bsTS.arrayBufPool[classIndex] = bsArrayBufNext(values);
         bsTS.arrayBufPoolCount[classIndex]--;
         return values;
     }
@@ -1384,9 +1370,10 @@ static BS_NOINLINE BSValue *bsArrayBufAlloc(size_t capacity)
 static BS_NOINLINE void bsArrayBufFree(BSValue *values, size_t capacity)
 {
     int classIndex = bsArrayBufClassIndex(capacity);
-    if (classIndex >= 0) {
-        BS_POOL_GIVE(bsTS.arrayBufPool[classIndex], bsTS.arrayBufPoolCount[classIndex], BS_ARRAY_BUF_POOL_MAX, values,
-                     values[0].u.ref);
+    if (classIndex >= 0 && bsTS.arrayBufPoolCount[classIndex] < BS_ARRAY_BUF_POOL_MAX) {
+        values[0].bits = (uint64_t) (uintptr_t) bsTS.arrayBufPool[classIndex];
+        bsTS.arrayBufPool[classIndex] = values;
+        bsTS.arrayBufPoolCount[classIndex]++;
     } else {
         free(values);
     }
@@ -1418,7 +1405,7 @@ BSValue bsArrayNewCapacity(size_t capacity)
     array->capacity = capacity;
     array->values = capacity != 0 ? bsArrayBufAlloc(capacity) : NULL;
 
-    return (BSValue) {.type = BS_ARRAY, .u.array = array};
+    return bsRefValue(BS_ARRAY, array);
 }
 
 
@@ -1430,22 +1417,22 @@ BSValue bsArrayNew(void)
 
 size_t bsArrayCount(BSValue value)
 {
-    return value.type == BS_ARRAY ? value.u.array->count : 0;
+    return bsIsType(value, BS_ARRAY) ? bsArrayOf(value)->count : 0;
 }
 
 
 BSValue bsArrayGet(BSValue value, size_t index)
 {
-    if (value.type != BS_ARRAY || index >= value.u.array->count) {
+    if (!bsIsType(value, BS_ARRAY) || index >= bsArrayOf(value)->count) {
         return bsNull();
     }
-    return value.u.array->values[index];
+    return bsArrayOf(value)->values[index];
 }
 
 
 void bsArrayReserve(BSValue value, size_t capacity)
 {
-    BSArray *array = value.u.array;
+    BSArray *array = bsArrayOf(value);
     if (capacity > array->capacity) {
         size_t newCapacity = array->capacity != 0 ? array->capacity : 8;
         while (newCapacity < capacity) {
@@ -1464,7 +1451,7 @@ void bsArrayReserve(BSValue value, size_t capacity)
 
 void bsArrayPush(BSValue value, BSValue item)
 {
-    BSArray *array = value.u.array;
+    BSArray *array = bsArrayOf(value);
     bsArrayReserve(value, array->count + 1);
     array->values[array->count++] = item;
 }
@@ -1472,7 +1459,7 @@ void bsArrayPush(BSValue value, BSValue item)
 
 void bsArraySet(BSValue value, size_t index, BSValue item)
 {
-    BSArray *array = value.u.array;
+    BSArray *array = bsArrayOf(value);
     bsReleaseInline(array->values[index]);
     array->values[index] = item;
 }
@@ -1480,7 +1467,7 @@ void bsArraySet(BSValue value, size_t index, BSValue item)
 
 void bsArrayInsert(BSValue value, size_t index, BSValue item)
 {
-    BSArray *array = value.u.array;
+    BSArray *array = bsArrayOf(value);
     bsArrayReserve(value, array->count + 1);
     memmove(array->values + index + 1, array->values + index, (array->count - index) * sizeof(BSValue));
     array->values[index] = item;
@@ -1490,7 +1477,7 @@ void bsArrayInsert(BSValue value, size_t index, BSValue item)
 
 void bsArrayDelete(BSValue value, size_t index)
 {
-    BSArray *array = value.u.array;
+    BSArray *array = bsArrayOf(value);
     bsReleaseInline(array->values[index]);
     memmove(array->values + index, array->values + index + 1, (array->count - index - 1) * sizeof(BSValue));
     array->count--;
@@ -1502,7 +1489,7 @@ BSValue bsArrayCopy(BSValue value)
     size_t count = bsArrayCount(value);
     BSValue copy = bsArrayNewCapacity(count);
     for (size_t ix = 0; ix < count; ix++) {
-        bsArrayPush(copy, bsRetainInline(value.u.array->values[ix]));
+        bsArrayPush(copy, bsRetainInline(bsArrayOf(value)->values[ix]));
     }
     return copy;
 }
@@ -1546,7 +1533,7 @@ void bsArraySort(BSValue value, int (*compare)(BSValue, BSValue, void *), void *
         return;
     }
     BSValue *scratch = bsAlloc(count * sizeof(BSValue));
-    bsArrayMergeSort(value.u.array->values, scratch, count, compare, data);
+    bsArrayMergeSort(bsArrayOf(value)->values, scratch, count, compare, data);
     free(scratch);
 }
 
@@ -1609,13 +1596,13 @@ BSValue bsObjectNew(void)
     object->entries = object->inline_;
     object->index = NULL;
 
-    return (BSValue) {.type = BS_OBJECT, .u.object = object};
+    return bsRefValue(BS_OBJECT, object);
 }
 
 
 size_t bsObjectCount(BSValue value)
 {
-    return value.type == BS_OBJECT ? value.u.object->count : 0;
+    return bsIsType(value, BS_OBJECT) ? bsObjectOf(value)->count : 0;
 }
 
 
@@ -1792,7 +1779,7 @@ static BS_NOINLINE void bsObjectEntriesGrow(BSObject *object)
 BSValue bsObjectNewSized(size_t count, bool pooled)
 {
     BSValue value = bsObjectNew();
-    BSObject *object = value.u.object;
+    BSObject *object = bsObjectOf(value);
     if (count > BS_OBJECT_INLINE) {
         /* Born with entries for every key, and past the scan threshold its index, so appends never rebuild */
         size_t capacity = count;
@@ -1838,13 +1825,13 @@ static void bsObjectEntriesFree(BSObject *object)
 /* Append a key known to be absent. Takes ownership of "item" and retains "key". */
 void bsObjectAppend(BSValue value, BSValue key, BSValue item)
 {
-    BSObject *object = value.u.object;
+    BSObject *object = bsObjectOf(value);
     if (object->count == object->capacity) {
         bsObjectEntriesGrow(object);
     }
     uint32_t ix = object->count++;
     BSObjectEntry *entry = &object->entries[ix];
-    entry->key = bsRetainInline(key).u.string;
+    entry->key = bsStringOf(bsRetainInline(key));
     entry->value = item;
     object->generation++;
     if ((entry->key->flags & BS_STR_INTERNED) == 0) {
@@ -1860,8 +1847,8 @@ void bsObjectAppend(BSValue value, BSValue key, BSValue item)
 
 void bsObjectSetString(BSValue value, BSValue key, BSValue item)
 {
-    BSObject *object = value.u.object;
-    BSObjectEntry *entry = bsObjectFind(object, key.u.string, key.u.string->data, key.u.string->size);
+    BSObject *object = bsObjectOf(value);
+    BSObjectEntry *entry = bsObjectFind(object, bsStringOf(key), bsStringOf(key)->data, bsStringOf(key)->size);
     if (entry != NULL) {
         bsReleaseInline(entry->value);
         entry->value = item;
@@ -1881,14 +1868,14 @@ void bsObjectSet(BSValue value, const char *key, BSValue item)
 
 BSValue *bsObjectValuePtr(BSValue object, const char *key, size_t size)
 {
-    BSObjectEntry *entry = bsObjectFind(object.u.object, NULL, key, size);
+    BSObjectEntry *entry = bsObjectFind(bsObjectOf(object), NULL, key, size);
     return entry != NULL ? &entry->value : NULL;
 }
 
 
 BSValue *bsObjectValuePtrString(BSValue object, BSValue key)
 {
-    BSObjectEntry *entry = bsObjectFind(object.u.object, key.u.string, key.u.string->data, key.u.string->size);
+    BSObjectEntry *entry = bsObjectFind(bsObjectOf(object), bsStringOf(key), bsStringOf(key)->data, bsStringOf(key)->size);
     return entry != NULL ? &entry->value : NULL;
 }
 
@@ -1901,7 +1888,7 @@ BSObjectEntry *bsObjectEntryFind(BSObject *object, BSString *key)
 
 bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out)
 {
-    BSValue *found = object.type == BS_OBJECT ? bsObjectValuePtrString(object, key) : NULL;
+    BSValue *found = bsIsType(object, BS_OBJECT) ? bsObjectValuePtrString(object, key) : NULL;
     if (found == NULL) {
         return false;
     }
@@ -1912,39 +1899,39 @@ bool bsObjectLookupString(BSValue object, BSValue key, BSValue *out)
 
 BSValue bsObjectGetString(BSValue value, BSValue key)
 {
-    BSValue *found = value.type == BS_OBJECT ? bsObjectValuePtrString(value, key) : NULL;
+    BSValue *found = bsIsType(value, BS_OBJECT) ? bsObjectValuePtrString(value, key) : NULL;
     return found != NULL ? *found : bsNull();
 }
 
 
 bool bsObjectKeyIs(const BSString *stored, BSValue key)
 {
-    return bsKeyEqual(stored, key.u.string, key.u.string->data, key.u.string->size);
+    return bsKeyEqual(stored, bsStringOf(key), bsStringOf(key)->data, bsStringOf(key)->size);
 }
 
 
 BSValue bsObjectGet(BSValue value, const char *key)
 {
-    BSValue *found = value.type == BS_OBJECT ? bsObjectValuePtr(value, key, strlen(key)) : NULL;
+    BSValue *found = bsIsType(value, BS_OBJECT) ? bsObjectValuePtr(value, key, strlen(key)) : NULL;
     return found != NULL ? *found : bsNull();
 }
 
 
 bool bsObjectHasString(BSValue value, BSValue key)
 {
-    return value.type == BS_OBJECT && bsObjectValuePtrString(value, key) != NULL;
+    return bsIsType(value, BS_OBJECT) && bsObjectValuePtrString(value, key) != NULL;
 }
 
 
 bool bsObjectHas(BSValue value, const char *key)
 {
-    return value.type == BS_OBJECT && bsObjectValuePtr(value, key, strlen(key)) != NULL;
+    return bsIsType(value, BS_OBJECT) && bsObjectValuePtr(value, key, strlen(key)) != NULL;
 }
 
 
 bool bsObjectDelete(BSValue value, const char *key)
 {
-    BSObject *object = value.u.object;
+    BSObject *object = bsObjectOf(value);
     BSObjectEntry *entry = bsObjectFind(object, NULL, key, strlen(key));
     if (entry == NULL) {
         return false;
@@ -2009,10 +1996,10 @@ static BS_NOINLINE void bsObjectSortIndexes(const BSObjectEntry *entries, uint32
 
 bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data)
 {
-    if (value.type != BS_OBJECT) {
+    if (!bsIsType(value, BS_OBJECT)) {
         return true;
     }
-    const BSObject *object = value.u.object;
+    const BSObject *object = bsObjectOf(value);
     size_t count = object->count;
     uint32_t orderInline[2 * 32];
     uint32_t *order = count <= 32 ? orderInline : bsAlloc(2 * count * sizeof(uint32_t));
@@ -2034,10 +2021,10 @@ bool bsObjectIterSorted(BSValue value, BSObjectIterFn iter, void *data)
 
 bool bsObjectIter(BSValue value, BSObjectIterFn iter, void *data)
 {
-    if (value.type != BS_OBJECT) {
+    if (!bsIsType(value, BS_OBJECT)) {
         return true;
     }
-    const BSObject *object = value.u.object;
+    const BSObject *object = bsObjectOf(value);
     for (size_t ix = 0; ix < object->count; ix++) {
         const BSObjectEntry *entry = &object->entries[ix];
         if (!iter(bsStringTake(entry->key), entry->value, data)) {
@@ -2059,9 +2046,9 @@ BSValue bsObjectKeys(BSValue value)
 {
     size_t count = bsObjectCount(value);
     BSValue keys = bsArrayNewCapacity(count);
-    BSArray *array = keys.u.array;
+    BSArray *array = bsArrayOf(keys);
     for (size_t ix = 0; ix < count; ix++) {
-        array->values[ix] = bsRetainInline(bsStringTake(value.u.object->entries[ix].key));
+        array->values[ix] = bsRetainInline(bsStringTake(bsObjectOf(value)->entries[ix].key));
     }
     array->count = count;
     return keys;
@@ -2078,7 +2065,7 @@ BSValue bsObjectKeysSorted(BSValue value)
 
 void bsObjectAssign(BSValue dest, BSValue src)
 {
-    const BSObject *source = src.u.object;
+    const BSObject *source = bsObjectOf(src);
     for (size_t ix = 0; ix < source->count; ix++) {
         const BSObjectEntry *entry = &source->entries[ix];
         bsObjectSetString(dest, bsStringTake(entry->key), bsRetainInline(entry->value));
@@ -2091,7 +2078,7 @@ BSValue bsObjectCopy(BSValue value)
     size_t count = bsObjectCount(value);
     BSValue copy = bsObjectNewCapacity(count);
     for (size_t ix = 0; ix < count; ix++) {
-        const BSObjectEntry *entry = &value.u.object->entries[ix];
+        const BSObjectEntry *entry = &bsObjectOf(value)->entries[ix];
         bsObjectAppend(copy, bsStringTake(entry->key), bsRetainInline(entry->value));
     }
     return copy;
@@ -2112,16 +2099,16 @@ BSValue bsFunctionNew(const char *name, BSFunctionFn fn, void *data, void (*data
     function->dataFree = dataFree;
     function->intrinsic = BS_INTRIN_NONE;
 
-    return (BSValue) {.type = BS_FUNCTION, .u.function = function};
+    return bsRefValue(BS_FUNCTION, function);
 }
 
 
 BSValue bsFunctionCall(BSValue function, const BSValue *args, size_t argCount, BSOptions *options)
 {
-    if (function.type != BS_FUNCTION) {
+    if (!bsIsType(function, BS_FUNCTION)) {
         return bsNull();
     }
-    BSFunction *fn = function.u.function;
+    BSFunction *fn = bsFunctionOf(function);
     return fn->fn(args, argCount, options, fn->data);
 }
 
@@ -2139,12 +2126,13 @@ BSValue bsRetain(BSValue value)
 
 void bsReleaseDestroyed(BSValue value)
 {
-    switch (value.type) {
+    /* A reference type, so its tag is its type */
+    switch ((BSType) ((value.bits >> BS_VALUE_TAG_SHIFT) & 15)) {
     case BS_STRING:
-        bsStringFree(value.u.string);
+        bsStringFree(bsStringOf(value));
         break;
     case BS_ARRAY: {
-        BSArray *array = value.u.array;
+        BSArray *array = bsArrayOf(value);
         for (size_t ix = 0; ix < array->count; ix++) {
             bsReleaseInline(array->values[ix]);
         }
@@ -2155,7 +2143,7 @@ void bsReleaseDestroyed(BSValue value)
         break;
     }
     case BS_OBJECT: {
-        BSObject *object = value.u.object;
+        BSObject *object = bsObjectOf(value);
         bsObjectEntriesFree(object);
         bsObjectRecycle(object);
         break;
@@ -2163,8 +2151,11 @@ void bsReleaseDestroyed(BSValue value)
     case BS_REGEX:
         bsRegexDestroy(value);
         break;
+    case BS_DATETIME:
+        free(bsRefOf(value));
+        break;
     default: {
-        BSFunction *function = value.u.function;
+        BSFunction *function = bsFunctionOf(value);
         if (function->dataFree != NULL) {
             function->dataFree(function->data);
         }
@@ -2220,7 +2211,7 @@ void bsValueCleanup(void)
     }
     BS_POOL_DRAIN(bsTS.arrayPool, bsTS.arrayPoolCount, BSArray, item->values);
     for (int ix = 0; ix < BS_ARRAY_BUF_CLASS_COUNT; ix++) {
-        BS_POOL_DRAIN(bsTS.arrayBufPool[ix], bsTS.arrayBufPoolCount[ix], BSValue, item[0].u.ref);
+        BS_POOL_DRAIN(bsTS.arrayBufPool[ix], bsTS.arrayBufPoolCount[ix], BSValue, bsArrayBufNext(item));
     }
     BS_POOL_DRAIN(bsTS.objectPool, bsTS.objectPoolCount, BSObject, item->entries);
     for (int ix = 0; ix < BS_ENTRY_POOL_CLASS_COUNT; ix++) {
@@ -2451,14 +2442,14 @@ const char *const bsTypeNames[BS_REGEX + 1] = {
 
 const char *bsValueTypeString(BSValue value)
 {
-    return bsTypeNames[value.type];
+    return bsTypeNames[bsValueType(value)];
 }
 
 
 BSValue bsValueString(BSValue value)
 {
     char buffer[64];
-    switch (value.type) {
+    switch (bsValueType(value)) {
     case BS_NULL:
     case BS_BOOLEAN:
     case BS_NUMBER: {
@@ -2467,7 +2458,7 @@ BSValue bsValueString(BSValue value)
     }
     case BS_DATETIME: {
         BSDatetimeParts parts;
-        bsDatetimeParts(value.u.datetime, &parts);
+        bsDatetimeParts(bsDatetimeOf(value), &parts);
         char tzSign = (parts.tzOffset <= 0 ? '+' : '-');
         int tzAbs = (parts.tzOffset < 0 ? -parts.tzOffset : parts.tzOffset);
         if (parts.millisecond == 0) {
@@ -2494,39 +2485,42 @@ BSValue bsValueString(BSValue value)
 
 bool bsValueBoolean(BSValue value)
 {
-    switch (value.type) {
-    case BS_NULL:
-        return false;
-    case BS_BOOLEAN:
-        return value.u.boolean;
-    case BS_NUMBER:
-        return value.u.number != 0;
-    case BS_STRING:
-        return value.u.string->size != 0;
-    case BS_ARRAY:
-        return value.u.array->count != 0;
-    default:
-        return true;
+    /* One tag compare each, the likeliest first - a jump's condition is mostly a boolean or a null */
+    if (bsIsType(value, BS_BOOLEAN)) {
+        return bsBoolOf(value);
     }
+    if (bsIsType(value, BS_NULL)) {
+        return false;
+    }
+    if (bsIsNumber(value)) {
+        return bsNumberOf(value) != 0;
+    }
+    if (bsIsType(value, BS_STRING)) {
+        return bsStringOf(value)->size != 0;
+    }
+    if (bsIsType(value, BS_ARRAY)) {
+        return bsArrayOf(value)->count != 0;
+    }
+    return true;
 }
 
 
 bool bsValueIs(BSValue value1, BSValue value2)
 {
-    if (value1.type != value2.type) {
+    if (bsValueType(value1) != bsValueType(value2)) {
         return false;
     }
-    switch (value1.type) {
+    switch (bsValueType(value1)) {
     case BS_NULL:
         return true;
     case BS_BOOLEAN:
-        return value1.u.boolean == value2.u.boolean;
+        return bsBoolOf(value1) == bsBoolOf(value2);
     case BS_NUMBER:
-        return value1.u.number == value2.u.number;
+        return bsNumberOf(value1) == bsNumberOf(value2);
     case BS_DATETIME:
-        return value1.u.datetime == value2.u.datetime;
+        return bsDatetimeOf(value1) == bsDatetimeOf(value2);
     default:
-        return value1.u.ref == value2.u.ref;
+        return bsRefOf(value1) == bsRefOf(value2);
     }
 }
 
@@ -2538,31 +2532,31 @@ bool bsValueIs(BSValue value1, BSValue value2)
 int bsValueCompare(BSValue left, BSValue right)
 {
     /* Null orders before every other type; otherwise values of different types compare by type name */
-    if (left.type != right.type) {
-        if (left.type == BS_NULL || right.type == BS_NULL) {
-            return left.type == BS_NULL ? -1 : 1;
+    if (bsValueType(left) != bsValueType(right)) {
+        if (bsIsType(left, BS_NULL) || bsIsType(right, BS_NULL)) {
+            return bsIsType(left, BS_NULL) ? -1 : 1;
         }
-        return strcmp(bsTypeNames[left.type], bsTypeNames[right.type]) < 0 ? -1 : 1;
+        return strcmp(bsTypeNames[bsValueType(left)], bsTypeNames[bsValueType(right)]) < 0 ? -1 : 1;
     }
-    switch (left.type) {
+    switch (bsValueType(left)) {
     case BS_NULL:
         return 0;
     case BS_STRING: {
-        int compare = bsKeyCompare(left.u.string, right.u.string);
+        int compare = bsKeyCompare(bsStringOf(left), bsStringOf(right));
         return BS_COMPARE(compare, 0);
     }
     case BS_BOOLEAN:
-        return BS_COMPARE(left.u.boolean, right.u.boolean);
+        return BS_COMPARE(bsBoolOf(left), bsBoolOf(right));
     case BS_NUMBER:
-        return BS_COMPARE(left.u.number, right.u.number);
+        return BS_COMPARE(bsNumberOf(left), bsNumberOf(right));
     case BS_DATETIME:
-        return BS_COMPARE(left.u.datetime, right.u.datetime);
+        return BS_COMPARE(bsDatetimeOf(left), bsDatetimeOf(right));
     case BS_ARRAY: {
-        size_t leftCount = left.u.array->count;
-        size_t rightCount = right.u.array->count;
+        size_t leftCount = bsArrayOf(left)->count;
+        size_t rightCount = bsArrayOf(right)->count;
         size_t count = leftCount < rightCount ? leftCount : rightCount;
         for (size_t ix = 0; ix < count; ix++) {
-            int compare = bsValueCompare(left.u.array->values[ix], right.u.array->values[ix]);
+            int compare = bsValueCompare(bsArrayOf(left)->values[ix], bsArrayOf(right)->values[ix]);
             if (compare != 0) {
                 return compare;
             }

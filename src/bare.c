@@ -231,7 +231,7 @@ int bsMain(int argc, char **argv)
                 scriptName = sources[ix].value;
                 BSFetchRequest request = {.url = sources[ix].value, .headers = bsNull()};
                 bsFetchReadWrite(&request, &text, 1, NULL);
-                if (text.type != BS_STRING) {
+                if (!bsIsType(text, BS_STRING)) {
                     fprintf(stderr, "Failed to load \"%s\"\n", sources[ix].value);
                     statusCode = 1;
                     break;
@@ -279,7 +279,7 @@ int bsMain(int argc, char **argv)
                 if (staticAnalysis && isUserScript) {
                     BSValue isolated = bsObjectCopy(sharedGlobals);
                     BSValue includes = bsObjectGet(isolated, BS_GLOBAL_INCLUDES);
-                    if (includes.type == BS_OBJECT) {
+                    if (bsIsType(includes, BS_OBJECT)) {
                         bsObjectSet(isolated, BS_GLOBAL_INCLUDES, bsObjectCopy(includes));
                     }
                     bsAssign(&options->globals, isolated);
@@ -303,9 +303,9 @@ int bsMain(int argc, char **argv)
                 } else {
                     /* A zero result never clears a status code an earlier script set */
                     int resultStatus;
-                    if (result.type == BS_NUMBER && trunc(result.u.number) == result.u.number &&
-                        result.u.number >= 0 && result.u.number <= 255) {
-                        resultStatus = (int) result.u.number;
+                    if (bsIsNumber(result) && trunc(bsNumberOf(result)) == bsNumberOf(result) &&
+                        bsNumberOf(result) >= 0 && bsNumberOf(result) <= 255) {
+                        resultStatus = (int) bsNumberOf(result);
                     } else {
                         resultStatus = bsValueBoolean(result) ? 1 : 0;
                     }

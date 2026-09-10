@@ -197,8 +197,8 @@ TEST(json_decode_key_memo)
     /* The second record's keys are the first's strings */
     BSValue first = bsObjectKeys(bsArrayGet(value, 0));
     BSValue second = bsObjectKeys(bsArrayGet(value, 1));
-    ASSERT_TRUE(bsArrayGet(first, 0).u.string == bsArrayGet(second, 0).u.string);
-    ASSERT_TRUE(bsArrayGet(first, 1).u.string == bsArrayGet(second, 1).u.string);
+    ASSERT_TRUE(bsStringOf(bsArrayGet(first, 0)) == bsStringOf(bsArrayGet(second, 0)));
+    ASSERT_TRUE(bsStringOf(bsArrayGet(first, 1)) == bsStringOf(bsArrayGet(second, 1)));
     bsRelease(first);
     bsRelease(second);
     bsRelease(value);
@@ -277,7 +277,7 @@ TEST(json_decode_errors)
     const char *error = NULL;
     BSValue bigValue = bsJSONDecode(big, sizeof(big), &error);
     ASSERT_NULL(error);
-    ASSERT_TRUE(bigValue.u.number > 1e126 && bigValue.u.number < 1e128);
+    ASSERT_TRUE(bsNumberOf(bigValue) > 1e126 && bsNumberOf(bigValue) < 1e128);
     bsRelease(bigValue);
 
     /* The nesting depth limit */

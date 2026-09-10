@@ -136,7 +136,7 @@ void bsTestAssertValueString(const char *file, int line, const char *expr, BSVal
 
 
 static BSStringBuilder bsTestLog;
-static BSValue bsTestError = {BS_NULL, {0}};
+static BSValue bsTestError;
 
 
 void bsTestLogFn(const char *text, void *data)
@@ -160,7 +160,7 @@ void bsTestLogClear(void)
 
 const char *bsTestErrorText(void)
 {
-    return bsTestError.type == BS_STRING ? bsStringData(bsTestError) : NULL;
+    return bsIsType(bsTestError, BS_STRING) ? bsStringData(bsTestError) : NULL;
 }
 
 

@@ -112,17 +112,17 @@ static void bsJSONEncodeValue(BSStringBuilder *sb, BSValue value, int indent, in
         return;
     }
 
-    switch (value.type) {
+    switch (bsValueType(value)) {
     case BS_NULL:
         bsSBAppendString(sb, "null");
         break;
 
     case BS_BOOLEAN:
-        bsSBAppendString(sb, value.u.boolean ? "true" : "false");
+        bsSBAppendString(sb, bsBoolOf(value) ? "true" : "false");
         break;
 
     case BS_NUMBER:
-        if (!isfinite(value.u.number)) {
+        if (!isfinite(bsNumberOf(value))) {
             bsSBAppendString(sb, "null");
         } else {
             bsSBAppendValue(sb, value);
@@ -327,7 +327,7 @@ static BSValue bsJSONKey(BSJSONParser *parser, const char *data, size_t size)
         }
     }
     BSValue *slot = &parser->memo[parser->memoDepth * BS_JSON_MEMO_KEYS + parser->memoIndex];
-    if (slot->type == BS_STRING && slot->u.string->size == size && memcmp(slot->u.string->data, data, size) == 0) {
+    if (bsIsType(*slot, BS_STRING) && bsStringOf(*slot)->size == size && memcmp(bsStringOf(*slot)->data, data, size) == 0) {
         parser->memoHit = true;
         return bsRetain(*slot);
     }

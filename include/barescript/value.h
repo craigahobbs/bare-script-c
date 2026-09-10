@@ -24,6 +24,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "export.h"
 
@@ -56,21 +57,105 @@ typedef struct BSRegex BSRegex;
 typedef struct BSOptions BSOptions;
 
 
-/* A BareScript value */
+/*
+ * A BareScript value: one 64-bit word. A number is a double as itself. Every other value lives in
+ * the space of negative quiet NaNs, which no number uses - BareScript has no NaN, and bsNumber makes
+ * a null of one: the top thirteen bits set, then a four-bit type tag - the BSType - and a 47-bit
+ * payload, which is an immediate null or boolean, or a pointer to a reference-counted heap object:
+ * a datetime, string, array, object, function, or regex. Read a value through the accessors below;
+ * a zero-initialized value is the number zero, as a zeroed double is, and a null value is bsNull().
+ */
 typedef struct BSValue {
-    BSType type;
-    union {
-        bool boolean;
-        double number;
-        int64_t datetime; /* milliseconds since the Unix epoch, UTC */
-        BSString *string;
-        BSArray *array;
-        BSObject *object;
-        BSFunction *function;
-        BSRegex *regex;
-        void *ref; /* any reference-counted payload */
-    } u;
+    uint64_t bits;
 } BSValue;
+
+#define BS_VALUE_TAG_SHIFT 47
+#define BS_VALUE_BOXED 0x1FFF0u /* a boxed value's bits above the tag, shifted down: sign, exponent, quiet bit */
+#define BS_VALUE_PAYLOAD (((uint64_t) 1 << BS_VALUE_TAG_SHIFT) - 1)
+
+/* A boxed value of a type and a payload - the runtime's own constructors */
+static inline BSValue bsValueBoxed(BSType type, uint64_t payload)
+{
+    return (BSValue) {((uint64_t) (BS_VALUE_BOXED | (unsigned) type) << BS_VALUE_TAG_SHIFT) | payload};
+}
+
+/* A reference type's value from its heap object */
+static inline BSValue bsRefValue(BSType type, const void *ref)
+{
+    return bsValueBoxed(type, (uint64_t) (uintptr_t) ref);
+}
+
+/* Whether a value is a number - not boxed */
+static inline bool bsIsNumber(BSValue value)
+{
+    return (value.bits >> (BS_VALUE_TAG_SHIFT + 4)) != 0x1FFF;
+}
+
+/* Whether a value is of a boxed type - any but BS_NUMBER - in one compare */
+static inline bool bsIsType(BSValue value, BSType type)
+{
+    return (value.bits >> BS_VALUE_TAG_SHIFT) == (BS_VALUE_BOXED | (unsigned) type);
+}
+
+static inline BSType bsValueType(BSValue value)
+{
+    return bsIsNumber(value) ? BS_NUMBER : (BSType) ((value.bits >> BS_VALUE_TAG_SHIFT) & 15);
+}
+
+/* The payloads - each for a value of its type */
+static inline double bsNumberOf(BSValue value)
+{
+    double number;
+    memcpy(&number, &value.bits, sizeof(number));
+    return number;
+}
+
+static inline bool bsBoolOf(BSValue value)
+{
+    return (value.bits & 1) != 0;
+}
+
+static inline void *bsRefOf(BSValue value)
+{
+    return (void *) (uintptr_t) (value.bits & BS_VALUE_PAYLOAD);
+}
+
+static inline BSString *bsStringOf(BSValue value)
+{
+    return (BSString *) bsRefOf(value);
+}
+
+static inline BSArray *bsArrayOf(BSValue value)
+{
+    return (BSArray *) bsRefOf(value);
+}
+
+static inline BSObject *bsObjectOf(BSValue value)
+{
+    return (BSObject *) bsRefOf(value);
+}
+
+static inline BSFunction *bsFunctionOf(BSValue value)
+{
+    return (BSFunction *) bsRefOf(value);
+}
+
+static inline BSRegex *bsRegexOf(BSValue value)
+{
+    return (BSRegex *) bsRefOf(value);
+}
+
+
+/* A reference-counted datetime - milliseconds since the Unix epoch, UTC; JavaScript's Date range does not fit a payload */
+typedef struct BSDatetime {
+    int32_t refcount;
+    int64_t milliseconds;
+} BSDatetime;
+
+static inline int64_t bsDatetimeOf(BSValue value)
+{
+    return ((const BSDatetime *) bsRefOf(value))->milliseconds;
+}
 
 
 /* String flags - the high bits record the allocation's recycling size class */
@@ -169,9 +254,31 @@ struct BSFunction {
  * Value constructors
  */
 
-BSValue bsNull(void);
-BSValue bsBoolean(bool value);
-BSValue bsNumber(double value);
+static inline BSValue bsNull(void)
+{
+    return bsValueBoxed(BS_NULL, 0);
+}
+
+static inline BSValue bsBoolean(bool value)
+{
+    return bsValueBoxed(BS_BOOLEAN, value ? 1 : 0);
+}
+
+/* A number value from a double that is not a NaN - the runtime's own numbers never are */
+static inline BSValue bsNumberFinite(double value)
+{
+    BSValue result;
+    memcpy(&result.bits, &value, sizeof(result.bits));
+    return result;
+}
+
+/* A number value. BareScript has no NaN: a NaN is the null value, as a non-finite arithmetic result is. */
+static inline BSValue bsNumber(double value)
+{
+    return value != value ? bsNull() : bsNumberFinite(value);
+}
+
+/* A datetime value - an owned reference, like a string's */
 BSValue bsDatetime(int64_t milliseconds);
 BSValue bsStringNew(const char *text);
 BSValue bsStringNewSize(const char *text, size_t size);

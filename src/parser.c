@@ -86,8 +86,8 @@ static void bsParserErrorFromModel(BSParserError *error, BSValue errorModel)
     error->error = bsRetain(bsObjectGet(errorModel, "error"));
     error->line = bsRetain(bsObjectGet(errorModel, "line"));
     error->scriptName = bsRetain(bsObjectGet(errorModel, "scriptName"));
-    error->columnNumber = columnNumber.type == BS_NUMBER ? (int) columnNumber.u.number : 0;
-    error->lineNumber = lineNumber.type == BS_NUMBER ? (int) lineNumber.u.number : 0;
+    error->columnNumber = bsIsNumber(columnNumber) ? (int) bsNumberOf(columnNumber) : 0;
+    error->lineNumber = bsIsNumber(lineNumber) ? (int) bsNumberOf(lineNumber) : 0;
     error->message = bsRetain(bsObjectGet(errorModel, "message"));
 }
 
@@ -143,7 +143,7 @@ static BSValue bsParserCall(BSBootstrap *bootstrap, const char *functionName, co
 /* Unwrap the parser's {result} or {error} object. Returns an owned model, or a null value. */
 static BSValue bsParserUnwrap(BSValue result, BSParserError *error)
 {
-    if (result.type != BS_OBJECT) {
+    if (!bsIsType(result, BS_OBJECT)) {
         bsRelease(result);
         return bsNull();
     }
@@ -186,7 +186,7 @@ BSScript *bsParseScriptString(BSValue text, int startLineNumber, const char *scr
 {
     BSValue model = bsParserParse("barescriptParseScriptEx", text, bsNumber(startLineNumber), scriptName,
                                   bsNull(), 3, error);
-    if (model.type != BS_OBJECT) {
+    if (!bsIsType(model, BS_OBJECT)) {
         return NULL;
     }
 
@@ -219,7 +219,7 @@ BSExpr *bsParseExpression(const char *text, size_t size, int lineNumber, const c
                                   lineNumber != 0 ? bsNumber(lineNumber) : bsNull(), scriptName,
                                   bsBoolean(arrayLiterals), 4, error);
     bsRelease(string);
-    if (model.type != BS_OBJECT) {
+    if (!bsIsType(model, BS_OBJECT)) {
         return NULL;
     }
 
@@ -240,7 +240,7 @@ BSValue bsLintScript(const BSScript *script, BSValue globals)
     BSValue warnings = bsParserCall(&bsLintBootstrap, "barescriptLintScript", args, 2, NULL, NULL);
     bsRelease(args[0]);
     /* GCOV_EXCL_START - the bundled linter always returns its warnings array */
-    if (warnings.type != BS_ARRAY) {
+    if (!bsIsType(warnings, BS_ARRAY)) {
         bsRelease(warnings);
         return bsArrayNew();
     }

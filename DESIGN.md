@@ -19,26 +19,30 @@ How the runtime works and how it was tuned - the reference for changing it. The
 
 ## The Value System
 
-A `BSValue` is a 16-byte tagged struct passed by value. Null, boolean, number, and datetime values
-are immediate and never allocate; string, array, object, function, and regex values point at a
-reference-counted heap object.
+A `BSValue` is one 64-bit word passed by value. A number is a double as itself; every other value
+lives in the space of negative quiet NaNs, which no number uses: the top thirteen bits set, a
+four-bit type tag, and a 47-bit payload - an immediate null or boolean, or a pointer to a
+reference-counted heap object. Strings, arrays, objects, functions, regexes, and datetimes are the
+heap types: a datetime is boxed because JavaScript's `Date` range, 8.64e15 milliseconds either side
+of the epoch, needs more than a payload holds. Read a value through the accessors, never its bits:
 
 ```c
 typedef struct BSValue {
-    BSType type;
-    union {
-        bool boolean;
-        double number;
-        int64_t datetime;   /* milliseconds since the Unix epoch, UTC */
-        BSString *string;
-        BSArray *array;
-        BSObject *object;
-        BSFunction *function;
-        BSRegex *regex;
-        void *ref;          /* any reference-counted payload */
-    } u;
+    uint64_t bits;
 } BSValue;
+
+BSType bsValueType(BSValue value);            /* BS_NULL, BS_BOOLEAN, BS_NUMBER, BS_DATETIME, BS_STRING, ... */
+bool bsIsNumber(BSValue value);               /* one compare */
+bool bsIsType(BSValue value, BSType type);    /* one compare, for any type but BS_NUMBER */
+double bsNumberOf(BSValue value);             /* the payloads, each for a value of its type */
+bool bsBoolOf(BSValue value);
+int64_t bsDatetimeOf(BSValue value);          /* milliseconds since the Unix epoch, UTC */
+BSString *bsStringOf(BSValue value);          /* and bsArrayOf, bsObjectOf, bsFunctionOf, bsRegexOf */
 ```
+
+A zero-initialized `BSValue` is the number zero, as a zeroed `double` is; a null value is
+`bsNull()`. A number is never a NaN: BareScript has no NaN, so `bsNumber` makes a null of one, as
+the runtime's arithmetic does of a non-finite result.
 
 The reference counting rules are uniform:
 

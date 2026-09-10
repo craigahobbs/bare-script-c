@@ -80,7 +80,7 @@ static void *bsThreadRun(void *data)
         }
 
         BSValue warnings = bsLintScript(script, bsNull());
-        if (warnings.type != BS_ARRAY) {
+        if (!bsIsType(warnings, BS_ARRAY)) {
             bsThreadFail(task, "lint", "no warnings array");
         }
         bsRelease(warnings);
@@ -89,7 +89,7 @@ static void *bsThreadRun(void *data)
         BSValue result = bsExecuteScript(script, options);
         if (bsErrorGet(options) != NULL) {
             bsThreadFail(task, "execute", bsErrorGet(options));
-        } else if (result.type != BS_STRING) {
+        } else if (!bsIsType(result, BS_STRING)) {
             bsThreadFail(task, "result", "not a string");
         } else if (strcmp(bsStringData(result), expected) != 0) {
             bsThreadFail(task, "result", bsStringData(result));
@@ -108,7 +108,7 @@ static void *bsThreadRun(void *data)
     } else {
         BSOptions *options = bsOptionsNew();
         BSValue result = bsEvaluateExpression(expr, options, bsNull(), true);
-        if (result.type != BS_NUMBER || result.u.number != 7) {
+        if (!bsIsNumber(result) || bsNumberOf(result) != 7) {
             bsThreadFail(task, "evaluate expression", "not 7");
         }
         bsRelease(result);
@@ -120,7 +120,7 @@ static void *bsThreadRun(void *data)
         bsThreadFail(task, "parse error", "no error");
         bsScriptRelease(bad);
     } else {
-        if (error.message.type != BS_STRING || strstr(bsStringData(error.message), "Syntax error") == NULL) {
+        if (!bsIsType(error.message, BS_STRING) || strstr(bsStringData(error.message), "Syntax error") == NULL) {
             bsThreadFail(task, "parse error", "no syntax error message");
         }
         bsParserErrorFree(&error);
@@ -131,7 +131,7 @@ static void *bsThreadRun(void *data)
         BSFetchRequest request = {.url = "http://127.0.0.1:1/nope", .headers = bsNull()};
         BSValue response = bsNull();
         bsFetchHTTP(&request, &response, 1, NULL);
-        if (response.type != BS_NULL) {
+        if (!bsIsType(response, BS_NULL)) {
             bsThreadFail(task, "fetch", "a refused connection returned a response");
             bsRelease(response);
         }

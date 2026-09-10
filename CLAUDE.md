@@ -133,7 +133,10 @@ with it.
 
 ### Values and reference counting
 
-`BSValue` is a 16-byte tagged struct passed by value; DESIGN.md's **The Value System** gives the
+`BSValue` is one 64-bit word passed by value - a double, or a negative quiet NaN carrying a type tag
+and a 47-bit payload (an immediate, or a pointer to a refcounted heap object; datetimes are boxed) -
+read only through `bsValueType`, `bsIsType`, `bsIsNumber`, and the `bs<Type>Of` accessors; a zeroed
+value is the number zero, not null. DESIGN.md's **The Value System** gives the
 layout and the ownership rules (returns are owned, arguments and container accessors are borrowed),
 which are uniform and the single easiest thing to get wrong.
 
@@ -288,8 +291,12 @@ committed if it holds up or reverted if not, until the ideas run out:
   same behavior, or a regression, is not a keep.
 - Threaded dispatch gotcha: a `}` after a threaded jump (`BS_NEXT()`, `RX_NEXT()`) is a line
   coverage never reaches; keep the label and `goto dispatch` form that leaves no such brace.
-- A refcount change gets `leaks --atExit -- build/bare -c '...'` on the dev build as well as the
-  gate; a leak is invisible to every test.
+- A refcount change gets a leak check on the dev build as well as the gate; a leak is invisible to
+  every test. `leaks --atExit` cannot see a boxed pointer - a value's word is not an address - so it
+  reports the thread-local roots' strings as leaks on every run; compare the live blocks at exit
+  instead: `cc -O2 -dynamiclib -o liveblocks.dylib test/tools/liveblocks.c`, then
+  `DYLD_INSERT_LIBRARIES=./liveblocks.dylib build/bare ...` prints the count to stderr, which must
+  equal the previous build's on the same script.
 
 ### The profile-driven optimization loop
 

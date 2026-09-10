@@ -45,6 +45,8 @@ BSOptions *bsOptionsNew(void)
 {
     BSOptions *options = bsAlloc(sizeof(BSOptions));
     memset(options, 0, sizeof(*options));
+    options->error = bsNull();
+    options->argsError = bsNull();
     options->globals = bsObjectNew();
     options->maxStatements = BS_MAX_STATEMENTS_DEFAULT;
     options->depthMax = BS_DEPTH_MAX;
@@ -70,7 +72,7 @@ void bsOptionsFree(BSOptions *options)
 
 static void bsErrorFormat(BSValue *slot, const char *format, va_list args)
 {
-    if (slot->type == BS_STRING) {
+    if (bsIsType(*slot, BS_STRING)) {
         return;
     }
     *slot = bsStringNewVFormat(format, args);
@@ -89,7 +91,7 @@ void bsErrorSet(BSOptions *options, const char *format, ...)
 void bsErrorSetStatement(BSOptions *options, const BSScript *script, int lineNumber,
                          const char *format, ...)
 {
-    if (options->error.type == BS_STRING) {
+    if (bsIsType(options->error, BS_STRING)) {
         return;
     }
     va_list args;
@@ -97,7 +99,7 @@ void bsErrorSetStatement(BSOptions *options, const BSScript *script, int lineNum
     BSValue message = bsStringNewVFormat(format, args);
     va_end(args);
 
-    if (script != NULL && script->scriptName.type == BS_STRING) {
+    if (script != NULL && bsIsType(script->scriptName, BS_STRING)) {
         const char *scriptName = bsStringData(script->scriptName);
         options->error = lineNumber != 0 ?
             bsStringNewFormat("%s:%d: %s", scriptName, lineNumber, bsStringData(message)) :
@@ -123,7 +125,7 @@ void bsFunctionError(BSOptions *options, const char *format, ...)
 
 const char *bsErrorGet(const BSOptions *options)
 {
-    return options->error.type == BS_STRING ? bsStringData(options->error) : NULL;
+    return bsIsType(options->error, BS_STRING) ? bsStringData(options->error) : NULL;
 }
 
 
@@ -163,12 +165,12 @@ void bsLog(BSOptions *options, const char *format, ...)
  * through to the globals object - matching the reference implementations, where an unassigned
  * local simply is not a key of the locals dictionary.
  */
-#define BS_UNSET_TYPE ((BSType) -1)
-#define BS_IS_UNSET(value) ((int) (value).type == (int) BS_UNSET_TYPE)
+#define BS_UNSET_TYPE BS_NUMBER /* the one tag no boxed value uses - a number is never boxed - and below every reference tag */
+#define BS_IS_UNSET(value) bsIsType((value), BS_UNSET_TYPE)
 
 static inline BSValue bsUnset(void)
 {
-    return (BSValue) {.type = BS_UNSET_TYPE, .u.ref = NULL};
+    return bsValueBoxed(BS_UNSET_TYPE, 0);
 }
 
 
@@ -185,7 +187,7 @@ static void bsRegsRelease(BSValue *regs, size_t count, const BSValue *inlineBuf)
 
 static bool bsIsInteger(BSValue value)
 {
-    return value.type == BS_NUMBER && isfinite(value.u.number) && trunc(value.u.number) == value.u.number;
+    return bsIsNumber(value) && isfinite(bsNumberOf(value)) && trunc(bsNumberOf(value)) == bsNumberOf(value);
 }
 
 
@@ -200,27 +202,16 @@ static int32_t bsToInt32(double value)
 }
 
 
-/*
- * Normalize an arithmetic result - a non-finite result is an invalid operation. A double is
- * finite exactly when subtracting it from itself gives zero: an infinity or a NaN gives a NaN,
- * which is a subtract and a compare where the classification is a run of integer bit tests.
- */
-static BSValue bsArithmetic(double result)
-{
-    return result - result == 0 ? bsNumber(result) : bsNull();
-}
-
-
 static BSValue bsAddSlow(BSValue left, BSValue right)
 {
-    if (left.type == BS_STRING || right.type == BS_STRING) {
+    if (bsIsType(left, BS_STRING) || bsIsType(right, BS_STRING)) {
         return bsStringConcat(left, right);
     }
     double value;
-    if (left.type == BS_DATETIME && right.type == BS_NUMBER) {
-        value = (double) left.u.datetime + right.u.number;
-    } else if (left.type == BS_NUMBER && right.type == BS_DATETIME) {
-        value = left.u.number + (double) right.u.datetime;
+    if (bsIsType(left, BS_DATETIME) && bsIsNumber(right)) {
+        value = (double) bsDatetimeOf(left) + bsNumberOf(right);
+    } else if (bsIsNumber(left) && bsIsType(right, BS_DATETIME)) {
+        value = bsNumberOf(left) + (double) bsDatetimeOf(right);
     } else {
         return bsNull();
     }
@@ -261,21 +252,21 @@ static int bsCodeLine(const BSCode *code, size_t pc)
 
 static void bsCoverageEnsure(BSScript *script, BSValue coverage)
 {
-    if (script->coverageOwner != coverage.u.object) {
+    if (script->coverageOwner != bsObjectOf(coverage)) {
         script->coverageCovered = bsNull();
-        script->coverageOwner = coverage.u.object;
+        script->coverageOwner = bsObjectOf(coverage);
     }
-    if (script->coverageCovered.type == BS_OBJECT) {
+    if (bsIsType(script->coverageCovered, BS_OBJECT)) {
         return;
     }
 
     BSValue scripts = bsObjectGet(coverage, "scripts");
-    if (scripts.type != BS_OBJECT) {
+    if (!bsIsType(scripts, BS_OBJECT)) {
         scripts = bsObjectNew();
         bsObjectSet(coverage, "scripts", scripts);
     }
     BSValue scriptCoverage = bsObjectGetString(scripts, script->scriptName);
-    if (scriptCoverage.type != BS_OBJECT) {
+    if (!bsIsType(scriptCoverage, BS_OBJECT)) {
         scriptCoverage = bsObjectNew();
         bsObjectSet(scriptCoverage, "script", bsScriptToModel(script));
         bsObjectSet(scriptCoverage, "covered", bsObjectNew());
@@ -298,12 +289,12 @@ static BS_NOINLINE BSValue *bsCoverResolve(BSScript *script, BSCode *code, uint3
 {
     BSValue *count = &bsCoverSink;
     int line = code->coverLines[index];
-    if (line > 0 && script->scriptName.type == BS_STRING) {
+    if (line > 0 && bsIsType(script->scriptName, BS_STRING)) {
         bsCoverageEnsure(script, coverage);
         char lineKey[16];
         snprintf(lineKey, sizeof(lineKey), "%d", line);
         BSValue coveredStatement = bsObjectGet(script->coverageCovered, lineKey);
-        if (coveredStatement.type != BS_OBJECT) {
+        if (!bsIsType(coveredStatement, BS_OBJECT)) {
             /* A script that forgot its model borrows the statement models back before recording one */
             BSValue statement = (code->cover != NULL || bsScriptRestoreCover(script)) ? code->cover[index] : bsNull();
             coveredStatement = bsObjectNew();
@@ -325,13 +316,13 @@ static BS_NOINLINE BSValue **bsCoverTableNew(BSCode *code, BSValue coverage)
         code->coverCounts = bsAlloc(code->coverCount * sizeof(BSValue *));
     }
     memset(code->coverCounts, 0, code->coverCount * sizeof(BSValue *));
-    code->coverOwner = coverage.u.object;
+    code->coverOwner = bsObjectOf(coverage);
     return code->coverCounts;
 }
 
 static inline BSValue **bsCoverTable(BSCode *code, BSValue coverage)
 {
-    return code->coverOwner == coverage.u.object ? code->coverCounts : bsCoverTableNew(code, coverage);
+    return code->coverOwner == bsObjectOf(coverage) ? code->coverCounts : bsCoverTableNew(code, coverage);
 }
 
 
@@ -342,7 +333,7 @@ static inline void bsRecordCoverage(BSScript *script, BSCode *code, BSValue **co
     if (count == NULL) {
         count = bsCoverResolve(script, code, index, coverage);
     }
-    count->u.number += 1;
+    *count = bsNumber(bsNumberOf(*count) + 1);
 }
 
 
@@ -498,10 +489,10 @@ static BSValue bsRunChunk(BSCode *code, BSScript *script, BSOptions *options, BS
  */
 static inline bool bsIntrinsicIndex(BSValue value, size_t *index)
 {
-    if (value.type != BS_NUMBER) {
+    if (!bsIsNumber(value)) {
         return false;
     }
-    double number = value.u.number;
+    double number = bsNumberOf(value);
     if (!(number >= 0 && number < 0x1p53) || trunc(number) != number) {
         return false;
     }
@@ -536,17 +527,17 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
 {
     size_t index;
     switch (id) {
-    BS_INTRIN(ARRAY_COPY, argCount == 1 && args[0].type == BS_ARRAY, bsArrayCopy(args[0]))
+    BS_INTRIN(ARRAY_COPY, argCount == 1 && bsIsType(args[0], BS_ARRAY), bsArrayCopy(args[0]))
     case BS_INTRIN_ARRAY_POP:
-        if (argCount == 1 && args[0].type == BS_ARRAY && args[0].u.array->count != 0) {
-            size_t last = args[0].u.array->count - 1;
-            *result = bsRetain(args[0].u.array->values[last]);
+        if (argCount == 1 && bsIsType(args[0], BS_ARRAY) && bsArrayOf(args[0])->count != 0) {
+            size_t last = bsArrayOf(args[0])->count - 1;
+            *result = bsRetain(bsArrayOf(args[0])->values[last]);
             bsArrayDelete(args[0], last);
             return true;
         }
         break;
     case BS_INTRIN_ARRAY_PUSH:
-        if (argCount >= 1 && args[0].type == BS_ARRAY) {
+        if (argCount >= 1 && bsIsType(args[0], BS_ARRAY)) {
             for (size_t ix = 1; ix < argCount; ix++) {
                 bsArrayPush(args[0], bsRetain(args[ix]));
             }
@@ -557,19 +548,19 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
     BS_INTRIN(ARRAY_NEW, true, bsArrayFromArgs(args, argCount))
     BS_INTRIN(ARRAY_NEW_SIZE, argCount == 2 && bsIntrinsicIndex(args[0], &index) && index <= 4294967295u,
               bsArrayNewSizeValue(index, args[1]))
-    BS_INTRIN(NUMBER_PARSE_INT, argCount == 1 && args[0].type == BS_STRING, bsIntrinsicParseInt(args[0]))
-    BS_INTRIN(OBJECT_COPY, argCount == 1 && args[0].type == BS_OBJECT, bsObjectCopy(args[0]))
+    BS_INTRIN(NUMBER_PARSE_INT, argCount == 1 && bsIsType(args[0], BS_STRING), bsIntrinsicParseInt(args[0]))
+    BS_INTRIN(OBJECT_COPY, argCount == 1 && bsIsType(args[0], BS_OBJECT), bsObjectCopy(args[0]))
     case BS_INTRIN_OBJECT_DELETE:
-        if (argCount == 2 && args[0].type == BS_OBJECT && args[1].type == BS_STRING) {
+        if (argCount == 2 && bsIsType(args[0], BS_OBJECT) && bsIsType(args[1], BS_STRING)) {
             bsObjectDelete(args[0], bsStringData(args[1]));
             *result = bsNull();
             return true;
         }
         break;
-    BS_INTRIN(OBJECT_KEYS, argCount == 1 && args[0].type == BS_OBJECT, bsObjectKeys(args[0]))
+    BS_INTRIN(OBJECT_KEYS, argCount == 1 && bsIsType(args[0], BS_OBJECT), bsObjectKeys(args[0]))
     case BS_INTRIN_OBJECT_NEW: {
         for (size_t ix = 0; ix < argCount; ix += 2) {
-            if (args[ix].type != BS_STRING) {
+            if (!bsIsType(args[ix], BS_STRING)) {
                 return false;
             }
         }
@@ -580,18 +571,18 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
         *result = object;
         return true;
     }
-    BS_INTRIN(STRING_ENDS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
+    BS_INTRIN(STRING_ENDS_WITH, argCount == 2 && bsIsType(args[0], BS_STRING) && bsIsType(args[1], BS_STRING),
               bsBoolean(bsStringEndsWith(args[0], args[1])))
-    BS_INTRIN(STRING_INDEX_OF, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
+    BS_INTRIN(STRING_INDEX_OF, argCount == 2 && bsIsType(args[0], BS_STRING) && bsIsType(args[1], BS_STRING),
               bsStringIndexOfValue(args[0], args[1], 0))
-    BS_INTRIN(STRING_TRIM, argCount == 1 && args[0].type == BS_STRING, bsStringTrimValue(args[0]))
-    BS_INTRIN(STRING_STARTS_WITH, argCount == 2 && args[0].type == BS_STRING && args[1].type == BS_STRING,
+    BS_INTRIN(STRING_TRIM, argCount == 1 && bsIsType(args[0], BS_STRING), bsStringTrimValue(args[0]))
+    BS_INTRIN(STRING_STARTS_WITH, argCount == 2 && bsIsType(args[0], BS_STRING) && bsIsType(args[1], BS_STRING),
               bsBoolean(bsStringStartsWith(args[0], args[1])))
     BS_INTRIN(SYSTEM_BOOLEAN, argCount == 1, bsBoolean(bsValueBoolean(args[0])))
-    BS_INTRIN(SYSTEM_GLOBAL_SET, argCount == 2 && args[0].type == BS_STRING,
+    BS_INTRIN(SYSTEM_GLOBAL_SET, argCount == 2 && bsIsType(args[0], BS_STRING),
               bsGlobalSetValue(options, args[0], args[1]))
     BS_INTRIN(SYSTEM_TYPE, argCount == 1, bsSystemTypeName(args[0]))
-    BS_INTRIN(REGEX_MATCH, argCount == 2 && args[0].type == BS_REGEX && args[1].type == BS_STRING,
+    BS_INTRIN(REGEX_MATCH, argCount == 2 && bsIsType(args[0], BS_REGEX) && bsIsType(args[1], BS_STRING),
               bsRegexMatchImpl(args[0], args[1]))
     }
     return false;
@@ -601,10 +592,10 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
 /* The globals object's value slot for a name site, or NULL if the name is absent */
 static inline BSValue *bsGlobalSlot(BSCallCache *cache, BSValue name, BSOptions *options)
 {
-    if (options->globals.type != BS_OBJECT) {
+    if (!bsIsType(options->globals, BS_OBJECT)) {
         return NULL;
     }
-    BSObject *globals = options->globals.u.object;
+    BSObject *globals = bsObjectOf(options->globals);
     if (cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
         cache->slot = bsObjectValuePtrString(options->globals, name);
         cache->gen = globals->generation;
@@ -635,30 +626,30 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
         if (!BS_IS_UNSET(regs[inst->b])) {
             function = regs[inst->b];
         }
-        if (function.type == BS_NULL) {
+        if (bsIsType(function, BS_NULL)) {
             /* An unset or null slot falls through to the globals */
             function = bsObjectGetString(options->globals, name);
         }
     } else {
         BSCallCache *cache = &code->caches[inst->b];
         name = code->names[cache->nameIndex];
-        if (locals.type == BS_OBJECT) {
+        if (bsIsType(locals, BS_OBJECT)) {
             BSValue found;
             if (bsObjectLookupString(locals, name, &found)) {
                 function = found;
             }
         }
-        if (function.type == BS_NULL) {
+        if (bsIsType(function, BS_NULL)) {
             function = bsGlobalLookup(cache, name, options);
         }
     }
 
-    if (function.type == BS_NULL && builtins) {
+    if (bsIsType(function, BS_NULL) && builtins) {
         function = bsLibraryExpressionFunction(name);
     }
 
-    if (function.type == BS_FUNCTION) {
-        BSFunction *fn = function.u.function;
+    if (bsIsType(function, BS_FUNCTION)) {
+        BSFunction *fn = bsFunctionOf(function);
         BSValue result;
         if (fn->intrinsic != 0 && bsIntrinsicCall(fn->intrinsic, args, argCount, options, &result)) {
             return result;
@@ -682,9 +673,9 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
             bsRelease(function);
         }
         options->depth--;
-        if (options->argsError.type == BS_STRING) {
+        if (bsIsType(options->argsError, BS_STRING)) {
             if (options->debug) {
-                const char *scriptName = (script != NULL && script->scriptName.type == BS_STRING) ?
+                const char *scriptName = (script != NULL && bsIsType(script->scriptName, BS_STRING)) ?
                     bsStringData(script->scriptName) : "";
                 bsLog(options, "%s:%d: BareScript: Function \"%s\" failed with error: %s", scriptName,
                       bsCodeLine(code, pc), bsStringData(name), bsStringData(options->argsError));
@@ -693,7 +684,7 @@ static BSValue bsCall(const BSCode *code, const BSInst *inst, const BSValue *arg
         }
         return result;
     }
-    if (function.type != BS_NULL) {
+    if (!bsIsType(function, BS_NULL)) {
         if (options->debug) {
             bsLog(options, "BareScript: Function \"%s\" failed with error: not a function",
                   bsStringData(name));
@@ -729,9 +720,9 @@ static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSV
         }
         bsRelease(bsRunChunk(&includeScript->code, includeScript, options, bsNull(), false));
         bsScriptRelease(includeScript);
-        return options->error.type != BS_STRING;
+        return !bsIsType(options->error, BS_STRING);
     }
-    if (text.type != BS_STRING) {
+    if (!bsIsType(text, BS_STRING)) {
         return bsIncludeFailed(script, url, lineNumber, options);
     }
 
@@ -745,7 +736,7 @@ static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSV
 
     /* Only coverage reporting reads an include's model - keep it while coverage is recording */
     BSValue coverage = bsObjectGet(options->globals, BS_GLOBAL_COVERAGE);
-    if (coverage.type != BS_OBJECT || !bsValueBoolean(bsObjectGet(coverage, "enabled"))) {
+    if (!bsIsType(coverage, BS_OBJECT) || !bsValueBoolean(bsObjectGet(coverage, "enabled"))) {
         bsScriptForgetModel(includeScript);
     }
 
@@ -758,7 +749,7 @@ static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSV
     options->urlDataFree = free;
     bsRelease(bsRunChunk(&includeScript->code, includeScript, options, bsNull(), false));
 
-    if (options->logFn != NULL && options->debug && options->error.type != BS_STRING) {
+    if (options->logFn != NULL && options->debug && !bsIsType(options->error, BS_STRING)) {
         BSValue warnings = bsLintScript(includeScript, options->globals);
         size_t warningCount = bsArrayCount(warnings);
         if (warningCount != 0) {
@@ -777,7 +768,7 @@ static bool bsExecuteInclude(BSScript *script, const char *url, bool system, BSV
     options->urlData = savedUrlData;
     options->urlDataFree = savedUrlDataFree;
     bsScriptRelease(includeScript);
-    return options->error.type != BS_STRING;
+    return !bsIsType(options->error, BS_STRING);
 }
 
 
@@ -805,7 +796,7 @@ static _Thread_local BSValue bsIncludeTexts;
 static bool bsExecuteIncludes(BSScript *script, const BSInclude *includes, size_t count, int lineNumber,
                               BSOptions *options)
 {
-    bool outermost = (bsIncludeTexts.type != BS_OBJECT);
+    bool outermost = (!bsIsType(bsIncludeTexts, BS_OBJECT));
     if (outermost) {
         bsIncludeTexts = bsObjectNew();
     }
@@ -813,7 +804,7 @@ static bool bsExecuteIncludes(BSScript *script, const BSInclude *includes, size_
     /* The set of includes already included, as its keys - created on first use. A system include's
        key is bracketed so that it cannot collide with a local include's URL. */
     BSValue loaded = bsObjectGet(options->globals, BS_GLOBAL_INCLUDES);
-    if (loaded.type != BS_OBJECT) {
+    if (!bsIsType(loaded, BS_OBJECT)) {
         loaded = bsObjectNew();
         bsObjectSet(options->globals, BS_GLOBAL_INCLUDES, loaded);
     }
@@ -846,7 +837,7 @@ static bool bsExecuteIncludes(BSScript *script, const BSInclude *includes, size_
     for (size_t ix = 0; ix < count; ix++) {
         if (items[ix].fetch) {
             BSValue response = responses[ixResponse++];
-            if (response.type == BS_STRING) {
+            if (bsIsType(response, BS_STRING)) {
                 bsObjectSetString(bsIncludeTexts, items[ix].key, response);
             } else {
                 bsRelease(response);
@@ -931,6 +922,27 @@ static inline BSValue bsOperandRead(const BSValue *regs, uint16_t operand)
 }
 
 
+/*
+ * An operand that is a number, as the double in "*number" - read from the register as a double, so
+ * the arithmetic handlers keep their numbers in the floating-point registers: no number is a NaN,
+ * so a NaN is a boxed value of some other type
+ */
+static inline bool bsOperandNumber(const BSValue *regs, uint16_t operand, double *number)
+{
+    memcpy(number, &regs[operand], sizeof(*number));
+    return *number == *number;
+}
+
+
+/* Store a number result - a finite double - in a register, releasing what the register held */
+static inline void bsAssignNumber(BSValue *target, double number)
+{
+    BSValue previous = *target;
+    memcpy(&target->bits, &number, sizeof(target->bits));
+    bsReleaseInline(previous);
+}
+
+
 /* Take a temporary's value; retain a slot's or a constant's */
 static inline BSValue bsOperandTake(BSValue *regs, size_t slotCount, size_t ownedCount, uint16_t operand)
 {
@@ -969,7 +981,7 @@ static inline const BSInst *bsIntrinArgs(const BSCode *code, const BSInst *inst,
         return NULL;
     }
     const BSValue *hit = cache->slot;
-    if (hit == NULL || hit->type != BS_FUNCTION || hit->u.function->intrinsic != id) {
+    if (hit == NULL || !bsIsType(*hit, BS_FUNCTION) || bsFunctionOf(*hit)->intrinsic != id) {
         return NULL;
     }
     return inst + 1;
@@ -992,11 +1004,11 @@ static inline bool bsIntrinArrayGet(const BSCode *code, const BSInst *inst, BSVa
         return false;
     }
     BSValue array = bsOperandRead(regs, args->a);
-    if (array.type != BS_ARRAY || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) ||
-        index >= array.u.array->count) {
+    if (!bsIsType(array, BS_ARRAY) || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) ||
+        index >= bsArrayOf(array)->count) {
         return false;
     }
-    bsIntrinResult(inst, regs, array.u.array->values[index]);
+    bsIntrinResult(inst, regs, bsArrayOf(array)->values[index]);
     return true;
 }
 
@@ -1008,10 +1020,10 @@ static inline bool bsIntrinArrayLength(const BSCode *code, const BSInst *inst, B
         return false;
     }
     BSValue array = bsOperandRead(regs, args->a);
-    if (array.type != BS_ARRAY) {
+    if (!bsIsType(array, BS_ARRAY)) {
         return false;
     }
-    bsIntrinResult(inst, regs, bsNumber((double) array.u.array->count));
+    bsIntrinResult(inst, regs, bsNumber((double) bsArrayOf(array)->count));
     return true;
 }
 
@@ -1023,7 +1035,7 @@ static BS_NOINLINE bool bsIntrinArrayPush(const BSCode *code, const BSInst *inst
         return false;
     }
     BSValue array = bsOperandRead(regs, args->a);
-    if (array.type != BS_ARRAY) {
+    if (!bsIsType(array, BS_ARRAY)) {
         return false;
     }
     bsArrayPush(array, bsRetain(bsOperandRead(regs, args->b)));
@@ -1040,8 +1052,8 @@ static inline bool bsIntrinArraySet(const BSCode *code, const BSInst *inst, BSVa
         return false;
     }
     BSValue array = bsOperandRead(regs, args->a);
-    if (array.type != BS_ARRAY || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) ||
-        index >= array.u.array->count) {
+    if (!bsIsType(array, BS_ARRAY) || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) ||
+        index >= bsArrayOf(array)->count) {
         return false;
     }
     BSValue value = bsOperandRead(regs, args->c);
@@ -1077,10 +1089,10 @@ static inline bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst, BSV
     }
     BSValue object = bsOperandRead(regs, args->a);
     BSValue key = bsOperandRead(regs, args->b);
-    if (object.type != BS_OBJECT || key.type != BS_STRING) {
+    if (!bsIsType(object, BS_OBJECT) || !bsIsType(key, BS_STRING)) {
         return false;
     }
-    BSObjectEntry *entry = bsObjectEntryMemo(object.u.object, key.u.string, &code->caches[inst->b].memo);
+    BSObjectEntry *entry = bsObjectEntryMemo(bsObjectOf(object), bsStringOf(key), &code->caches[inst->b].memo);
     BSValue found = entry != NULL ? entry->value :
         (inst->c == 3 ? bsOperandRead(regs, args->c) : bsNull());
     bsIntrinResult(inst, regs, found);
@@ -1096,10 +1108,10 @@ static inline bool bsIntrinObjectHas(const BSCode *code, const BSInst *inst, BSV
     }
     BSValue object = bsOperandRead(regs, args->a);
     BSValue key = bsOperandRead(regs, args->b);
-    if (object.type != BS_OBJECT || key.type != BS_STRING) {
+    if (!bsIsType(object, BS_OBJECT) || !bsIsType(key, BS_STRING)) {
         return false;
     }
-    BSObjectEntry *entry = bsObjectEntryMemo(object.u.object, key.u.string, &code->caches[inst->b].memo);
+    BSObjectEntry *entry = bsObjectEntryMemo(bsObjectOf(object), bsStringOf(key), &code->caches[inst->b].memo);
     bsIntrinResult(inst, regs, bsBoolean(entry != NULL));
     return true;
 }
@@ -1113,17 +1125,17 @@ static inline bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSV
     }
     BSValue object = bsOperandRead(regs, args->a);
     BSValue key = bsOperandRead(regs, args->b);
-    if (object.type != BS_OBJECT || key.type != BS_STRING) {
+    if (!bsIsType(object, BS_OBJECT) || !bsIsType(key, BS_STRING)) {
         return false;
     }
     BSValue value = bsOperandRead(regs, args->c);
     uint32_t *memo = &code->caches[inst->b].memo;
-    BSObjectEntry *entry = bsObjectEntryMemo(object.u.object, key.u.string, memo);
+    BSObjectEntry *entry = bsObjectEntryMemo(bsObjectOf(object), bsStringOf(key), memo);
     if (entry != NULL) {
         bsAssign(&entry->value, bsRetain(value));
     } else {
         bsObjectAppend(object, key, bsRetain(value));
-        *memo = object.u.object->count - 1;
+        *memo = bsObjectOf(object)->count - 1;
     }
     bsIntrinResult(inst, regs, value);
     return true;
@@ -1139,11 +1151,11 @@ static inline bool bsIntrinStringCharCodeAt(const BSCode *code, const BSInst *in
         return false;
     }
     BSValue string = bsOperandRead(regs, args->a);
-    if (string.type != BS_STRING || string.u.string->length != string.u.string->size ||
-        !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) || index >= string.u.string->size) {
+    if (!bsIsType(string, BS_STRING) || bsStringOf(string)->length != bsStringOf(string)->size ||
+        !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) || index >= bsStringOf(string)->size) {
         return false;
     }
-    bsIntrinResult(inst, regs, bsNumber((double) (unsigned char) string.u.string->data[index]));
+    bsIntrinResult(inst, regs, bsNumber((double) (unsigned char) bsStringOf(string)->data[index]));
     return true;
 }
 
@@ -1155,10 +1167,10 @@ static inline bool bsIntrinStringLength(const BSCode *code, const BSInst *inst, 
         return false;
     }
     BSValue string = bsOperandRead(regs, args->a);
-    if (string.type != BS_STRING) {
+    if (!bsIsType(string, BS_STRING)) {
         return false;
     }
-    bsIntrinResult(inst, regs, bsNumber((double) string.u.string->length));
+    bsIntrinResult(inst, regs, bsNumber((double) bsStringOf(string)->length));
     return true;
 }
 
@@ -1172,12 +1184,12 @@ static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *in
         return false;
     }
     BSValue string = bsOperandRead(regs, args->a);
-    if (string.type != BS_STRING || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &begin)) {
+    if (!bsIsType(string, BS_STRING) || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &begin)) {
         return false;
     }
-    size_t length = string.u.string->length;
+    size_t length = bsStringOf(string)->length;
     BSValue endValue = inst->c == 3 ? bsOperandRead(regs, args->c) : bsNull();
-    if (endValue.type == BS_NULL) {
+    if (bsIsType(endValue, BS_NULL)) {
         end = length;
     } else if (!bsIntrinsicIndex(endValue, &end)) {
         return false;
@@ -1208,15 +1220,15 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
         return false;
     }
     const BSValue *hit = cache->slot;
-    if (hit == NULL || hit->type != BS_FUNCTION) {
+    if (hit == NULL || !bsIsType(*hit, BS_FUNCTION)) {
         return false;
     }
-    unsigned char id = hit->u.function->intrinsic;
+    unsigned char id = bsFunctionOf(*hit)->intrinsic;
     BSValue arg = bsOperandRead(regs, inst[1].a);
-    if (id < BS_INTRIN_MATH_ABS || id > BS_INTRIN_MATH_SQRT || arg.type != BS_NUMBER) {
+    if (id < BS_INTRIN_MATH_ABS || id > BS_INTRIN_MATH_SQRT || !bsIsNumber(arg)) {
         return false;
     }
-    double number = arg.u.number;
+    double number = bsNumberOf(arg);
     double result;
     switch (id) {
     case BS_INTRIN_MATH_ABS:
@@ -1251,23 +1263,26 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
  */
 #define BS_ARITHMETIC(name, expr) \
     BS_CASE(name) { \
-        BSValue left = bsOperandRead(regs, inst->b); \
-        BSValue right = bsOperandRead(regs, inst->c); \
-        bsAssign(&regs[inst->a], \
-                 (left.type == BS_NUMBER && right.type == BS_NUMBER) ? bsArithmetic(expr) : bsNull()); \
+        double ln, rn; \
+        if (bsOperandNumber(regs, inst->b, &ln) && bsOperandNumber(regs, inst->c, &rn)) { \
+            double result = expr; \
+            if (result - result == 0) { \
+                bsAssignNumber(&regs[inst->a], result); \
+                BS_NEXT(); \
+            } \
+        } \
+        bsAssign(&regs[inst->a], bsNull()); \
     } \
     BS_NEXT()
 
 /* The three-way comparison of the instruction's operands, in "cmp" */
 #define BS_COMPARE_OPERANDS(cmp) \
-    BSValue left = bsOperandRead(regs, inst->b); \
-    BSValue right = bsOperandRead(regs, inst->c); \
+    double ln, rn; \
     int cmp; \
-    if (left.type == BS_NUMBER && right.type == BS_NUMBER) { \
-        double ln = left.u.number, rn = right.u.number; \
+    if (bsOperandNumber(regs, inst->b, &ln) && bsOperandNumber(regs, inst->c, &rn)) { \
         cmp = ln < rn ? -1 : (ln > rn ? 1 : 0); \
     } else { \
-        cmp = bsValueCompare(left, right); \
+        cmp = bsValueCompare(bsOperandRead(regs, inst->b), bsOperandRead(regs, inst->c)); \
     }
 
 /*
@@ -1278,12 +1293,13 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
 #define BS_EQUAL_OPERANDS(equal) \
     BSValue left = bsOperandRead(regs, inst->b); \
     BSValue right = bsOperandRead(regs, inst->c); \
+    double ln, rn; \
     bool equal; \
-    if (left.type == BS_NUMBER && right.type == BS_NUMBER) { \
-        equal = left.u.number == right.u.number; \
-    } else if (left.type == BS_STRING && right.type == BS_STRING) { \
-        const BSString *ls = left.u.string; \
-        const BSString *rs = right.u.string; \
+    if (bsOperandNumber(regs, inst->b, &ln) && bsOperandNumber(regs, inst->c, &rn)) { \
+        equal = ln == rn; \
+    } else if (bsIsType(left, BS_STRING) && bsIsType(right, BS_STRING)) { \
+        const BSString *ls = bsStringOf(left); \
+        const BSString *rs = bsStringOf(right); \
         equal = ls == rs || ((ls->flags & rs->flags & BS_STR_INTERNED) == 0 && ls->size == rs->size && \
                              memcmp(ls->data, rs->data, ls->size) == 0); \
     } else { \
@@ -1341,8 +1357,8 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
         BSValue right = bsOperandRead(regs, inst->c); \
         BSValue bits = bsNull(); \
         if (bsIsInteger(left) && bsIsInteger(right)) { \
-            int32_t leftInt = bsToInt32(left.u.number); \
-            int32_t rightInt = bsToInt32(right.u.number); \
+            int32_t leftInt = bsToInt32(bsNumberOf(left)); \
+            int32_t rightInt = bsToInt32(bsNumberOf(right)); \
             bits = bsNumber((double) (expr)); \
         } \
         bsAssign(&regs[inst->a], bits); \
@@ -1363,7 +1379,7 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
 static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSValue *regs,
                          BSValue locals, bool builtins)
 {
-    if (options->error.type == BS_STRING) {
+    if (bsIsType(options->error, BS_STRING)) {
         return bsNull();
     }
 
@@ -1372,21 +1388,21 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
     size_t ownedCount = slotCount + code->tempCount;
 
     /* The globals an intrinsic call site's cache is trusted against - none if a locals object could shadow the name */
-    const BSObject *intrinGlobals = (locals.type != BS_OBJECT && options->globals.type == BS_OBJECT) ?
-        options->globals.u.object : NULL;
+    const BSObject *intrinGlobals = (!bsIsType(locals, BS_OBJECT) && bsIsType(options->globals, BS_OBJECT)) ?
+        bsObjectOf(options->globals) : NULL;
 
     bool countStatements = script != NULL && !script->system;
     BSValue coverage = bsNull();
     bool hasCoverage = false;
-    if (countStatements && options->globals.type == BS_OBJECT) {
+    if (countStatements && bsIsType(options->globals, BS_OBJECT)) {
         /*
          * Interned keys make both lookups pointer comparisons. This runs on every function call, so
          * the thread-local keys are touched only when the slot is re-resolved; the "enabled" lookup
          * that follows a resolved slot finds them interned.
          */
-        BSObject *globals = options->globals.u.object;
+        BSObject *globals = bsObjectOf(options->globals);
         if (options->coverageEpoch != options->cacheEpoch || options->coverageGen != globals->generation) {
-            if (bsCoverageKeys.coverage.type != BS_STRING) {
+            if (!bsIsType(bsCoverageKeys.coverage, BS_STRING)) {
                 bsCoverageKeys.coverage = bsStringInternLiteral(BS_GLOBAL_COVERAGE);
                 bsCoverageKeys.enabled = bsStringInternLiteral("enabled");
             }
@@ -1395,7 +1411,7 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
             options->coverageEpoch = options->cacheEpoch;
         }
         BSValue enabled;
-        if (options->coverageSlot != NULL && options->coverageSlot->type == BS_OBJECT &&
+        if (options->coverageSlot != NULL && bsIsType((*options->coverageSlot), BS_OBJECT) &&
             bsObjectLookupString(*options->coverageSlot, bsCoverageKeys.enabled, &enabled)) {
             coverage = *options->coverageSlot;
             hasCoverage = bsValueBoolean(enabled);
@@ -1468,7 +1484,7 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
             BSCallCache *cache = &code->caches[inst->b];
             BSValue name = code->names[cache->nameIndex];
             BSValue value;
-            if (locals.type != BS_OBJECT || !bsObjectLookupString(locals, name, &value)) {
+            if (!bsIsType(locals, BS_OBJECT) || !bsObjectLookupString(locals, name, &value)) {
                 value = bsGlobalLookup(cache, name, options);
             }
             bsAssign(&regs[inst->a], bsRetain(value));
@@ -1557,7 +1573,7 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
             } else {
                 bsAssign(&regs[inst->a], value);
             }
-            if (options->error.type == BS_STRING) {
+            if (bsIsType(options->error, BS_STRING)) {
                 goto fail;
             }
             inst = data - 1;
@@ -1565,38 +1581,54 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
         BS_NEXT();
 
         BS_CASE(ADD) {
-            BSValue left = bsOperandRead(regs, inst->b);
-            BSValue right = bsOperandRead(regs, inst->c);
-            if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
-                bsAssign(&regs[inst->a], bsArithmetic(left.u.number + right.u.number));
-            } else if (left.type == BS_STRING && inst->a == inst->b && left.u.string->refcount == 1 &&
-                       (left.u.string->flags & BS_STR_INTERNED) == 0 &&
-                       !(right.type == BS_STRING && right.u.string == left.u.string)) {
-                /* "s = s + x" with the register holding s's only reference appends in place */
-                regs[inst->a].u.string = bsStringAppendValue(left.u.string, right);
+            double ln, rn;
+            if (bsOperandNumber(regs, inst->b, &ln) && bsOperandNumber(regs, inst->c, &rn)) {
+                double result = ln + rn;
+                if (result - result == 0) {
+                    bsAssignNumber(&regs[inst->a], result);
+                } else {
+                    bsAssign(&regs[inst->a], bsNull());
+                }
             } else {
-                bsAssign(&regs[inst->a], bsAddSlow(left, right));
+                BSValue left = bsOperandRead(regs, inst->b);
+                BSValue right = bsOperandRead(regs, inst->c);
+                if (bsIsType(left, BS_STRING) && inst->a == inst->b && bsStringOf(left)->refcount == 1 &&
+                    (bsStringOf(left)->flags & BS_STR_INTERNED) == 0 &&
+                    !(bsIsType(right, BS_STRING) && bsStringOf(right) == bsStringOf(left))) {
+                    /* "s = s + x" with the register holding s's only reference appends in place */
+                    regs[inst->a] = bsStringTake(bsStringAppendValue(bsStringOf(left), right));
+                } else {
+                    bsAssign(&regs[inst->a], bsAddSlow(left, right));
+                }
             }
         }
         BS_NEXT();
 
         BS_CASE(SUB) {
-            BSValue left = bsOperandRead(regs, inst->b);
-            BSValue right = bsOperandRead(regs, inst->c);
-            BSValue value = bsNull();
-            if (left.type == BS_NUMBER && right.type == BS_NUMBER) {
-                value = bsArithmetic(left.u.number - right.u.number);
-            } else if (left.type == BS_DATETIME && right.type == BS_DATETIME) {
-                value = bsNumber((double) (left.u.datetime - right.u.datetime));
+            double ln, rn;
+            if (bsOperandNumber(regs, inst->b, &ln) && bsOperandNumber(regs, inst->c, &rn)) {
+                double result = ln - rn;
+                if (result - result == 0) {
+                    bsAssignNumber(&regs[inst->a], result);
+                } else {
+                    bsAssign(&regs[inst->a], bsNull());
+                }
+            } else {
+                BSValue left = bsOperandRead(regs, inst->b);
+                BSValue right = bsOperandRead(regs, inst->c);
+                BSValue value = bsNull();
+                if (bsIsType(left, BS_DATETIME) && bsIsType(right, BS_DATETIME)) {
+                    value = bsNumber((double) (bsDatetimeOf(left) - bsDatetimeOf(right)));
+                }
+                bsAssign(&regs[inst->a], value);
             }
-            bsAssign(&regs[inst->a], value);
         }
         BS_NEXT();
 
-        BS_ARITHMETIC(MUL, left.u.number * right.u.number);
-        BS_ARITHMETIC(DIV, left.u.number / right.u.number);
-        BS_ARITHMETIC(MOD, bsModulo(left.u.number, right.u.number));
-        BS_ARITHMETIC(POW, pow(left.u.number, right.u.number));
+        BS_ARITHMETIC(MUL, ln * rn);
+        BS_ARITHMETIC(DIV, ln / rn);
+        BS_ARITHMETIC(MOD, bsModulo(ln, rn));
+        BS_ARITHMETIC(POW, pow(ln, rn));
 
         BS_EQUAL(EQ, equal);
         BS_EQUAL(NE, !equal);
@@ -1620,7 +1652,7 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
 
         BS_CASE(NEG) {
             BSValue value = bsOperandRead(regs, inst->b);
-            bsAssign(&regs[inst->a], value.type == BS_NUMBER ? bsNumber(-value.u.number) : bsNull());
+            bsAssign(&regs[inst->a], bsIsNumber(value) ? bsNumber(-bsNumberOf(value)) : bsNull());
         }
         BS_NEXT();
 
@@ -1631,7 +1663,7 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
         BS_CASE(BNOT) {
             BSValue value = bsOperandRead(regs, inst->b);
             bsAssign(&regs[inst->a],
-                     bsIsInteger(value) ? bsNumber((double) ~bsToInt32(value.u.number)) : bsNull());
+                     bsIsInteger(value) ? bsNumber((double) ~bsToInt32(bsNumberOf(value))) : bsNull());
         }
         BS_NEXT();
 

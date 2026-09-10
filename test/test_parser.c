@@ -42,10 +42,10 @@ TEST(parser_forget_model)
 
     /* Forgetting the model leaves the lines, and bsScriptToModel re-parses them to the same model */
     bsScriptForgetModel(script);
-    ASSERT_INT_EQ(script->model.type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(script->model), BS_NULL);
     ASSERT_INT_EQ(script->startLineNumber, 5);
     BSValue reparsed = bsScriptToModel(script);
-    ASSERT_INT_EQ(script->model.type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(script->model), BS_NULL);
     BSValue reparsedJson = bsJSONEncode(reparsed, 0);
     ASSERT_STR_EQ(bsStringData(reparsedJson), bsStringData(json));
     ASSERT_STR_CONTAINS(bsStringData(reparsedJson), "\"lineNumber\":5");
@@ -419,7 +419,7 @@ TEST(parser_no_script_name)
     BSParserError error = {0};
     BSScript *script = bsParseScript("a = 1", 5, 1, NULL, &error);
     ASSERT_NOT_NULL(script);
-    ASSERT_INT_EQ(script->scriptName.type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(script->scriptName), BS_NULL);
     BSValue model = bsScriptToModel(script);
     ASSERT_FALSE(bsObjectHas(model, "scriptName"));
     bsRelease(model);
@@ -616,7 +616,7 @@ TEST(parser_bootstrap_errors)
     /* Without a script name the message has no location */
     ASSERT_NULL(bsParseExpression(bsStringData(text), bsStringSize(text), 0, NULL, false, &error));
     ASSERT_VALUE_STRING_KEEP(error.message, "Maximum expression depth exceeded\n");
-    ASSERT_INT_EQ(error.scriptName.type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(error.scriptName), BS_NULL);
     bsParserErrorFree(&error);
 
     /* The error argument is optional */

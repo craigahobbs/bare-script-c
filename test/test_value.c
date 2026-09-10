@@ -20,7 +20,7 @@ static const char *const bsTestLongKey = "a key longer than the sixty-four byte 
 TEST(value_null)
 {
     BSValue value = bsNull();
-    ASSERT_INT_EQ(value.type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(value), BS_NULL);
     ASSERT_STR_EQ(bsValueTypeString(value), "null");
     ASSERT_VALUE_STRING(bsNull(), "null");
     ASSERT_VALUE(bsNull(), "null");
@@ -178,39 +178,39 @@ TEST(value_string_slice)
     text[260] = '\0';
     BSValue parent = bsStringNew(text);
     BSValue slice = bsStringSliceBytes(parent, 2, 200, 200);
-    ASSERT_TRUE((slice.u.string->flags & BS_STR_SLICE) != 0);
-    ASSERT_TRUE(slice.u.string->data == parent.u.string->data + 2);
-    ASSERT_INT_EQ(parent.u.string->refcount, 2);
+    ASSERT_TRUE((bsStringOf(slice)->flags & BS_STR_SLICE) != 0);
+    ASSERT_TRUE(bsStringOf(slice)->data == bsStringOf(parent)->data + 2);
+    ASSERT_INT_EQ(bsStringOf(parent)->refcount, 2);
     ASSERT_INT_EQ(bsStringSize(slice), 200);
     ASSERT_INT_EQ(bsStringLength(slice), 200);
     BSValue inner = bsStringSliceBytes(slice, 3, 150, SIZE_MAX);
-    ASSERT_TRUE(inner.u.string->data == parent.u.string->data + 5);
-    ASSERT_INT_EQ(parent.u.string->refcount, 3);
-    ASSERT_INT_EQ(slice.u.string->refcount, 1);
+    ASSERT_TRUE(bsStringOf(inner)->data == bsStringOf(parent)->data + 5);
+    ASSERT_INT_EQ(bsStringOf(parent)->refcount, 3);
+    ASSERT_INT_EQ(bsStringOf(slice)->refcount, 1);
     BSValue copy = bsStringSliceBytes(slice, 3, 10, SIZE_MAX);
-    ASSERT_TRUE((copy.u.string->flags & BS_STR_SLICE) == 0);
+    ASSERT_TRUE((bsStringOf(copy)->flags & BS_STR_SLICE) == 0);
     ASSERT_STR_EQ(bsStringData(copy), "fghijklmno");
-    ASSERT_INT_EQ(parent.u.string->refcount, 3);
+    ASSERT_INT_EQ(bsStringOf(parent)->refcount, 3);
 
     /* bsStringData gives a slice bytes of its own, NUL-terminated, and lets the parent go */
     const char *data = bsStringData(inner);
     ASSERT_INT_EQ(strlen(data), 150);
     ASSERT_TRUE(memcmp(data, text + 5, 150) == 0);
-    ASSERT_TRUE((inner.u.string->flags & BS_STR_SLICE) == 0);
-    ASSERT_TRUE((inner.u.string->flags & BS_STR_APART) != 0);
-    ASSERT_INT_EQ(parent.u.string->refcount, 2);
+    ASSERT_TRUE((bsStringOf(inner)->flags & BS_STR_SLICE) == 0);
+    ASSERT_TRUE((bsStringOf(inner)->flags & BS_STR_APART) != 0);
+    ASSERT_INT_EQ(bsStringOf(parent)->refcount, 2);
     ASSERT_TRUE(bsStringData(inner) == data);
     bsRelease(inner);
     bsRelease(copy);
     bsRelease(slice);
-    ASSERT_INT_EQ(parent.u.string->refcount, 1);
+    ASSERT_INT_EQ(bsStringOf(parent)->refcount, 1);
 
     /* A non-ASCII parent: a slice's code point count, given or counted */
     BSValue wide = bsTestRepeat("", "\xc3\xa9", 60, "");
     ASSERT_INT_EQ(bsStringLength(wide), 60);
     ASSERT_INT_EQ(bsStringSize(wide), 120);
     BSValue wideSlice = bsStringSliceBytes(wide, 2, 100, SIZE_MAX);
-    ASSERT_TRUE((wideSlice.u.string->flags & BS_STR_SLICE) != 0);
+    ASSERT_TRUE((bsStringOf(wideSlice)->flags & BS_STR_SLICE) != 0);
     ASSERT_INT_EQ(bsStringLength(wideSlice), 50);
     ASSERT_INT_EQ(bsStringCodePoint(wideSlice, 49), 0xe9);
     BSValue wideCopy = bsStringSliceBytes(wide, 2, 10, SIZE_MAX);
@@ -219,7 +219,7 @@ TEST(value_string_slice)
     ASSERT_INT_EQ(bsStringLength(wideKnown), 5);
     BSValue mixed = bsTestRepeat("\xc3\xa9", "a", 100, "");
     BSValue asciiSpan = bsStringSliceBytes(mixed, 2, 100, SIZE_MAX);
-    ASSERT_TRUE((asciiSpan.u.string->flags & BS_STR_SLICE) != 0);
+    ASSERT_TRUE((bsStringOf(asciiSpan)->flags & BS_STR_SLICE) != 0);
     ASSERT_INT_EQ(bsStringLength(asciiSpan), 100);
     bsRelease(asciiSpan);
     bsRelease(mixed);
@@ -244,16 +244,16 @@ TEST(value_string_slice)
     /* A split's pieces share their parent from thirty-two bytes, where a slice header costs no more than a copy */
     BSValue text40 = bsTestRepeat("", "abcd", 10, "");
     BSValue piece = bsStringSliceBytesMin(text40, 0, 40, SIZE_MAX, BS_STRING_SPLIT_MIN);
-    ASSERT_TRUE((piece.u.string->flags & BS_STR_SLICE) != 0);
-    ASSERT_INT_EQ(text40.u.string->refcount, 2);
+    ASSERT_TRUE((bsStringOf(piece)->flags & BS_STR_SLICE) != 0);
+    ASSERT_INT_EQ(bsStringOf(text40)->refcount, 2);
     BSValue shortPiece = bsStringSliceBytesMin(text40, 0, 31, SIZE_MAX, BS_STRING_SPLIT_MIN);
-    ASSERT_TRUE((shortPiece.u.string->flags & BS_STR_SLICE) == 0);
+    ASSERT_TRUE((bsStringOf(shortPiece)->flags & BS_STR_SLICE) == 0);
     BSValue sliced = bsStringSliceBytes(text40, 0, 40, SIZE_MAX);
-    ASSERT_TRUE((sliced.u.string->flags & BS_STR_SLICE) == 0);
+    ASSERT_TRUE((bsStringOf(sliced)->flags & BS_STR_SLICE) == 0);
     bsRelease(sliced);
     bsRelease(shortPiece);
     bsRelease(piece);
-    ASSERT_INT_EQ(text40.u.string->refcount, 1);
+    ASSERT_INT_EQ(bsStringOf(text40)->refcount, 1);
     bsRelease(text40);
     ASSERT_VALUE(bsTestExecute(
         "s = stringRepeat('abcd', 10)\nparts = stringSplit(s + ',' + s + ',x', ',')\n"
@@ -427,13 +427,13 @@ TEST(value_array)
     bsArrayPush(array, bsStringNew("two"));
     ASSERT_INT_EQ(bsArrayCount(array), 2);
     ASSERT_TRUE(bsValueBoolean(array));
-    ASSERT_DOUBLE_EQ(bsArrayGet(array, 0).u.number, 1);
-    ASSERT_INT_EQ(bsArrayGet(array, 9).type, BS_NULL);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsArrayGet(array, 0)), 1);
+    ASSERT_INT_EQ(bsValueType(bsArrayGet(array, 9)), BS_NULL);
     ASSERT_INT_EQ(bsArrayCount(bsNumber(1)), 0);
-    ASSERT_INT_EQ(bsArrayGet(bsNumber(1), 0).type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsArrayGet(bsNumber(1), 0)), BS_NULL);
 
     bsArraySet(array, 0, bsNumber(9));
-    ASSERT_DOUBLE_EQ(bsArrayGet(array, 0).u.number, 9);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsArrayGet(array, 0)), 9);
 
     bsArrayInsert(array, 1, bsStringNew("mid"));
     ASSERT_VALUE_KEEP(array, "[9,\"mid\",\"two\"]");
@@ -493,11 +493,11 @@ TEST(value_object)
     ASSERT_INT_EQ(bsObjectCount(object), 3);
     ASSERT_TRUE(bsObjectHas(object, "a"));
     ASSERT_FALSE(bsObjectHas(object, "z"));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "b").u.number, 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "b")), 2);
     bsObjectSet(object, "", bsNumber(0));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "").u.number, 0);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "")), 0);
     ASSERT_TRUE(bsObjectDelete(object, ""));
-    ASSERT_INT_EQ(bsObjectGet(object, "z").type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsObjectGet(object, "z")), BS_NULL);
 
     /* Objects iterate in insertion order and serialize in sorted key order */
     ASSERT_VALUE(bsObjectKeys(object), "[\"b\",\"a\",\"c\"]");
@@ -512,7 +512,7 @@ TEST(value_object)
             snprintf(key, sizeof(key), "k%02d", 19 - ix);
             bsObjectSet(many, key, bsNumber(ix));
         }
-        ASSERT_NOT_NULL(many.u.object->index);
+        ASSERT_NOT_NULL(bsObjectOf(many)->index);
         ASSERT_VALUE(bsObjectKeysSorted(many),
                      "[\"k00\",\"k01\",\"k02\",\"k03\",\"k04\",\"k05\",\"k06\",\"k07\",\"k08\",\"k09\","
                      "\"k10\",\"k11\",\"k12\",\"k13\",\"k14\",\"k15\",\"k16\",\"k17\",\"k18\",\"k19\"]");
@@ -540,12 +540,12 @@ TEST(value_object)
 
     /* Non-object values */
     ASSERT_INT_EQ(bsObjectCount(bsNumber(1)), 0);
-    ASSERT_INT_EQ(bsObjectGet(bsNumber(1), "a").type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsObjectGet(bsNumber(1), "a")), BS_NULL);
     ASSERT_FALSE(bsObjectHas(bsNumber(1), "a"));
     ASSERT_VALUE(bsObjectKeys(bsNumber(1)), "[]");
     ASSERT_VALUE(bsObjectCopy(bsNumber(1)), "{}");
     BSValue key = bsStringNew("a");
-    ASSERT_INT_EQ(bsObjectGetString(bsNumber(1), key).type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsObjectGetString(bsNumber(1), key)), BS_NULL);
     ASSERT_FALSE(bsObjectHasString(bsNumber(1), key));
     bsRelease(key);
 }
@@ -555,21 +555,21 @@ TEST(value_object_new_capacity)
 {
     /* A large expected count starts the object with its entries and index; a small one stays inline */
     BSValue object = bsObjectNewCapacity(100);
-    ASSERT_TRUE(object.u.object->entries != object.u.object->inline_);
-    ASSERT_INT_EQ(object.u.object->capacity, 128);
-    ASSERT_NOT_NULL(object.u.object->index);
-    ASSERT_INT_EQ(object.u.object->index->mask + 1, 256);
+    ASSERT_TRUE(bsObjectOf(object)->entries != bsObjectOf(object)->inline_);
+    ASSERT_INT_EQ(bsObjectOf(object)->capacity, 128);
+    ASSERT_NOT_NULL(bsObjectOf(object)->index);
+    ASSERT_INT_EQ(bsObjectOf(object)->index->mask + 1, 256);
     bsTestObjectFill(object, "cap%d", 0, 100);
     ASSERT_INT_EQ(bsObjectCount(object), 100);
-    ASSERT_INT_EQ(object.u.object->index->mask + 1, 256);
+    ASSERT_INT_EQ(bsObjectOf(object)->index->mask + 1, 256);
     ASSERT_VALUE_KEEP(bsObjectGet(object, "cap99"), "99");
     ASSERT_VALUE_KEEP(bsObjectGet(object, "cap0"), "0");
     ASSERT_TRUE(bsObjectDelete(object, "cap50"));
-    ASSERT_INT_EQ(bsObjectGet(object, "cap50").type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsObjectGet(object, "cap50")), BS_NULL);
     bsRelease(object);
 
     object = bsObjectNewCapacity(3);
-    ASSERT_TRUE(object.u.object->entries == object.u.object->inline_);
+    ASSERT_TRUE(bsObjectOf(object)->entries == bsObjectOf(object)->inline_);
     bsObjectSet(object, "a", bsNumber(1));
     ASSERT_VALUE_KEEP(bsObjectGet(object, "a"), "1");
     bsRelease(object);
@@ -608,13 +608,13 @@ TEST(value_object_json_keys)
     const char *json = "{\"zzUniqueKey\":1,\"name\":2,\"zz\\tEsc\":3}";
     BSValue object = bsJSONDecode(json, strlen(json), NULL);
     ASSERT_INT_EQ(bsObjectCount(object), 3);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "zzUniqueKey").u.number, 1);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "name").u.number, 2);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "zz\tEsc").u.number, 3);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "zzUniqueKey")), 1);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "name")), 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "zz\tEsc")), 3);
     BSValue keys = bsObjectKeys(object);
-    ASSERT_TRUE((bsArrayGet(keys, 0).u.string->flags & BS_STR_INTERNED) == 0);
-    ASSERT_TRUE((bsArrayGet(keys, 1).u.string->flags & BS_STR_INTERNED) != 0);
-    ASSERT_TRUE((bsArrayGet(keys, 2).u.string->flags & BS_STR_INTERNED) == 0);
+    ASSERT_TRUE((bsStringOf(bsArrayGet(keys, 0))->flags & BS_STR_INTERNED) == 0);
+    ASSERT_TRUE((bsStringOf(bsArrayGet(keys, 1))->flags & BS_STR_INTERNED) != 0);
+    ASSERT_TRUE((bsStringOf(bsArrayGet(keys, 2))->flags & BS_STR_INTERNED) == 0);
     bsRelease(keys);
     ASSERT_TRUE(bsObjectDelete(object, "zzUniqueKey"));
     ASSERT_FALSE(bsObjectHas(object, "zzUniqueKey"));
@@ -644,29 +644,29 @@ TEST(value_object_intern)
     BSValue object = bsObjectNew();
     bsTestObjectFill(object, "k%d", 0, 40);
     ASSERT_INT_EQ(bsObjectCount(object), 40);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k0").u.number, 0);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k0")), 0);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k39")), 39);
     ASSERT_FALSE(bsObjectHas(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "k40"));
     ASSERT_FALSE(bsObjectDelete(object, "a"));
-    ASSERT_NOT_NULL(object.u.object->index);
+    ASSERT_NOT_NULL(bsObjectOf(object)->index);
     ASSERT_TRUE(bsObjectDelete(object, "k0"));
     ASSERT_FALSE(bsObjectHas(object, "k0"));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k39")), 39);
 
     /* Further inserts grow the entries and the index */
     bsTestObjectFill(object, "k%d", 40, 80);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k79").u.number, 79);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k79")), 79);
 
     /* Interned keys from the object compare by pointer; a 4-byte key hits the word hash */
     BSValue keys = bsObjectKeys(object);
-    ASSERT_TRUE((bsArrayGet(keys, 0).u.string->flags & BS_STR_INTERNED) != 0);
+    ASSERT_TRUE((bsStringOf(bsArrayGet(keys, 0))->flags & BS_STR_INTERNED) != 0);
     ASSERT_TRUE(bsObjectHasString(object, bsArrayGet(keys, 0)));
     bsRelease(keys);
     bsObjectSet(object, "abcd", bsNumber(4));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "abcd").u.number, 4);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "abcd")), 4);
     bsObjectSet(object, "\xc3\xa9", bsNumber(5));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "\xc3\xa9").u.number, 5);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "\xc3\xa9")), 5);
 
     /* A key longer than the intern limit still round-trips, on both small and large objects */
     BSValue small = bsObjectNew();
@@ -675,7 +675,7 @@ TEST(value_object_intern)
     bsRelease(small);
     bsObjectSet(object, bsTestLongKey, bsNumber(70));
     ASSERT_TRUE(bsObjectHas(object, bsTestLongKey));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, bsTestLongKey).u.number, 70);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, bsTestLongKey)), 70);
     ASSERT_TRUE(bsObjectDelete(object, bsTestLongKey));
     ASSERT_FALSE(bsObjectHas(object, bsTestLongKey));
     bsRelease(object);
@@ -694,9 +694,9 @@ TEST(value_object_small_update)
     BSValue key = bsStringNew(bsTestLongKey);
     bsObjectSetString(object, key, bsNumber(1));
     bsObjectSetString(object, key, bsNumber(2));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, bsTestLongKey).u.number, 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, bsTestLongKey)), 2);
     bsObjectSet(object, "a", bsNumber(9));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "a").u.number, 9);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "a")), 9);
     bsRelease(key);
     bsRelease(object);
 }
@@ -709,26 +709,26 @@ TEST(value_object_set_ordinary_key)
     BSValue holder = bsObjectNew();
     bsObjectSet(holder, "twin", bsNull());
     BSValue keys = bsObjectKeys(holder);
-    BSString *interned = bsArrayGet(keys, 0).u.string;
+    BSString *interned = bsStringOf(bsArrayGet(keys, 0));
     ASSERT_INT_EQ(interned->flags & BS_STR_INTERNED, BS_STR_INTERNED);
     int32_t refcount = interned->refcount;
     BSValue key = bsStringNewSize("twin", 4);
-    ASSERT_INT_EQ(key.u.string->flags & BS_STR_INTERNED, 0);
+    ASSERT_INT_EQ(bsStringOf(key)->flags & BS_STR_INTERNED, 0);
     BSValue object = bsObjectNew();
     bsObjectSetString(object, key, bsNumber(1));
     bsObjectSetString(object, key, bsNumber(2));
     ASSERT_INT_EQ(bsObjectCount(object), 1);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "twin").u.number, 2);
-    ASSERT_DOUBLE_EQ(bsObjectGetString(object, bsArrayGet(keys, 0)).u.number, 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "twin")), 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGetString(object, bsArrayGet(keys, 0))), 2);
     ASSERT_INT_EQ(interned->refcount, refcount);
-    ASSERT_INT_EQ(key.u.string->refcount, 2);
+    ASSERT_INT_EQ(bsStringOf(key)->refcount, 2);
     bsTestObjectFill(object, "more%d", 0, 20);
-    ASSERT_NOT_NULL(object.u.object->index);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "twin").u.number, 2);
-    ASSERT_DOUBLE_EQ(bsObjectGetString(object, key).u.number, 2);
-    ASSERT_DOUBLE_EQ(bsObjectGetString(object, bsArrayGet(keys, 0)).u.number, 2);
+    ASSERT_NOT_NULL(bsObjectOf(object)->index);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "twin")), 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGetString(object, key)), 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGetString(object, bsArrayGet(keys, 0))), 2);
     bsRelease(object);
-    ASSERT_INT_EQ(key.u.string->refcount, 1);
+    ASSERT_INT_EQ(bsStringOf(key)->refcount, 1);
     bsRelease(key);
     bsRelease(keys);
     bsRelease(holder);
@@ -753,8 +753,8 @@ TEST(value_object_inline)
     bsObjectSet(object, "c", bsNumber(3));
     bsObjectSet(object, "e", bsNumber(5));
     ASSERT_INT_EQ(bsObjectCount(object), 5);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "d").u.number, 4);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "e").u.number, 5);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "d")), 4);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "e")), 5);
     ASSERT_VALUE(bsObjectKeys(object), "[\"d\",\"b\",\"a\",\"c\",\"e\"]");
     ASSERT_FALSE(bsObjectHas(object, "z"));
     ASSERT_TRUE(bsObjectDelete(object, "d"));
@@ -772,13 +772,13 @@ TEST(value_object_inline)
     const char *longC = "the third key longer than the sixty-four byte limit of the intern table, never interned";
     bsObjectSet(tiny, longA, bsNumber(1));
     bsObjectSet(tiny, longB, bsNumber(2));
-    ASSERT_DOUBLE_EQ(bsObjectGet(tiny, longA).u.number, 1);
-    ASSERT_DOUBLE_EQ(bsObjectGet(tiny, longB).u.number, 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(tiny, longA)), 1);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(tiny, longB)), 2);
     ASSERT_FALSE(bsObjectHas(tiny, "z"));
     ASSERT_FALSE(bsObjectHas(tiny, longC));
     ASSERT_TRUE(bsObjectDelete(tiny, longA));
     ASSERT_FALSE(bsObjectHas(tiny, longA));
-    ASSERT_DOUBLE_EQ(bsObjectGet(tiny, longB).u.number, 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(tiny, longB)), 2);
     bsRelease(tiny);
 }
 
@@ -796,7 +796,7 @@ TEST(value_object_large)
     ASSERT_INT_EQ(bsObjectCount(object), 401);
     for (int ix = 0; ix <= 400; ix++) {
         snprintf(key, sizeof(key), "k%03d", ix);
-        ASSERT_DOUBLE_EQ(bsObjectGet(object, key).u.number, ix);
+        ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, key)), ix);
     }
 
     /* Sorted iteration returns the keys in order */
@@ -1035,11 +1035,11 @@ TEST(value_retain_release)
     BSValue string = bsStringNew("abc");
     BSValue array = bsArrayNew();
     BSValue object = bsObjectNew();
-    ASSERT_INT_EQ(string.u.string->refcount, 1);
+    ASSERT_INT_EQ(bsStringOf(string)->refcount, 1);
     bsRetain(string);
-    ASSERT_INT_EQ(string.u.string->refcount, 2);
+    ASSERT_INT_EQ(bsStringOf(string)->refcount, 2);
     bsRelease(string);
-    ASSERT_INT_EQ(string.u.string->refcount, 1);
+    ASSERT_INT_EQ(bsStringOf(string)->refcount, 1);
 
     bsRetain(array);
     bsRelease(array);
@@ -1055,8 +1055,8 @@ TEST(value_retain_release)
     /* bsAssign releases the previous value */
     BSValue target = bsRetain(string);
     bsAssign(&target, bsNumber(1));
-    ASSERT_INT_EQ(target.type, BS_NUMBER);
-    ASSERT_INT_EQ(string.u.string->refcount, 1);
+    ASSERT_INT_EQ(bsValueType(target), BS_NUMBER);
+    ASSERT_INT_EQ(bsStringOf(string)->refcount, 1);
 
     bsRelease(string);
     bsRelease(array);
@@ -1134,15 +1134,15 @@ TEST(value_object_index)
     /* The seventeenth key builds the index; deleting back to sixteen drops it */
     BSValue object = bsObjectNew();
     bsTestObjectFill(object, "k%d", 0, 16);
-    ASSERT_TRUE(object.u.object->index == NULL);
+    ASSERT_TRUE(bsObjectOf(object)->index == NULL);
     bsObjectSet(object, "k16", bsNumber(16));
-    ASSERT_NOT_NULL(object.u.object->index);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k15").u.number, 15);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k16").u.number, 16);
+    ASSERT_NOT_NULL(bsObjectOf(object)->index);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k15")), 15);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k16")), 16);
     ASSERT_TRUE(bsObjectDelete(object, "k3"));
-    ASSERT_TRUE(object.u.object->index == NULL);
+    ASSERT_TRUE(bsObjectOf(object)->index == NULL);
     ASSERT_FALSE(bsObjectHas(object, "k3"));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k16").u.number, 16);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k16")), 16);
     ASSERT_INT_EQ(bsObjectCount(object), 16);
     BSValue keys = bsObjectKeys(object);
     ASSERT_VALUE_KEEP(bsArrayGet(keys, 3), "\"k4\"");
@@ -1152,10 +1152,10 @@ TEST(value_object_index)
     /* Past the scan threshold, lookups by interned and ordinary keys probe the index */
     object = bsObjectNew();
     bsTestObjectFill(object, "k%d", 0, 40);
-    ASSERT_NOT_NULL(object.u.object->index);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k7").u.number, 7);
+    ASSERT_NOT_NULL(bsObjectOf(object)->index);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k7")), 7);
     BSValue ordinary = bsStringNewSize("k7", 2);
-    ASSERT_DOUBLE_EQ(bsObjectGetString(object, ordinary).u.number, 7);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGetString(object, ordinary)), 7);
     bsRelease(ordinary);
     BSValue absent = bsStringNew("k7-with-no-interned-form");
     ASSERT_FALSE(bsObjectHasString(object, absent));
@@ -1168,20 +1168,20 @@ TEST(value_object_index)
 
     /* Updates keep the entry; a delete rebuilds the index over the entries that moved down */
     bsObjectSet(object, "k7", bsNumber(70));
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k7").u.number, 70);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k7")), 70);
     ASSERT_INT_EQ(bsObjectCount(object), 40);
     ASSERT_TRUE(bsObjectDelete(object, "k7"));
     ASSERT_FALSE(bsObjectHas(object, "k7"));
     ASSERT_INT_EQ(bsObjectCount(object), 39);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k39").u.number, 39);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k8").u.number, 8);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k39")), 39);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k8")), 8);
 
     /* An ordinary key past the threshold is found by content */
     BSValue longKey = bsStringNew(bsTestLongKey);
     bsObjectSetString(object, longKey, bsNumber(1));
     ASSERT_INT_EQ(bsObjectCount(object), 40);
-    ASSERT_DOUBLE_EQ(bsObjectGetString(object, longKey).u.number, 1);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k3").u.number, 3);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGetString(object, longKey)), 1);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k3")), 3);
     bsRelease(longKey);
     bsRelease(object);
 }
@@ -1311,8 +1311,8 @@ TEST(value_object_intern_cap)
     BSValue object = bsObjectNew();
     bsTestObjectFill(object, "c%05d", 0, 66000);
     ASSERT_INT_EQ(bsObjectCount(object), 66000);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "c00000").u.number, 0);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "c65999").u.number, 65999);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "c00000")), 0);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "c65999")), 65999);
     ASSERT_TRUE(bsObjectDelete(object, "c65999"));
     ASSERT_FALSE(bsObjectHas(object, "c65999"));
     /* An interned name that is not a key of this object misses the index */

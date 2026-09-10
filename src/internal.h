@@ -53,17 +53,22 @@ void bsReleaseDestroyed(BSValue value);
  * Fast-path retain/release for implementation files. Immediate values are a no-op the compiler
  * can see; the public functions in value.c remain the library ABI.
  *
- * Every reference type - string, array, object, function, regex - begins with the same int32_t
- * refcount, so one unsigned range test over the contiguous BS_STRING..BS_REGEX span decides
+ * Every reference type - datetime, string, array, object, function, regex - begins with the same
+ * int32_t refcount, and their tags, BS_DATETIME through BS_REGEX, are the highest in use: a number's
+ * word is below every boxed one and the immediates' tags below BS_DATETIME, so one compare decides
  * whether a value is counted at all, and one decrement serves them all.
  */
-#define BS_IS_REF(value) \
-    ((unsigned) (value).type - (unsigned) BS_STRING <= (unsigned) (BS_REGEX - BS_STRING))
+#define BS_IS_REF(value) (((value).bits >> BS_VALUE_TAG_SHIFT) >= (BS_VALUE_BOXED | (unsigned) BS_DATETIME))
+
+static inline int32_t *bsRefcount(BSValue value)
+{
+    return (int32_t *) bsRefOf(value);
+}
 
 static inline BSValue bsRetainInline(BSValue value)
 {
     if (BS_IS_REF(value)) {
-        (*(int32_t *) value.u.ref)++;
+        (*bsRefcount(value))++;
     }
     return value;
 }
@@ -73,7 +78,7 @@ static inline void bsReleaseInline(BSValue value)
     if (!BS_IS_REF(value)) {
         return;
     }
-    if (--(*(int32_t *) value.u.ref) != 0) {
+    if (--(*bsRefcount(value)) != 0) {
         return;
     }
     bsReleaseDestroyed(value);
@@ -126,7 +131,10 @@ void bsObjectAssign(BSValue dest, BSValue src);
 BSValue bsObjectNewSized(size_t count, bool pooled);
 
 /* A string reference as a value - takes ownership of the reference */
-BSValue bsStringTake(BSString *string);
+static inline BSValue bsStringTake(BSString *string)
+{
+    return bsRefValue(BS_STRING, string);
+}
 
 /* Intern a short string. Strings longer than 64 bytes are not interned. Returns an owned value. */
 BSValue bsStringIntern(const char *data, size_t size);
@@ -183,7 +191,7 @@ BSValue bsStringSliceShare(BSValue parent, size_t offset, size_t size, size_t le
 
 static inline BSValue bsStringSliceBytesMin(BSValue parent, size_t offset, size_t size, size_t length, size_t min)
 {
-    const BSString *source = parent.u.string;
+    const BSString *source = bsStringOf(parent);
     if (size >= min) {
         return bsStringSliceShare(parent, offset, size, length);
     }
@@ -203,7 +211,7 @@ static inline BSValue bsStringSliceBytes(BSValue parent, size_t offset, size_t s
  */
 static inline const char *bsStringSpan(BSValue value)
 {
-    return value.type == BS_STRING ? value.u.string->data : "";
+    return bsIsType(value, BS_STRING) ? bsStringOf(value)->data : "";
 }
 
 /* Ensure a string builder has room for "size" more bytes, so a reader can fill sb->data + sb->size */
@@ -214,10 +222,10 @@ size_t bsStringOffsetSlow(BSValue value, size_t index);
 
 static inline size_t bsStringOffsetFast(BSValue value, size_t index)
 {
-    if (value.type != BS_STRING) {
+    if (!bsIsType(value, BS_STRING)) {
         return 0;
     }
-    BSString *string = value.u.string;
+    BSString *string = bsStringOf(value);
     if (string->length == string->size) {
         return index < string->size ? index : string->size;
     }
@@ -230,6 +238,14 @@ static inline size_t bsStringOffsetFast(BSValue value, size_t index)
 #define bsAssign bsAssignInline
 #define bsStringOffset bsStringOffsetFast
 #endif
+
+/*
+ * The runtime's numbers are finite: the operators map a non-finite result to null, the parsers
+ * and the library test theirs, and the arguments a library function receives are numbers the
+ * runtime made. So the implementation files build numbers without bsNumber's NaN test, which
+ * guards the public API alone.
+ */
+#define bsNumber bsNumberFinite
 
 
 /*
@@ -283,16 +299,16 @@ static inline bool bsIsSpaceCode(uint32_t code)
 /* True if "string" begins or ends with "search". Both must be strings. */
 static inline bool bsStringStartsWith(BSValue string, BSValue search)
 {
-    size_t n = search.u.string->size;
-    return n <= string.u.string->size &&
-           memcmp(string.u.string->data, search.u.string->data, n) == 0;
+    size_t n = bsStringOf(search)->size;
+    return n <= bsStringOf(string)->size &&
+           memcmp(bsStringOf(string)->data, bsStringOf(search)->data, n) == 0;
 }
 
 static inline bool bsStringEndsWith(BSValue string, BSValue search)
 {
-    size_t n = search.u.string->size;
-    size_t size = string.u.string->size;
-    return n <= size && memcmp(string.u.string->data + (size - n), search.u.string->data, n) == 0;
+    size_t n = bsStringOf(search)->size;
+    size_t size = bsStringOf(string)->size;
+    return n <= size && memcmp(bsStringOf(string)->data + (size - n), bsStringOf(search)->data, n) == 0;
 }
 
 /* An owned array of retained copies of "args" */

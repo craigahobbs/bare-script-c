@@ -89,7 +89,7 @@ TEST(model_script_name_override)
     bsScriptRelease(named);
 
     BSScript *unnamed = bsScriptFromModel(model, NULL);
-    ASSERT_INT_EQ(unnamed->scriptName.type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(unnamed->scriptName), BS_NULL);
     bsScriptRelease(unnamed);
     bsRelease(model);
 }
@@ -198,7 +198,7 @@ TEST(model_script_from_json)
     BSScript *script = bsScriptFromModelJSON(json, strlen(json), NULL, &error);
     ASSERT_NOT_NULL(script);
     ASSERT_NULL(error);
-    ASSERT_INT_EQ(script->model.type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(script->model), BS_NULL);
     ASSERT_NULL(script->code.cover);
     ASSERT_TRUE(script->system);
     ASSERT_VALUE_STRING_KEEP(script->scriptName, "stream.bare");
@@ -390,10 +390,10 @@ TEST(model_valid_shapes)
         "{\"return\":{\"expr\":{\"function\":{\"name\":\"f\",\"args\":[{\"number\":2}]}}}}"
         "]}", NULL);
     ASSERT_NOT_NULL(script);
-    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(script->model, "statements"), 0),
-                                            "expr"), "lineNumber").u.number, 1);
-    ASSERT_DOUBLE_EQ(bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(script->model, "statements"), 0),
-                                            "expr"), "lineCount").u.number, 2);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(script->model, "statements"), 0),
+                                            "expr"), "lineNumber")), 1);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(bsObjectGet(bsArrayGet(bsObjectGet(script->model, "statements"), 0),
+                                            "expr"), "lineCount")), 2);
 
     ASSERT_VALUE(bsTestExecuteScript(script), "[2]");
     bsScriptRelease(script);
@@ -450,7 +450,7 @@ TEST(model_statement_list_form)
         ASSERT_TRUE(bsObjectDelete(statement, key));
     }
     ASSERT_INT_EQ(bsObjectCount(statement), 1);
-    ASSERT_TRUE(statement.u.object->entries != statement.u.object->inline_);
+    ASSERT_TRUE(bsObjectOf(statement)->entries != bsObjectOf(statement)->inline_);
     BSValue statements = bsArrayNew();
     bsArrayPush(statements, statement);
     BSValue model = bsObjectNew();

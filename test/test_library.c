@@ -122,19 +122,19 @@ TEST(library_object_append)
     BSValue longKey = bsStringNew("a key longer than the sixty-four byte limit of the intern table is never interned");
     bsObjectAppend(object, longKey, bsNumber(1));
     ASSERT_INT_EQ(bsObjectCount(object), 1);
-    ASSERT_DOUBLE_EQ(bsObjectGetString(object, longKey).u.number, 1);
-    ASSERT_TRUE(object.u.object->entries == object.u.object->inline_);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGetString(object, longKey)), 1);
+    ASSERT_TRUE(bsObjectOf(object)->entries == bsObjectOf(object)->inline_);
     bsRelease(longKey);
     bsRelease(object);
 
     object = bsObjectNew();
     bsTestObjectFill(object, "k%d", 0, 40);
     bsRelease(bsObjectKeysSorted(object));
-    ASSERT_NOT_NULL(object.u.object->index);
+    ASSERT_NOT_NULL(bsObjectOf(object)->index);
     BSValue appended = bsStringIntern("k40", 3);
     bsObjectAppend(object, appended, bsNumber(40));
     ASSERT_INT_EQ(bsObjectCount(object), 41);
-    ASSERT_DOUBLE_EQ(bsObjectGet(object, "k40").u.number, 40);
+    ASSERT_DOUBLE_EQ(bsNumberOf(bsObjectGet(object, "k40")), 40);
     BSValue sorted = bsObjectKeysSorted(object);
     ASSERT_VALUE_KEEP(bsArrayGet(sorted, 40), "\"k9\"");
     bsRelease(sorted);
@@ -494,8 +494,8 @@ TEST(library_system)
     {
         BSValue a = bsTestExecute("return systemType(1)");
         BSValue b = bsTestExecute("return systemType(2)");
-        ASSERT_TRUE(a.type == BS_STRING && (a.u.string->flags & BS_STR_INTERNED) != 0);
-        ASSERT_TRUE(a.u.string == b.u.string);
+        ASSERT_TRUE(bsIsType(a, BS_STRING) && (bsStringOf(a)->flags & BS_STR_INTERNED) != 0);
+        ASSERT_TRUE(bsStringOf(a) == bsStringOf(b));
         bsRelease(a);
         bsRelease(b);
     }
@@ -579,7 +579,7 @@ static void bsTestLibraryFetchFn(const BSFetchRequest *requests, BSValue *respon
         if (request->body != NULL) {
             bsSBAppendFormat(&sb, " body=%.*s", (int) request->bodySize, request->body);
         }
-        if (request->headers.type == BS_OBJECT) {
+        if (bsIsType(request->headers, BS_OBJECT)) {
             bsSBAppendFormat(&sb, " headers=%zu", bsObjectCount(request->headers));
         }
         if (count > 1) {
@@ -695,10 +695,10 @@ TEST(library_lookup)
     ASSERT_TRUE(bsValueIs(bsLibraryExpressionFunction(name), bsLibraryScriptFunction("mathMax")));
     bsRelease(name);
     name = bsStringNew("nope");
-    ASSERT_INT_EQ(bsLibraryExpressionFunction(name).type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsLibraryExpressionFunction(name)), BS_NULL);
     bsRelease(name);
-    ASSERT_INT_EQ(bsLibraryScriptFunction("nope").type, BS_NULL);
-    ASSERT_INT_EQ(bsLibraryScriptFunction("mathAbs").type, BS_FUNCTION);
+    ASSERT_INT_EQ(bsValueType(bsLibraryScriptFunction("nope")), BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsLibraryScriptFunction("mathAbs")), BS_FUNCTION);
 
     /* All the expression function aliases resolve */
     static const char *aliases[] = {
@@ -710,7 +710,7 @@ TEST(library_lookup)
     };
     for (size_t ix = 0; ix < sizeof(aliases) / sizeof(aliases[0]); ix++) {
         BSValue aliasName = bsStringNew(aliases[ix]);
-        ASSERT_INT_EQ(bsLibraryExpressionFunction(aliasName).type, BS_FUNCTION);
+        ASSERT_INT_EQ(bsValueType(bsLibraryExpressionFunction(aliasName)), BS_FUNCTION);
         bsRelease(aliasName);
     }
 }
@@ -780,9 +780,9 @@ TEST(library_args_validate_api)
     /* A missing boolean argument with no default is false */
     BSValue args[1] = {bsNumber(5)};
     ASSERT_TRUE(bsArgsValidate(model, 5, args, 1, values, options));
-    ASSERT_DOUBLE_EQ(values[0].u.number, 5);
-    ASSERT_FALSE(values[1].u.boolean);
-    ASSERT_INT_EQ(values[2].type, BS_NULL);
+    ASSERT_DOUBLE_EQ(bsNumberOf(values[0]), 5);
+    ASSERT_FALSE(bsBoolOf(values[1]));
+    ASSERT_INT_EQ(bsValueType(values[2]), BS_NULL);
     bsArgsFree(model, 5, values);
 
     /* The "lt" limit */

@@ -16,7 +16,7 @@ static BSValue bsTestGroups(const char *pattern, const char *subject, unsigned f
 {
     char error[BS_REGEX_ERROR_MAX];
     BSValue regex = bsRegexNew(pattern, strlen(pattern), flags, error, sizeof(error));
-    if (regex.type == BS_NULL) {
+    if (bsIsType(regex, BS_NULL)) {
         bsTestFail(__FILE__, __LINE__, "bsRegexNew(%s) failed: %s", pattern, error);
     }
     BSValue string = bsStringNew(subject);
@@ -47,7 +47,7 @@ static BSValue bsTestGroups(const char *pattern, const char *subject, unsigned f
 static BSValue bsTestMatch(const char *pattern, const char *subject, unsigned flags)
 {
     BSValue groups = bsTestGroups(pattern, subject, flags);
-    BSValue result = groups.type == BS_ARRAY ? bsRetain(bsArrayGet(groups, 0)) : bsNull();
+    BSValue result = bsIsType(groups, BS_ARRAY) ? bsRetain(bsArrayGet(groups, 0)) : bsNull();
     bsRelease(groups);
     return result;
 }
@@ -72,7 +72,7 @@ TEST(regex_literals)
 
     /* An unnamed pattern stores no group-name array */
     BSValue regex = bsRegexNew("abc", 3, 0, NULL, 0);
-    ASSERT_INT_EQ(bsRegexGroupNameValue(regex, 0).type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsRegexGroupNameValue(regex, 0)), BS_NULL);
     bsRelease(regex);
 }
 
@@ -277,8 +277,8 @@ TEST(regex_alternation_and_groups)
     /* Group names */
     BSValue regex = bsRegexNew("(?<year>[0-9]{4})-([0-9]{2})", 28, 0, NULL, 0);
     ASSERT_STR_EQ(bsStringData(bsRegexGroupNameValue(regex, 1)), "year");
-    ASSERT_INT_EQ(bsRegexGroupNameValue(regex, 2).type, BS_NULL);
-    ASSERT_INT_EQ(bsRegexGroupNameValue(regex, 9).type, BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsRegexGroupNameValue(regex, 2)), BS_NULL);
+    ASSERT_INT_EQ(bsValueType(bsRegexGroupNameValue(regex, 9)), BS_NULL);
     bsRelease(regex);
 }
 
@@ -520,7 +520,7 @@ TEST(regex_compile_errors)
     bsTestRegexError("(?:(?<n>a))(?:(?<n>b))", "redefinition of group name 'n' as group 2; was group 1 at position 19");
     /* A name may be shared across top-level alternatives */
     BSValue shared = bsRegexNew("(?:(?<n>a)|x)|(?<n>b)", 21, 0, error, sizeof(error));
-    ASSERT_INT_EQ(shared.type, BS_REGEX);
+    ASSERT_INT_EQ(bsValueType(shared), BS_REGEX);
     ASSERT_STR_EQ(error, "");
     bsRelease(shared);
     bsTestRegexError("(?<1a>x)", "bad character in group name '1a' at position 4");

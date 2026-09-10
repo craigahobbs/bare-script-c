@@ -685,7 +685,7 @@ static bool rxGroupNameRegister(RxCompiler *compiler, size_t group, size_t nameO
 {
     compiler->named = true;
     for (size_t other = 1; other < group; other++) {
-        if (compiler->groupNames[other].type != BS_STRING ||
+        if (!bsIsType(compiler->groupNames[other], BS_STRING) ||
             bsValueCompare(compiler->groupNames[other], compiler->groupNames[group]) != 0) {
             continue;
         }
@@ -770,7 +770,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
             }
             group = compiler->regex->groupCount++;
             compiler->groupNames[group] = name;
-            if (name.type == BS_STRING && !rxGroupNameRegister(compiler, group, nameOffset)) {
+            if (bsIsType(name, BS_STRING) && !rxGroupNameRegister(compiler, group, nameOffset)) {
                 return NULL;
             }
         }
@@ -1769,6 +1769,9 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
 
     RxCompiler compiler;
     memset(&compiler, 0, sizeof(compiler));
+    for (size_t ix = 0; ix < BS_REGEX_GROUPS_MAX; ix++) {
+        compiler.groupNames[ix] = bsNull();
+    }
     compiler.pattern = pattern;
     compiler.size = patternSize;
     compiler.flags = flags;
@@ -1791,7 +1794,7 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         uint32_t groups[BS_REGEX_GROUPS_MAX];
         size_t count = 0;
         for (size_t group = 1; group < regex->groupCount; group++) {
-            if (compiler.groupNames[group].type == BS_STRING &&
+            if (bsIsType(compiler.groupNames[group], BS_STRING) &&
                 bsValueCompare(compiler.groupNames[group], node->u.backref.name) == 0) {
                 groups[count++] = (uint32_t) group;
             }
@@ -1859,33 +1862,33 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
         regex->uniqueNames = !compiler.sharedNames;
     }
 
-    return (BSValue) {.type = BS_REGEX, .u.regex = regex};
+    return bsRefValue(BS_REGEX, regex);
 }
 
 
 /* Called once the shared refcount reaches zero - see bsReleaseInline */
 void bsRegexDestroy(BSValue value)
 {
-    bsRegexFree(value.u.regex);
+    bsRegexFree(bsRegexOf(value));
 }
 
 
 bool bsRegexGroupNamesUnique(BSValue regex)
 {
-    return regex.u.regex->uniqueNames;
+    return bsRegexOf(regex)->uniqueNames;
 }
 
 
 bool bsRegexGroupsNamed(BSValue regex)
 {
-    return regex.u.regex->groupNames != NULL;
+    return bsRegexOf(regex)->groupNames != NULL;
 }
 
 
 BSValue bsRegexGroupNameValue(BSValue regex, size_t group)
 {
-    BSValue *names = regex.u.regex->groupNames;
-    if (names == NULL || group >= regex.u.regex->groupCount) {
+    BSValue *names = bsRegexOf(regex)->groupNames;
+    if (names == NULL || group >= bsRegexOf(regex)->groupCount) {
         return bsNull();
     }
     return names[group];
@@ -2825,7 +2828,7 @@ void bsRegexSubjectFree(BSRegexSubject *subject)
 
 bool bsRegexSearch(BSValue regex, const BSRegexSubject *subject, size_t start, BSRegexMatch *match)
 {
-    BSRegex *compiled = regex.u.regex;
+    BSRegex *compiled = bsRegexOf(regex);
     RxScratch *scratch = &bsRxScratch;
     if (scratch->trail == NULL) {
         scratch->trailCapacity = RX_TRAIL_INITIAL;
