@@ -559,7 +559,7 @@ TEST(runtime_script_model)
     static const char *scriptText = "include <a.bare>\ninclude 'b.bare'\nfunction f(a...):\n"
         "    return a\nendfunction\nasync function g():\nendfunction\n"
         "x = 1\nlabel:\njump label\nreturn x";
-    BSScript *script = bsParseScript(scriptText, strlen(scriptText), 1, "s.bare", NULL);
+    BSScript *script = bsTestScript(scriptText, "s.bare");
     ASSERT_NOT_NULL(script);
     script->system = true;
     BSValue model = bsScriptToModel(script);
@@ -793,7 +793,7 @@ TEST(runtime_coverage_forgotten_model)
     BSValue coverage;
     BSOptions *options = bsTestCoverageOptions(&coverage, true);
     static const char *text = "a = 1\nfunction f(x):\n    return x + a\nendfunction\nreturn f(2)";
-    BSScript *script = bsParseScript(text, strlen(text), 1, "forget.bare", NULL);
+    BSScript *script = bsTestScript(text, "forget.bare");
     ASSERT_NOT_NULL(script);
     bsScriptForgetModel(script);
     ASSERT_NULL(script->code.cover);
@@ -850,7 +850,7 @@ TEST(runtime_coverage)
 
     /* Coverage is not recorded for a script with no name */
     options = bsTestCoverageOptions(&coverage, true);
-    BSScript *script = bsParseScript("a = 1", 5, 1, NULL, NULL);
+    BSScript *script = bsTestScript("a = 1", NULL);
     bsRelease(bsExecuteScript(script, options));
     ASSERT_FALSE(bsObjectHas(coverage, "scripts"));
     bsScriptRelease(script);
@@ -907,7 +907,7 @@ TEST(runtime_coverage_jump)
 TEST(runtime_coverage_cache)
 {
     /* Reusing a script with a new coverage object resets the line-index cache */
-    BSScript *script = bsParseScript("a = 1\nreturn a", strlen("a = 1\nreturn a"), 1, "cache.bare", NULL);
+    BSScript *script = bsTestScript("a = 1\nreturn a", "cache.bare");
     BSValue coverage;
     BSOptions *options = bsTestCoverageOptions(&coverage, true);
     bsRelease(bsExecuteScript(script, options));

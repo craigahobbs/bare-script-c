@@ -72,7 +72,7 @@ static void bsTestParseContains(const char *text, const char *needle)
 
 
 /* Parse expression text and return its model as JSON, or the parse error message */
-static BSValue bsTestParseExpr(const char *text, bool arrayLiterals)
+static BSValue bsTestParseExprOpt(const char *text, bool arrayLiterals)
 {
     BSParserError error = {0};
     BSExpr *expr = bsParseExpression(text, strlen(text), 0, NULL, arrayLiterals, &error);
@@ -89,59 +89,71 @@ static BSValue bsTestParseExpr(const char *text, bool arrayLiterals)
 }
 
 
+/* Parse expression text, without and with array literals */
+static BSValue bsTestParseExpr(const char *text)
+{
+    return bsTestParseExprOpt(text, false);
+}
+
+static BSValue bsTestParseExprArray(const char *text)
+{
+    return bsTestParseExprOpt(text, true);
+}
+
+
 /* The expression form of bsTestParseContains */
 static void bsTestParseExprContains(const char *text, const char *needle)
 {
-    bsTestContainsValue(bsTestParseExpr(text, false), needle);
+    bsTestContainsValue(bsTestParseExpr(text), needle);
 }
 
 
 TEST(parser_expression_literals)
 {
-    ASSERT_VALUE_STRING(bsTestParseExpr("5", false), "{\"number\":5}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("-5", false), "{\"number\":-5}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("+5", false), "{\"number\":5}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("3.14", false), "{\"number\":3.14}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("5.", false), "{\"number\":5}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("1.5e10", false), "{\"number\":15000000000}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("3e-5", false), "{\"number\":0.00003}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("0xFF", false), "{\"number\":255}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("0x", false), "Syntax error\n0x\n ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("1e", false), "Syntax error\n1e\n ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("1 + 1e999", false), "Number out of range\n1 + 1e999\n    ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'abc'", false), "{\"string\":\"abc\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("\"abc\"", false), "{\"string\":\"abc\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'a\\'b'", false), "{\"string\":\"a'b\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'a\\\\b'", false), "{\"string\":\"a\\\\b\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'a\\nb'", false), "{\"string\":\"a\\nb\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'\\r\\t\\b\\f'", false), "{\"string\":\"\\r\\t\\b\\f\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'\\u0041'", false), "{\"string\":\"A\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'\\d'", false), "{\"string\":\"\\\\d\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'\\u00'", false), "{\"string\":\"\\\\u00\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'a\\\\'", false), "{\"string\":\"a\\\\\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("x", false), "{\"variable\":\"x\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("null", false), "{\"variable\":\"null\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("5"), "{\"number\":5}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("-5"), "{\"number\":-5}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("+5"), "{\"number\":5}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("3.14"), "{\"number\":3.14}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("5."), "{\"number\":5}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("1.5e10"), "{\"number\":15000000000}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("3e-5"), "{\"number\":0.00003}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("0xFF"), "{\"number\":255}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("0x"), "Syntax error\n0x\n ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("1e"), "Syntax error\n1e\n ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("1 + 1e999"), "Number out of range\n1 + 1e999\n    ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'abc'"), "{\"string\":\"abc\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("\"abc\""), "{\"string\":\"abc\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'a\\'b'"), "{\"string\":\"a'b\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'a\\\\b'"), "{\"string\":\"a\\\\b\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'a\\nb'"), "{\"string\":\"a\\nb\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'\\r\\t\\b\\f'"), "{\"string\":\"\\r\\t\\b\\f\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'\\u0041'"), "{\"string\":\"A\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'\\d'"), "{\"string\":\"\\\\d\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'\\u00'"), "{\"string\":\"\\\\u00\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'a\\\\'"), "{\"string\":\"a\\\\\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("x"), "{\"variable\":\"x\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("null"), "{\"variable\":\"null\"}");
 }
 
 
 TEST(parser_expression_operators)
 {
-    ASSERT_VALUE_STRING(bsTestParseExpr("1 + 2", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("1 + 2"),
                         "{\"binary\":{\"left\":{\"number\":1},\"op\":\"+\",\"right\":{\"number\":2}}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("1 + 2 * 3", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("1 + 2 * 3"),
                         "{\"binary\":{\"left\":{\"number\":1},\"op\":\"+\",\"right\":"
                         "{\"binary\":{\"left\":{\"number\":2},\"op\":\"*\",\"right\":{\"number\":3}}}}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("1 * 2 + 3", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("1 * 2 + 3"),
                         "{\"binary\":{\"left\":{\"binary\":{\"left\":{\"number\":1},\"op\":\"*\","
                         "\"right\":{\"number\":2}}},\"op\":\"+\",\"right\":{\"number\":3}}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("!a", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("!a"),
                         "{\"unary\":{\"expr\":{\"variable\":\"a\"},\"op\":\"!\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("-a", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("-a"),
                         "{\"unary\":{\"expr\":{\"variable\":\"a\"},\"op\":\"-\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("~a", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("~a"),
                         "{\"unary\":{\"expr\":{\"variable\":\"a\"},\"op\":\"~\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("(a)", false), "{\"group\":{\"variable\":\"a\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("a # comment", false), "{\"variable\":\"a\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("(a)"), "{\"group\":{\"variable\":\"a\"}}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("a # comment"), "{\"variable\":\"a\"}");
 
     /* All the binary operators parse */
     static const char *operators[] = {"**", "*", "/", "%", "+", "-", "<<", ">>", "<=", "<", ">=", ">",
@@ -153,23 +165,23 @@ TEST(parser_expression_operators)
         snprintf(expected, sizeof(expected),
                  "{\"binary\":{\"left\":{\"variable\":\"a\"},\"op\":\"%s\",\"right\":{\"variable\":\"b\"}}}",
                  operators[ix]);
-        ASSERT_VALUE_STRING(bsTestParseExpr(text, false), expected);
+        ASSERT_VALUE_STRING(bsTestParseExpr(text), expected);
     }
 }
 
 
 TEST(parser_expression_functions)
 {
-    ASSERT_VALUE_STRING(bsTestParseExpr("f()", false), "{\"function\":{\"args\":[],\"name\":\"f\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("f(1)", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("f()"), "{\"function\":{\"args\":[],\"name\":\"f\"}}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("f(1)"),
                         "{\"function\":{\"args\":[{\"number\":1}],\"name\":\"f\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("f(1, 2)", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("f(1, 2)"),
                         "{\"function\":{\"args\":[{\"number\":1},{\"number\":2}],\"name\":\"f\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("f (1)", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("f (1)"),
                         "{\"function\":{\"args\":[{\"number\":1}],\"name\":\"f\"}}");
 
     /* Many arguments grow the argument array */
-    ASSERT_VALUE_STRING(bsTestParseExpr("f(1,2,3,4,5,6)", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("f(1,2,3,4,5,6)"),
                         "{\"function\":{\"args\":[{\"number\":1},{\"number\":2},{\"number\":3},"
                         "{\"number\":4},{\"number\":5},{\"number\":6}],\"name\":\"f\"}}");
 }
@@ -177,42 +189,42 @@ TEST(parser_expression_functions)
 
 TEST(parser_expression_literals_compound)
 {
-    ASSERT_VALUE_STRING(bsTestParseExpr("{}", false), "{\"function\":{\"args\":[],\"name\":\"objectNew\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("{'a': 1}", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("{}"), "{\"function\":{\"args\":[],\"name\":\"objectNew\"}}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("{'a': 1}"),
                         "{\"function\":{\"args\":[{\"string\":\"a\"},{\"number\":1}],\"name\":\"objectNew\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("{'a': 1, 'b': 2}", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("{'a': 1, 'b': 2}"),
                         "{\"function\":{\"args\":[{\"string\":\"a\"},{\"number\":1},{\"string\":\"b\"},"
                         "{\"number\":2}],\"name\":\"objectNew\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[]", true), "{\"function\":{\"args\":[],\"name\":\"arrayNew\"}}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[1, 2]", true),
+    ASSERT_VALUE_STRING(bsTestParseExprArray("[]"), "{\"function\":{\"args\":[],\"name\":\"arrayNew\"}}");
+    ASSERT_VALUE_STRING(bsTestParseExprArray("[1, 2]"),
                         "{\"function\":{\"args\":[{\"number\":1},{\"number\":2}],\"name\":\"arrayNew\"}}");
 
     /* Without array literals, brackets are a variable name */
-    ASSERT_VALUE_STRING(bsTestParseExpr("[Height (ft)]", false), "{\"variable\":\"Height (ft)\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[ a ]", false), "{\"variable\":\"a \"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[a\\]b]", false), "{\"variable\":\"a]b\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[a\\\\b]", false), "{\"variable\":\"a\\\\b\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("[Height (ft)]"), "{\"variable\":\"Height (ft)\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("[ a ]"), "{\"variable\":\"a \"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("[a\\]b]"), "{\"variable\":\"a]b\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("[a\\\\b]"), "{\"variable\":\"a\\\\b\"}");
 }
 
 
 TEST(parser_expression_errors)
 {
-    ASSERT_VALUE_STRING(bsTestParseExpr("", false), "Syntax error\n\n^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("1 +", false), "Syntax error\n1 +\n   ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("(1", false), "Unmatched parenthesis\n(1\n^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("f(1", false), "Syntax error\nf(1\n   ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("f(1 2)", false), "Syntax error\nf(1 2)\n   ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'abc", false), "Syntax error\n'abc\n^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("{'a'}", false), "Syntax error\n{'a'}\n    ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("{'a': 1 'b': 2}", false), "Syntax error\n{'a': 1 'b': 2}\n       ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[1 2]", true), "Syntax error\n[1 2]\n  ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[1", true), "Syntax error\n[1\n  ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[]", false), "Syntax error\n[]\n^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[a", false), "Syntax error\n[a\n^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("1 2", false), "Syntax error\n1 2\n ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("!", false), "Syntax error\n!\n ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("{1: ", false), "Syntax error\n{1: \n   ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("[1, ", true), "Syntax error\n[1, \n   ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr(""), "Syntax error\n\n^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("1 +"), "Syntax error\n1 +\n   ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("(1"), "Unmatched parenthesis\n(1\n^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("f(1"), "Syntax error\nf(1\n   ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("f(1 2)"), "Syntax error\nf(1 2)\n   ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'abc"), "Syntax error\n'abc\n^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("{'a'}"), "Syntax error\n{'a'}\n    ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("{'a': 1 'b': 2}"), "Syntax error\n{'a': 1 'b': 2}\n       ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExprArray("[1 2]"), "Syntax error\n[1 2]\n  ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExprArray("[1"), "Syntax error\n[1\n  ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("[]"), "Syntax error\n[]\n^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("[a"), "Syntax error\n[a\n^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("1 2"), "Syntax error\n1 2\n ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("!"), "Syntax error\n!\n ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("{1: "), "Syntax error\n{1: \n   ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExprArray("[1, "), "Syntax error\n[1, \n   ^\n");
 
     /* The error argument is optional */
     ASSERT_NULL(bsParseExpression("1 +", 3, 0, NULL, false, NULL));
@@ -432,10 +444,10 @@ TEST(parser_no_script_name)
     bsParserErrorFree(&error);
 
     /* A parse error with no error output */
-    ASSERT_NULL(bsParseScript("a = 1 +", 7, 1, NULL, NULL));
+    ASSERT_NULL(bsTestScript("a = 1 +", NULL));
 
     /* Script reference counting */
-    script = bsParseScript("a = 1", 5, 1, NULL, NULL);
+    script = bsTestScript("a = 1", NULL);
     bsScriptRetain(script);
     bsScriptRelease(script);
     bsScriptRelease(script);
@@ -450,26 +462,26 @@ TEST(parser_coverage_gaps)
     bsTestParseContains("asyncx function f():\nendfunction", "Syntax error");
 
     /* Upper-case and invalid unicode string escapes */
-    ASSERT_VALUE_STRING(bsTestParseExpr("'\\u00FF'", false), "{\"string\":\"\xc3\xbf\"}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("'\\u00zz'", false), "{\"string\":\"\\\\u00zz\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'\\u00FF'"), "{\"string\":\"\xc3\xbf\"}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("'\\u00zz'"), "{\"string\":\"\\\\u00zz\"}");
 
     /* An object literal with a failing value expression */
     bsTestParseExprContains("{'a': 1 +}", "Syntax error");
     bsTestParseExprContains("{1 +: 2}", "Syntax error");
 
     /* An array literal with many values grows the argument array */
-    ASSERT_VALUE_STRING(bsTestParseExpr("[1,2,3,4,5]", true),
+    ASSERT_VALUE_STRING(bsTestParseExprArray("[1,2,3,4,5]"),
                         "{\"function\":{\"args\":[{\"number\":1},{\"number\":2},{\"number\":3},"
                         "{\"number\":4},{\"number\":5}],\"name\":\"arrayNew\"}}");
 
     /* An object literal with many key/value pairs */
-    ASSERT_VALUE_STRING(bsTestParseExpr("{'a':1,'b':2,'c':3}", false),
+    ASSERT_VALUE_STRING(bsTestParseExpr("{'a':1,'b':2,'c':3}"),
                         "{\"function\":{\"args\":[{\"string\":\"a\"},{\"number\":1},{\"string\":\"b\"},"
                         "{\"number\":2},{\"string\":\"c\"},{\"number\":3}],\"name\":\"objectNew\"}}");
 
     /* A negative exponent in a number literal */
-    ASSERT_VALUE_STRING(bsTestParseExpr("1e+3", false), "{\"number\":1000}");
-    ASSERT_VALUE_STRING(bsTestParseExpr("-1.5e-2", false), "{\"number\":-0.015}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("1e+3"), "{\"number\":1000}");
+    ASSERT_VALUE_STRING(bsTestParseExpr("-1.5e-2"), "{\"number\":-0.015}");
 
     /* A group with a failing inner expression */
     bsTestParseExprContains("(1 +)", "Syntax error");
@@ -584,11 +596,11 @@ TEST(parser_keyword_fallthrough)
 TEST(parser_final_coverage)
 {
     /* A function call whose first argument fails to parse */
-    ASSERT_VALUE_STRING(bsTestParseExpr("f(", false), "Syntax error\nf(\n  ^\n");
-    ASSERT_VALUE_STRING(bsTestParseExpr("f(1,)", false), "Syntax error\nf(1,)\n    ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("f("), "Syntax error\nf(\n  ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("f(1,)"), "Syntax error\nf(1,)\n    ^\n");
 
     /* A "0x" prefix with no hex digits parses as the number zero followed by an identifier */
-    ASSERT_VALUE_STRING(bsTestParseExpr("0xzz", false), "Syntax error\n0xzz\n ^\n");
+    ASSERT_VALUE_STRING(bsTestParseExpr("0xzz"), "Syntax error\n0xzz\n ^\n");
 
     /* A function definition whose name is not followed by an open parenthesis */
     bsTestParseContains("function f:", "Syntax error");
@@ -621,7 +633,7 @@ TEST(parser_bootstrap_errors)
 
     /* The error argument is optional */
     ASSERT_NULL(bsParseExpression(bsStringData(text), bsStringSize(text), 0, NULL, false, NULL));
-    ASSERT_NULL(bsParseScript(bsStringData(text), bsStringSize(text), 1, NULL, NULL));
+    ASSERT_NULL(bsTestScript(bsStringData(text), NULL));
     bsRelease(text);
 }
 
@@ -629,7 +641,7 @@ TEST(parser_bootstrap_errors)
 TEST(parser_lint)
 {
     static const char *text = "function f():\n    unused = 1\n    return 2\nendfunction\n1 + 2\n";
-    BSScript *script = bsParseScript(text, strlen(text), 1, "lint.bare", NULL);
+    BSScript *script = bsTestScript(text, "lint.bare");
     ASSERT_NOT_NULL(script);
 
     BSValue warnings = bsLintScript(script, bsNull());
@@ -651,7 +663,7 @@ TEST(parser_lint)
 
     /* A clean script lints without warnings */
     static const char *clean = "function f(a):\n    return a\nendfunction\nreturn f(1)\n";
-    script = bsParseScript(clean, strlen(clean), 1, "clean.bare", NULL);
+    script = bsTestScript(clean, "clean.bare");
     warnings = bsLintScript(script, bsNull());
     ASSERT_VALUE(warnings, "[]");
     bsScriptRelease(script);

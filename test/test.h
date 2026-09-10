@@ -128,6 +128,9 @@ BSOptions *bsTestOptions(void);
 /* Execute a compiled script with capturing test options and return its owned result */
 BSValue bsTestExecuteScript(BSScript *script);
 
+/* Parse script text from line 1 as "scriptName", with no error out; NULL if it does not parse */
+BSScript *bsTestScript(const char *text, const char *scriptName);
+
 /* Decode a JSON model and compile it to a script named "scriptName" (NULL keeps the model's); NULL if invalid */
 BSScript *bsTestScriptFromJSON(const char *json, const char *scriptName);
 

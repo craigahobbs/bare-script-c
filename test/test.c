@@ -211,6 +211,12 @@ BSValue bsTestExecuteScript(BSScript *script)
 }
 
 
+BSScript *bsTestScript(const char *text, const char *scriptName)
+{
+    return bsParseScript(text, strlen(text), 1, scriptName, NULL);
+}
+
+
 BSScript *bsTestScriptFromJSON(const char *json, const char *scriptName)
 {
     BSValue model = bsJSONDecode(json, strlen(json), NULL);

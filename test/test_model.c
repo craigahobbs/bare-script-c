@@ -51,7 +51,7 @@ TEST(model_script_round_trip)
         "x = 1 + f(2, 'three') * -y || (z) && !w\n"
         "outer(1)\n";
 
-    BSScript *script = bsParseScript(text, strlen(text), 1, "round.bare", NULL);
+    BSScript *script = bsTestScript(text, "round.bare");
     ASSERT_NOT_NULL(script);
 
     BSValue model = bsScriptToModel(script);
