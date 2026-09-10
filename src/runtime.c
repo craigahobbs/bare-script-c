@@ -550,7 +550,7 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
         }
         break;
     BS_INTRIN(ARRAY_NEW, true, bsArrayFromArgs(args, argCount))
-    BS_INTRIN(ARRAY_NEW_SIZE, argCount == 2 && bsIntrinsicIndex(args[0], &index) && index <= 4294967295u,
+    BS_INTRIN(ARRAY_NEW_SIZE, argCount == 2 && bsIntrinsicIndex(args[0], &index) && index <= UINT32_MAX,
               bsArrayNewSizeValue(index, args[1]))
     BS_INTRIN(NUMBER_PARSE_INT, argCount == 1 && bsIsType(args[0], BS_STRING), bsIntrinsicParseInt(args[0]))
     BS_INTRIN(OBJECT_COPY, argCount == 1 && bsIsType(args[0], BS_OBJECT), bsObjectCopy(args[0]))
@@ -1008,14 +1008,18 @@ static inline void bsIntrinResult(const BSInst *inst, BSValue *regs, BSValue val
     }
 }
 
+/* Open a single-shape intrinsic: the call's argument words as "args", or a return to the general call */
+#define BS_INTRIN_ARGS(id) \
+    const BSInst *args = bsIntrinArgs(code, inst, globals, options, (id)); \
+    if (args == NULL) { \
+        return false; \
+    }
+
 static inline bool bsIntrinArrayGet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                          BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_ARRAY_GET);
+    BS_INTRIN_ARGS(BS_INTRIN_ARRAY_GET)
     size_t index;
-    if (args == NULL) {
-        return false;
-    }
     BSValue array = bsOperandRead(regs, args->a);
     if (!bsIsType(array, BS_ARRAY) || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) ||
         index >= bsArrayOf(array)->count) {
@@ -1028,10 +1032,7 @@ static inline bool bsIntrinArrayGet(const BSCode *code, const BSInst *inst, BSVa
 static inline bool bsIntrinArrayLength(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                             BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_ARRAY_LENGTH);
-    if (args == NULL) {
-        return false;
-    }
+    BS_INTRIN_ARGS(BS_INTRIN_ARRAY_LENGTH)
     BSValue array = bsOperandRead(regs, args->a);
     if (!bsIsType(array, BS_ARRAY)) {
         return false;
@@ -1043,10 +1044,7 @@ static inline bool bsIntrinArrayLength(const BSCode *code, const BSInst *inst, B
 static BS_NOINLINE bool bsIntrinArrayPush(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_ARRAY_PUSH);
-    if (args == NULL) {
-        return false;
-    }
+    BS_INTRIN_ARGS(BS_INTRIN_ARRAY_PUSH)
     BSValue array = bsOperandRead(regs, args->a);
     if (!bsIsType(array, BS_ARRAY)) {
         return false;
@@ -1059,11 +1057,8 @@ static BS_NOINLINE bool bsIntrinArrayPush(const BSCode *code, const BSInst *inst
 static inline bool bsIntrinArraySet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                          BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_ARRAY_SET);
+    BS_INTRIN_ARGS(BS_INTRIN_ARRAY_SET)
     size_t index;
-    if (args == NULL) {
-        return false;
-    }
     BSValue array = bsOperandRead(regs, args->a);
     if (!bsIsType(array, BS_ARRAY) || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) ||
         index >= bsArrayOf(array)->count) {
@@ -1096,10 +1091,7 @@ static inline BSObjectEntry *bsObjectEntryMemo(BSObject *object, BSString *key, 
 static inline bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_OBJECT_GET);
-    if (args == NULL) {
-        return false;
-    }
+    BS_INTRIN_ARGS(BS_INTRIN_OBJECT_GET)
     BSValue object = bsOperandRead(regs, args->a);
     BSValue key = bsOperandRead(regs, args->b);
     if (!bsIsType(object, BS_OBJECT) || !bsIsType(key, BS_STRING)) {
@@ -1115,10 +1107,7 @@ static inline bool bsIntrinObjectGet(const BSCode *code, const BSInst *inst, BSV
 static inline bool bsIntrinObjectHas(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_OBJECT_HAS);
-    if (args == NULL) {
-        return false;
-    }
+    BS_INTRIN_ARGS(BS_INTRIN_OBJECT_HAS)
     BSValue object = bsOperandRead(regs, args->a);
     BSValue key = bsOperandRead(regs, args->b);
     if (!bsIsType(object, BS_OBJECT) || !bsIsType(key, BS_STRING)) {
@@ -1132,10 +1121,7 @@ static inline bool bsIntrinObjectHas(const BSCode *code, const BSInst *inst, BSV
 static inline bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_OBJECT_SET);
-    if (args == NULL) {
-        return false;
-    }
+    BS_INTRIN_ARGS(BS_INTRIN_OBJECT_SET)
     BSValue object = bsOperandRead(regs, args->a);
     BSValue key = bsOperandRead(regs, args->b);
     if (!bsIsType(object, BS_OBJECT) || !bsIsType(key, BS_STRING)) {
@@ -1158,11 +1144,8 @@ static inline bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSV
 static inline bool bsIntrinStringCharCodeAt(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                                  BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_STRING_CHAR_CODE_AT);
+    BS_INTRIN_ARGS(BS_INTRIN_STRING_CHAR_CODE_AT)
     size_t index;
-    if (args == NULL) {
-        return false;
-    }
     BSValue string = bsOperandRead(regs, args->a);
     if (!bsIsType(string, BS_STRING) || bsStringOf(string)->length != bsStringOf(string)->size ||
         !bsIntrinsicIndex(bsOperandRead(regs, args->b), &index) || index >= bsStringOf(string)->size) {
@@ -1175,10 +1158,7 @@ static inline bool bsIntrinStringCharCodeAt(const BSCode *code, const BSInst *in
 static inline bool bsIntrinStringLength(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                              BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_STRING_LENGTH);
-    if (args == NULL) {
-        return false;
-    }
+    BS_INTRIN_ARGS(BS_INTRIN_STRING_LENGTH)
     BSValue string = bsOperandRead(regs, args->a);
     if (!bsIsType(string, BS_STRING)) {
         return false;
@@ -1190,12 +1170,9 @@ static inline bool bsIntrinStringLength(const BSCode *code, const BSInst *inst, 
 static BS_NOINLINE bool bsIntrinStringSlice(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                             BSOptions *options)
 {
-    const BSInst *args = bsIntrinArgs(code, inst, globals, options, BS_INTRIN_STRING_SLICE);
+    BS_INTRIN_ARGS(BS_INTRIN_STRING_SLICE)
     size_t begin;
     size_t end;
-    if (args == NULL) {
-        return false;
-    }
     BSValue string = bsOperandRead(regs, args->a);
     if (!bsIsType(string, BS_STRING) || !bsIntrinsicIndex(bsOperandRead(regs, args->b), &begin)) {
         return false;

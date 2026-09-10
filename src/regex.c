@@ -195,7 +195,6 @@ static inline unsigned rxLowestBit64(uint64_t mask)
 
 typedef struct RxInst RxInst;
 typedef struct RxCompiler RxCompiler;
-static void rxEmitProgram(RxCompiler *compiler);
 
 struct BSRegex {
     int32_t refcount;
@@ -867,9 +866,7 @@ static RxNode *rxParseAtom(RxCompiler *compiler)
             RxNode *node = rxNodeNew(compiler, RX_BACKREF);
             node->u.backref.name = name;
             BS_GROW(compiler->namedRefs, compiler->namedRefCount, compiler->namedRefCap, 4);
-            compiler->namedRefs[compiler->namedRefCount].node = node;
-            compiler->namedRefs[compiler->namedRefCount].offset = nameOffset;
-            compiler->namedRefCount++;
+            compiler->namedRefs[compiler->namedRefCount++] = (struct RxNamedRef) {node, nameOffset};
             return node;
         }
 
@@ -2212,6 +2209,16 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, bool scan)
 #define RX_NEXT() continue
 #endif
 
+/* An instruction that consumes one code point the subject must hold and "match" must accept */
+#define RX_ATOM(name, match) \
+    RX_CASE(name) \
+        if (pos >= length || !(match)) { \
+            goto backtrack; \
+        } \
+        pos++; \
+        pc++; \
+        RX_NEXT();
+
     const RxInst *inst;
     for (;;) {
         inst = &prog[pc];
@@ -2221,45 +2228,11 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, bool scan)
         switch (inst->op) {
 #endif
 
-        RX_CASE(CHAR)
-            if (pos >= length || rxCode(state, pos) != inst->operand) {
-                goto backtrack;
-            }
-            pos++;
-            pc++;
-            RX_NEXT();
-
-        RX_CASE(CHAR_FOLD)
-            if (pos >= length || rxCanon(rxCode(state, pos)) != inst->operand) {
-                goto backtrack;
-            }
-            pos++;
-            pc++;
-            RX_NEXT();
-
-        RX_CASE(ANY)
-            if (pos >= length || rxIsLineTerminator(rxCode(state, pos))) {
-                goto backtrack;
-            }
-            pos++;
-            pc++;
-            RX_NEXT();
-
-        RX_CASE(ANY_ALL)
-            if (pos >= length) {
-                goto backtrack;
-            }
-            pos++;
-            pc++;
-            RX_NEXT();
-
-        RX_CASE(CLASS)
-            if (pos >= length || !rxClassMatch(&state->classes[inst->operand], rxCode(state, pos))) {
-                goto backtrack;
-            }
-            pos++;
-            pc++;
-            RX_NEXT();
+        RX_ATOM(CHAR, rxCode(state, pos) == inst->operand)
+        RX_ATOM(CHAR_FOLD, rxCanon(rxCode(state, pos)) == inst->operand)
+        RX_ATOM(ANY, !rxIsLineTerminator(rxCode(state, pos)))
+        RX_ATOM(ANY_ALL, true)
+        RX_ATOM(CLASS, rxClassMatch(&state->classes[inst->operand], rxCode(state, pos)))
 
         RX_CASE(JMP)
             pc = inst->a;
@@ -2783,6 +2756,7 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, bool scan)
     }
     return false; /* GCOV_EXCL_LINE - the loop leaves only by returning; this satisfies the compiler */
 }
+#undef RX_ATOM
 #undef RX_CASE
 #undef RX_NEXT
 
