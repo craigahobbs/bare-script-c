@@ -102,7 +102,10 @@ with no instruction of its own and no operand tag test; the names a call, load, 
 refers to live in a table of their own. Jump labels become instruction indexes during emit. A slot holding the internal unset
 marker falls through to the globals object: the emitter's definite-assignment analysis (a must-
 analysis over each function body's labels and jumps) reads a slot that is definitely assigned as a
-plain register operand, and one that might be unset through `LOAD_SLOT`, which tests. Group nodes
+plain register operand, and one that might be unset through `LOAD_SLOT`, which tests. The emitter
+records the slots `LOAD_SLOT` and `CALL_SLOT` name (`unsetSlots`), the only ones a call marks unset -
+the rest of a fresh frame is zero bytes, the number zero, which no instruction reads and releasing
+costs nothing. Group nodes
 stay in the model and flatten only in the code stream. The interpreter is `bsRunCode` in
 `src/runtime.c`.
 

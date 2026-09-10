@@ -241,9 +241,9 @@ built so a literal is read like any other register, with no tag test on the oper
 operands in the words that follow it, read into a borrowed argument array without a push or a
 reference count. The emitter counts each chunk's temporaries, so the caller fills a frame's
 registers once - the interpreter never allocates its own. A function called more than once keeps
-a resident frame: its constants stay in place, a call fills only its slots, and the owned registers
-are released to null on the way out; a recursive call, finding the frame busy, builds one of its
-own. The emitter compiles a jump's condition as
+a resident frame: its constants stay in place, a call fills only its arguments, and the owned
+registers are released to null on the way out; a recursive call, finding the frame busy, builds one
+of its own. The emitter compiles a jump's condition as
 jumps: a comparison is one comparison jump, `and` and `or` short-circuit through jumps of their
 own, and a `not` flips the sense, so `jumpif (a < b && c < d)` is two instructions. The names a call site, load site, or unknown-label trap refers to are not operands
 and live in a table of their own, so a frame copies only literals. A local read before
@@ -251,7 +251,9 @@ it is assigned falls through to the global of the same name, which would cost ev
 a test; instead the emitter runs a definite-assignment analysis over each function body - a
 forward must-analysis across the basic blocks its labels and jumps delimit - and reads a slot
 that is definitely assigned as a bare register, leaving the test to the reads that might find the
-slot unassigned. Every global
+slot unassigned. The emitter keeps the slots those reads name, so a call marks only them unset and
+fills every other register with zero bytes, which no instruction reads and releasing costs nothing.
+Every global
 function call, global variable read, and global variable write compiles to a per-site cache that
 points at the globals object's value slot for the name; the cache is re-resolved only when a key is added to or removed
 from the globals object (its *structural generation*), so an assignment to a global never

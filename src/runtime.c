@@ -399,10 +399,13 @@ static void bsScriptFunctionFree(void *data)
 /*
  * The script function implementation
  *
- * The registers are the slots, filled from the arguments, then the temporaries, null, then the
+ * The registers are the slots, filled from the arguments, then the temporaries, then the
  * constants. A function called more than once keeps a resident frame: its constants stay in
  * place and its owned registers are released to null on the way out, so a call fills only the
- * slots. A recursive call, finding the frame busy, builds a frame of its own.
+ * arguments. A recursive call, finding the frame busy, builds a frame of its own, its registers
+ * zeroed - the number zero, which no instruction reads and releasing costs nothing, since the
+ * emitter writes a temporary before it reads it. The exceptions are the slots LOAD_SLOT and
+ * CALL_SLOT read, marked unset so they fall through to the globals.
  */
 static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
@@ -425,9 +428,7 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
         } else {
             regs = regCount <= BS_REGS_INLINE ? regsInline : bsAlloc(regCount * sizeof(BSValue));
         }
-        for (size_t ix = slotCount; ix < ownedCount; ix++) {
-            regs[ix] = bsNull();
-        }
+        memset(regs, 0, ownedCount * sizeof(BSValue));
         memcpy(regs + ownedCount, def->code.constants, def->code.constantCount * sizeof(BSValue));
     }
     def->called = true;
@@ -440,8 +441,11 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
             regs[ix] = ix < argCount ? bsRetain(args[ix]) : bsNull();
         }
     }
-    for (size_t ix = def->argCount; ix < slotCount; ix++) {
-        regs[ix] = bsUnset();
+    for (size_t ix = 0; ix < def->code.unsetCount; ix++) {
+        size_t slot = def->code.unsetSlots[ix];
+        if (slot >= def->argCount) {
+            regs[slot] = bsUnset();
+        }
     }
 
     BSValue result = bsRunCode(&def->code, scriptFunction->script, options, regs, bsNull(), false);

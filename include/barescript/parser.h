@@ -73,6 +73,8 @@ typedef struct BSCode {
     BSObject *coverOwner;  /* the coverage object the counts belong to */
     BSValue *slotNames;
     size_t slotCount;
+    uint16_t *unsetSlots; /* the slots a LOAD_SLOT or CALL_SLOT reads - the only ones a call marks unset */
+    size_t unsetCount;
 } BSCode;
 
 

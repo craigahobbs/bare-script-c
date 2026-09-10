@@ -42,6 +42,7 @@ static void bsCodeFree(BSCode *code)
         bsRelease(code->slotNames[ix]);
     }
     free(code->slotNames);
+    free(code->unsetSlots);
     memset(code, 0, sizeof(*code));
 }
 
@@ -633,6 +634,9 @@ typedef struct {
     BSValue *slotNames;
     size_t slotCount;
     size_t slotCap;
+    uint16_t *unsetSlots; /* the slots read through LOAD_SLOT or CALL_SLOT, in order, without repeats */
+    size_t unsetCount;
+    size_t unsetCap;
     BSValue slotMap;
     BSValue constMap;     /* interned constant string -> constant index */
     BSValue nameMap;      /* interned name -> name index */
@@ -907,6 +911,23 @@ static inline bool bsAssignedTest(const BSEmit *e, int slot)
 static inline void bsAssignedSet(BSEmit *e, int slot)
 {
     e->assigned[slot / 32] |= (uint32_t) 1 << (slot % 32);
+}
+
+
+/*
+ * Record a slot an instruction reads before it is certainly assigned - a LOAD_SLOT, or a CALL_SLOT
+ * calling what a local holds. A frame marks these slots unset, so such a read falls through to the
+ * globals; every other slot is written before it is read, so a call leaves it as it finds it.
+ */
+static void bsEmitUnsetSlot(BSEmit *e, uint16_t slot)
+{
+    for (size_t ix = 0; ix < e->unsetCount; ix++) {
+        if (e->unsetSlots[ix] == slot) {
+            return;
+        }
+    }
+    BS_GROW(e->unsetSlots, e->unsetCount, e->unsetCap, 4);
+    e->unsetSlots[e->unsetCount++] = slot;
 }
 
 
@@ -1222,6 +1243,7 @@ static void bsEmitCallTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t ds
     e->tempTop = base;
     int slot = bsSlotFind(e, name);
     if (slot >= 0) {
+        bsEmitUnsetSlot(e, (uint16_t) slot);
         bsEmitInst(e, BS_OP_CALL_SLOT, dst, (uint16_t) slot, (uint16_t) argCount);
     } else {
         bsEmitInst(e, bsCallOpcode(bsStringData(name), argCount), dst, bsEmitSite(e, name), (uint16_t) argCount);
@@ -1317,6 +1339,7 @@ static void bsEmitExprTo(BSEmit *e, const BSAst *ast, uint32_t id, uint16_t dst)
                 return;
             }
             if (!bsAssignedTest(e, slot)) {
+                bsEmitUnsetSlot(e, (uint16_t) slot);
                 bsEmitInst(e, BS_OP_LOAD_SLOT, dst, (uint16_t) slot, 0);
                 return;
             }
@@ -1578,6 +1601,8 @@ static bool bsEmitFinish(BSEmit *e, BSCode *code)
     code->coverCount = e->coverCount;
     code->slotNames = e->slotNames;
     code->slotCount = e->slotCount;
+    code->unsetSlots = e->unsetSlots;
+    code->unsetCount = e->unsetCount;
     code->caches = e->caches;
     return !e->overflow;
 }
