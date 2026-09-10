@@ -164,21 +164,30 @@ BSValue bsStringNewAscii(const char *text, size_t size);
  * A string of "size" bytes of a string at a byte offset: a short one copies, a longer one shares
  * the parent's bytes - a slice, which holds the root parent - so the parser's rest-of-the-line
  * slices and split pieces copy nothing. "length" is the span's code point count, or SIZE_MAX to
- * count it. A span shorter than BS_STRING_SLICE_MIN is copied: below it the copy costs less than
- * the parent bookkeeping, and a copy of a line-sized span reuses the blocks the last line freed.
+ * count it. A span shorter than "min" bytes is copied: BS_STRING_SLICE_MIN for a slice or a match
+ * group, below which the copy costs less than the parent bookkeeping and a copy of a line-sized span
+ * reuses the blocks the last line freed; BS_STRING_SPLIT_MIN for the pieces of a split, which are
+ * every piece of one string at once and whose parent the script holds anyway - a slice header is
+ * the smallest pool block, so from thirty-two bytes a piece shared costs less than a piece copied.
  */
 #define BS_STRING_SLICE_MIN 96
+#define BS_STRING_SPLIT_MIN 32
 BSValue bsStringSliceShare(BSValue parent, size_t offset, size_t size, size_t length);
 
-static inline BSValue bsStringSliceBytes(BSValue parent, size_t offset, size_t size, size_t length)
+static inline BSValue bsStringSliceBytesMin(BSValue parent, size_t offset, size_t size, size_t length, size_t min)
 {
     const BSString *source = parent.u.string;
-    if (size >= BS_STRING_SLICE_MIN) {
+    if (size >= min) {
         return bsStringSliceShare(parent, offset, size, length);
     }
     const char *text = source->data + offset;
     return length == size || source->length == source->size ? bsStringNewAscii(text, size) :
         bsStringNewSize(text, size);
+}
+
+static inline BSValue bsStringSliceBytes(BSValue parent, size_t offset, size_t size, size_t length)
+{
+    return bsStringSliceBytesMin(parent, offset, size, length, BS_STRING_SLICE_MIN);
 }
 
 /*

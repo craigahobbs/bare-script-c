@@ -234,6 +234,26 @@ TEST(value_string_slice)
         "arrayLength(stringSplitLines(s + '\\n' + s)), stringSlice(t, 30) == stringSlice(t, 30), "
         "objectGet(objectNew(stringSlice(s, 20), 1), stringSlice(s, 20)), stringLength(stringReplace(stringSlice(s, 1), 'z', 'y'))]"),
         "[2,200,2,true,1,199]");
+
+    /* A split's pieces share their parent from thirty-two bytes, where a slice header costs no more than a copy */
+    BSValue text40 = bsTestRepeat("", "abcd", 10, "");
+    BSValue piece = bsStringSliceBytesMin(text40, 0, 40, SIZE_MAX, BS_STRING_SPLIT_MIN);
+    ASSERT_TRUE((piece.u.string->flags & BS_STR_SLICE) != 0);
+    ASSERT_INT_EQ(text40.u.string->refcount, 2);
+    BSValue shortPiece = bsStringSliceBytesMin(text40, 0, 31, SIZE_MAX, BS_STRING_SPLIT_MIN);
+    ASSERT_TRUE((shortPiece.u.string->flags & BS_STR_SLICE) == 0);
+    BSValue sliced = bsStringSliceBytes(text40, 0, 40, SIZE_MAX);
+    ASSERT_TRUE((sliced.u.string->flags & BS_STR_SLICE) == 0);
+    bsRelease(sliced);
+    bsRelease(shortPiece);
+    bsRelease(piece);
+    ASSERT_INT_EQ(text40.u.string->refcount, 1);
+    bsRelease(text40);
+    ASSERT_VALUE(bsTestExecute(
+        "s = stringRepeat('abcd', 10)\nparts = stringSplit(s + ',' + s + ',x', ',')\n"
+        "lines = stringSplitLines(s + '\\r\\n' + s)\n"
+        "return [arrayLength(parts), arrayGet(parts, 1) == s, arrayGet(parts, 2), arrayGet(lines, 0) == s, stringLength(arrayGet(lines, 1))]"),
+        "[3,true,\"x\",true,40]");
 }
 
 

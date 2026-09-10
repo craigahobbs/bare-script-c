@@ -53,9 +53,13 @@ that has been indexed, the index block (which then keeps the hash in its first w
 to the bytes - followed, as a rule, by the NUL-terminated payload in the same allocation; a string
 past the pool's size classes opens its storage with the capacity of the bytes that follow, and a
 pooled string's capacity is its class's. A slice of ninety-six bytes or more - `stringSlice`,
-a match group, a split piece, the parser's rest of the line after each token - shares its parent's
+a match group, the parser's rest of the line after each token - shares its parent's
 bytes instead: its header, the smallest pool block, points into them and its storage holds the root
-parent, retained, so a slice of a slice shares the same bytes and a parent outlives its slices. A
+parent, retained, so a slice of a slice shares the same bytes and a parent outlives its slices. The
+pieces of a split - `stringSplit`, `stringSplitLines` - share from thirty-two bytes: they are every
+piece of one string at once, the script holds that string anyway, and from there a slice header costs
+no more than the copy would, so a log split into three hundred thousand lines costs a header per line
+rather than a copy of each. A
 slice's span is not NUL-terminated; the size-aware readers take it as it is, and `bsStringData`,
 which promises a C string, gives a slice bytes of its own first. Strings cache their code point length, so an
 all-ASCII string - the common case - indexes by byte. Construction skips the UTF-8 walk when the

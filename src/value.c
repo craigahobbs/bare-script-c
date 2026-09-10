@@ -738,8 +738,9 @@ BSValue bsStringSliceShare(BSValue parent, size_t offset, size_t size, size_t le
     BSString *source = parent.u.string;
     char *text = source->data + offset;
     if (length == SIZE_MAX) {
-        /* A span of a valid non-ASCII string at code point boundaries is valid itself */
-        length = source->length == source->size ? size : bsUTF8Length(text, size);
+        /* A span of a valid non-ASCII string at code point boundaries is valid itself - and usually
+           ASCII, which the word-at-a-time test settles before the code point count would */
+        length = source->length == source->size || bsUTF8IsAscii(text, size) ? size : bsUTF8Length(text, size);
     }
 
     /* The slice's storage holds the root parent, retained */

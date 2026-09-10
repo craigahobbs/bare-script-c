@@ -1643,10 +1643,10 @@ static BSValue bsFnStringSplit(const BSValue *args, size_t argCount, BSOptions *
         if (found == SIZE_MAX) {
             break;
         }
-        bsArrayPush(result, bsStringSliceBytes(values[0], position, found - position, SIZE_MAX));
+        bsArrayPush(result, bsStringSliceBytesMin(values[0], position, found - position, SIZE_MAX, BS_STRING_SPLIT_MIN));
         position = found + separatorSize;
     }
-    bsArrayPush(result, bsStringSliceBytes(values[0], position, size - position, SIZE_MAX));
+    bsArrayPush(result, bsStringSliceBytesMin(values[0], position, size - position, SIZE_MAX, BS_STRING_SPLIT_MIN));
     return result;
 }
 
@@ -1665,7 +1665,7 @@ static BSValue bsFnStringSplitLines(const BSValue *args, size_t argCount, BSOpti
         if (newline != NULL && end > position && text[end - 1] == '\r') {
             end--;
         }
-        bsArrayPush(result, bsStringSliceBytes(values[0], position, end - position, SIZE_MAX));
+        bsArrayPush(result, bsStringSliceBytesMin(values[0], position, end - position, SIZE_MAX, BS_STRING_SPLIT_MIN));
         if (newline == NULL) {
             return result;
         }
