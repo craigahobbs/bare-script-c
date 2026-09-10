@@ -37,6 +37,7 @@ static void bsCodeFree(BSCode *code)
     free(code->cover);
     free(code->coverLines);
     free(code->coverPcs);
+    free(code->coverCounts);
     for (size_t ix = 0; ix < code->slotCount; ix++) {
         bsRelease(code->slotNames[ix]);
     }
@@ -85,7 +86,6 @@ void bsScriptRelease(BSScript *script)
     bsRelease(script->scriptName);
     bsRelease(script->scriptLines);
     bsRelease(script->model);
-    free(script->coverageCounts);
     free(script);
 }
 

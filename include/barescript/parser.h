@@ -69,6 +69,8 @@ typedef struct BSCode {
     int *coverLines;
     uint32_t *coverPcs;  /* per statement, the index of its first instruction */
     size_t coverCount;
+    BSValue **coverCounts; /* per statement, the coverage count it increments - resolved on first record, under coverOwner */
+    BSObject *coverOwner;  /* the coverage object the counts belong to */
     BSValue *slotNames;
     size_t slotCount;
 } BSCode;
@@ -106,15 +108,11 @@ struct BSScript {
     bool system;
 
     /*
-     * Coverage recording cache. Hits are counted in a line-indexed array of pointers into the
-     * coverage object's per-line count values, so a loop does not format line keys or search the
-     * covered object on every statement. coverageOwner is the coverage global's identity;
-     * coverageCovered is borrowed from it.
+     * The coverage object's covered-lines object for this script, borrowed, under coverageOwner -
+     * the coverage global's identity; each chunk resolves its statements' count slots from it
      */
     BSObject *coverageOwner;
     BSValue coverageCovered;
-    BSValue **coverageCounts;
-    int coverageLineCap;
 };
 
 

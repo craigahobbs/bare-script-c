@@ -24,7 +24,7 @@
 
 
 /* Run a compiled bytecode chunk on the registers its caller filled. Returns an owned value. */
-static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSValue *regs,
+static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSValue *regs,
                          BSValue locals, bool builtins);
 
 
@@ -259,25 +259,9 @@ static int bsCodeLine(const BSCode *code, size_t pc)
  */
 
 
-static void bsCoverageGrow(BSScript *script, int line)
-{
-    int cap = script->coverageLineCap;
-    int newCap = cap == 0 ? 32 : cap;
-    while (newCap <= line) {
-        newCap *= 2;
-    }
-    script->coverageCounts = bsRealloc(script->coverageCounts, (size_t) newCap * sizeof(BSValue *));
-    memset(script->coverageCounts + cap, 0, (size_t) (newCap - cap) * sizeof(BSValue *));
-    script->coverageLineCap = newCap;
-}
-
-
 static void bsCoverageEnsure(BSScript *script, BSValue coverage)
 {
     if (script->coverageOwner != coverage.u.object) {
-        free(script->coverageCounts);
-        script->coverageCounts = NULL;
-        script->coverageLineCap = 0;
         script->coverageCovered = bsNull();
         script->coverageOwner = coverage.u.object;
     }
@@ -301,38 +285,64 @@ static void bsCoverageEnsure(BSScript *script, BSValue coverage)
 }
 
 
-static void bsRecordCoverage(BSScript *script, const BSCode *code, uint32_t index, BSValue coverage)
+/* Where a statement that records nothing - one with no line, or of an unnamed script - counts */
+static _Thread_local BSValue bsCoverSink;
+
+
+/*
+ * Resolve a statement's count slot in the coverage object's covered-lines entry for its line,
+ * created on the statement's first record, and keep it in the chunk's table. Out of line: a
+ * statement resolves once per coverage object.
+ */
+static BS_NOINLINE BSValue *bsCoverResolve(BSScript *script, BSCode *code, uint32_t index, BSValue coverage)
 {
+    BSValue *count = &bsCoverSink;
     int line = code->coverLines[index];
-    if (line <= 0 || script->scriptName.type != BS_STRING) {
-        return;
+    if (line > 0 && script->scriptName.type == BS_STRING) {
+        bsCoverageEnsure(script, coverage);
+        char lineKey[16];
+        snprintf(lineKey, sizeof(lineKey), "%d", line);
+        BSValue coveredStatement = bsObjectGet(script->coverageCovered, lineKey);
+        if (coveredStatement.type != BS_OBJECT) {
+            /* A script that forgot its model borrows the statement models back before recording one */
+            BSValue statement = (code->cover != NULL || bsScriptRestoreCover(script)) ? code->cover[index] : bsNull();
+            coveredStatement = bsObjectNew();
+            bsObjectSet(coveredStatement, "statement", bsRetain(statement));
+            bsObjectSet(coveredStatement, "count", bsNumber(0));
+            bsObjectSet(script->coverageCovered, lineKey, coveredStatement);
+        }
+        count = bsObjectValuePtr(coveredStatement, "count", 5);
     }
+    code->coverCounts[index] = count;
+    return count;
+}
 
-    if (script->coverageOwner == coverage.u.object &&
-        line < script->coverageLineCap &&
-        script->coverageCounts[line] != NULL) {
-        script->coverageCounts[line]->u.number += 1;
-        return;
-    }
 
-    bsCoverageEnsure(script, coverage);
-    if (line >= script->coverageLineCap) {
-        bsCoverageGrow(script, line);
+/* A chunk's count table for a coverage object, empty when the object is new to the chunk */
+static BS_NOINLINE BSValue **bsCoverTableNew(BSCode *code, BSValue coverage)
+{
+    if (code->coverCounts == NULL) {
+        code->coverCounts = bsAlloc(code->coverCount * sizeof(BSValue *));
     }
+    memset(code->coverCounts, 0, code->coverCount * sizeof(BSValue *));
+    code->coverOwner = coverage.u.object;
+    return code->coverCounts;
+}
 
-    char lineKey[16];
-    snprintf(lineKey, sizeof(lineKey), "%d", line);
-    BSValue coveredStatement = bsObjectGet(script->coverageCovered, lineKey);
-    if (coveredStatement.type != BS_OBJECT) {
-        /* A script that forgot its model borrows the statement models back before recording one */
-        BSValue statement = (code->cover != NULL || bsScriptRestoreCover(script)) ? code->cover[index] : bsNull();
-        coveredStatement = bsObjectNew();
-        bsObjectSet(coveredStatement, "statement", bsRetain(statement));
-        bsObjectSet(coveredStatement, "count", bsNumber(0));
-        bsObjectSet(script->coverageCovered, lineKey, coveredStatement);
+static inline BSValue **bsCoverTable(BSCode *code, BSValue coverage)
+{
+    return code->coverOwner == coverage.u.object ? code->coverCounts : bsCoverTableNew(code, coverage);
+}
+
+
+/* Record one execution of statement "index" - its count slot from the chunk's table, resolved on the first */
+static inline void bsRecordCoverage(BSScript *script, BSCode *code, BSValue **counts, uint32_t index, BSValue coverage)
+{
+    BSValue *count = counts[index];
+    if (count == NULL) {
+        count = bsCoverResolve(script, code, index, coverage);
     }
-    script->coverageCounts[line] = bsObjectValuePtr(coveredStatement, "count", 5);
-    script->coverageCounts[line]->u.number += 1;
+    count->u.number += 1;
 }
 
 
@@ -341,14 +351,14 @@ static void bsRecordCoverage(BSScript *script, const BSCode *code, uint32_t inde
  * one that passes the limit run in the references; here the block stops before any of them, and
  * the error names that statement.
  */
-static BS_NOINLINE void bsStatementLimit(const BSCode *code, const BSInst *inst, BSScript *script, BSOptions *options,
+static BS_NOINLINE void bsStatementLimit(BSCode *code, const BSInst *inst, BSScript *script, BSOptions *options,
                                          BSValue coverage, bool hasCoverage)
 {
     /* The count before this block is under the limit, unless a native function lowered the limit mid-run */
     int64_t room = options->maxStatements - (options->statementCount - inst->b);
     size_t allowed = room > 0 ? (size_t) room : 0;
     for (size_t ix = 0; hasCoverage && ix < allowed; ix++) {
-        bsRecordCoverage(script, code, inst->a + (uint32_t) ix, coverage);
+        bsRecordCoverage(script, code, bsCoverTable(code, coverage), inst->a + (uint32_t) ix, coverage);
     }
     bsErrorSetStatement(options, script, code->coverLines[inst->a + allowed],
                         "Exceeded maximum script statements (%lld)", (long long) options->maxStatements);
@@ -361,7 +371,7 @@ static BS_NOINLINE void bsStatementLimit(const BSCode *code, const BSInst *inst,
  * when coverage is recording - see BS_JUMP_COVER, which keeps the call itself out of the
  * interpreter's jumps, about a quarter of all dispatches.
  */
-static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, BSValue coverage)
+static void bsJumpCover(BSCode *code, uint32_t target, BSScript *script, BSValue coverage)
 {
     /*
      * Only a target that lands just past a STMT records anything. Target zero never does - a
@@ -371,7 +381,7 @@ static void bsJumpCover(const BSCode *code, uint32_t target, BSScript *script, B
     if (target == 0 || code->inst[target - 1].op != BS_OP_STMT) {
         return;
     }
-    bsRecordCoverage(script, code, code->inst[target - 1].a, coverage);
+    bsRecordCoverage(script, code, bsCoverTable(code, coverage), code->inst[target - 1].a, coverage);
 }
 
 
@@ -458,7 +468,7 @@ static BSValue bsScriptFunctionCall(const BSValue *args, size_t argCount, BSOpti
 
 
 /* Run a top-level chunk or an expression, which gets its registers here. Returns an owned value. */
-static BSValue bsRunChunk(const BSCode *code, BSScript *script, BSOptions *options, BSValue locals,
+static BSValue bsRunChunk(BSCode *code, BSScript *script, BSOptions *options, BSValue locals,
                           bool builtins)
 {
     size_t ownedCount = code->slotCount + code->tempCount;
@@ -1350,7 +1360,7 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
     BS_NEXT()
 
 
-static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *options, BSValue *regs,
+static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSValue *regs,
                          BSValue locals, bool builtins)
 {
     if (options->error.type == BS_STRING) {
@@ -1652,8 +1662,9 @@ static BSValue bsRunCode(const BSCode *code, BSScript *script, BSOptions *option
                     bsStatementLimit(code, inst, script, options, coverage, hasCoverage);
                     goto fail;
                 }
+                BSValue **counts = bsCoverTable(code, coverage);
                 for (size_t ix = 0; ix < count; ix++) {
-                    bsRecordCoverage(script, code, inst->a + (uint32_t) ix, coverage);
+                    bsRecordCoverage(script, code, counts, inst->a + (uint32_t) ix, coverage);
                 }
             }
         }

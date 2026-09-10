@@ -267,9 +267,10 @@ references run those before the one that passes it; the error names that stateme
 Bundled include scripts - the parser, the linter, and the library - are never statement-counted or
 coverage-recorded, so the emitter writes no statement markers into their code.
 
-When `__barescriptCoverage` is enabled, each compiled script keeps a line-indexed array of
-pointers into the coverage object's per-line counts, so a loop increments a number instead of
-formatting a line key and searching the covered object on every statement.
+When `__barescriptCoverage` is enabled, each chunk keeps a table, indexed by statement, of pointers
+into the coverage object's per-line counts, each resolved the first time its statement records, so
+a block marker increments a number per statement instead of formatting a line key and searching the
+covered object.
 
 `bsScriptToModel` (and, internally, `bsExprToModel`) return the model (with `scriptName` / `scriptLines` /
 `system` overlaid), which is how the linter receives a script and how `barescriptEvaluateExpression`
