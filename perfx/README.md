@@ -96,7 +96,8 @@ Runs are interleaved by language - round one of every port, then round two - so 
 machine affects the languages alike. Each figure in the report is the best of the runs, which is
 the least-disturbed measurement; peak RSS is the largest seen, since memory is about the worst
 case. `results.json` keeps every individual run and `results.csv` the summarized rows for further
-processing.
+processing. `--runs` is 3 by default; `make perf-data` passes its own `PERF_RUNS` through, so the
+two performance suites it publishes are measured over the same number of runs.
 
 ## The report
 

@@ -7,7 +7,57 @@ BareScript is a small scripting language with a Pythonic syntax influenced by Ja
 the Unix shell - functions, loops, arrays, objects, strings, regular expressions, JSON, and a
 [library](https://craigahobbs.github.io/bare-script/library/) of built-in functions and included
 scripts for markdown, schemas, and unit tests. It is the scripting language of
-[MarkdownUp](https://craigahobbs.github.io/markdown-up/). A script that counts words:
+[MarkdownUp](https://craigahobbs.github.io/markdown-up/).
+
+```bare-script
+# Compute a factorial
+function factorial(n):
+    return if(n <= 1, 1, n * factorial(n - 1))
+endfunction
+
+systemLog('factorial(10) = ' + factorial(10))
+```
+
+The reference implementations are in [JavaScript](https://github.com/craigahobbs/bare-script) and
+[Python](https://github.com/craigahobbs/bare-script-py). This one produces byte-identical output
+across their 1,407-test suite, with 100% line coverage of its own C. On real-world code it beats
+V8's bytecode interpreter, CPython, Lua, Ruby, and Perl, as a plain bytecode interpreter with no
+JIT. Measurements are on the
+[BareScript (C) Performance](https://craigahobbs.github.io/bare-script-c/perf/).
+
+```sh
+make compile
+./build/bare -c 'systemLog("Hello, World!")'
+```
+
+
+## Contents
+
+- [Language](#language)
+  - [System Includes](#system-includes)
+- [Build](#build)
+  - [Release Builds](#release-builds)
+  - [Smaller Builds](#smaller-builds)
+- [Command-Line Interface](#command-line-interface)
+  - [MarkdownUp Output](#markdownup-output)
+  - [Static Analysis](#static-analysis)
+- [Embedding the Runtime](#embedding-the-runtime)
+  - [Native Functions](#native-functions)
+  - [Values](#values)
+  - [Fetching](#fetching)
+  - [Threads](#threads)
+- [Testing](#testing)
+- [Performance](#performance)
+- [Compatibility](#compatibility)
+- [Design](#design)
+- [License](#license)
+
+
+## Language
+
+The [language documentation](https://craigahobbs.github.io/bare-script/language/) is the tour, and
+the [library documentation](https://craigahobbs.github.io/bare-script/library/) the reference. For
+example:
 
 ```bare-script
 # Count the words of a text and report the most common ones
@@ -36,39 +86,21 @@ for entry in arraySlice(entries, 0, 3):
 endfor
 ```
 
-The reference implementations are in [JavaScript](https://github.com/craigahobbs/bare-script) and
-[Python](https://github.com/craigahobbs/bare-script-py). This one produces byte-identical output
-across their 1,407-test suite, with 100% line coverage of its own C. On real-world code it beats
-V8's bytecode interpreter, CPython, Lua, Ruby, and Perl, as a plain bytecode interpreter with no
-JIT. Measurements are on the
-[BareScript (C) Performance](https://craigahobbs.github.io/bare-script-c/perf/).
+### System Includes
 
-```sh
-make compile
-./build/bare -c 'systemLog("Hello, World!")'
+The BareScript include library - the language's standard library of scripts, `markdown.bare`,
+`schema.bare`, `unittest.bare`, and the rest - is bundled into the library itself, so a system
+include - `include <name.bare>` - resolves with no file system at all:
+
+```bare-script
+include <unittest.bare>
+
+systemLog(systemType(unittestRunTest))
 ```
 
-
-## Contents
-
-- [Build](#build)
-  - [Release Builds](#release-builds)
-  - [Smaller Builds](#smaller-builds)
-- [Command-Line Interface](#command-line-interface)
-  - [System Includes](#system-includes)
-  - [MarkdownUp Output](#markdownup-output)
-  - [Static Analysis](#static-analysis)
-- [Embedding the Runtime](#embedding-the-runtime)
-  - [Native Functions](#native-functions)
-  - [Values](#values)
-  - [Fetching](#fetching)
-  - [Threads](#threads)
-- [Testing](#testing)
-- [Performance](#performance)
-- [Compatibility](#compatibility)
-  - [jsonParse and regexNew messages](#jsonparse-and-regexnew-messages)
-- [Design](#design)
-- [License](#license)
+A system include is served from the bundled library and nowhere else. A user include -
+`include 'name.bare'` - is fetched through the options' fetch function, relative to the including
+script.
 
 
 ## Build
@@ -154,21 +186,6 @@ bare script.bare
 bare -c 'systemLog("Hello, World!")'
 bare -v vName "'World'" script.bare
 ```
-
-### System Includes
-
-The BareScript include library - the language's standard library of scripts, `markdown.bare`,
-`schema.bare`, `unittest.bare`, and the rest - is bundled into the library itself, so a system
-include - `include <name.bare>` - resolves with no file system at all:
-
-```sh
-bare -c 'include <unittest.bare>
-systemLog(systemType(unittestRunTest))'
-```
-
-A system include is served from the bundled library and nowhere else. A user include -
-`include 'name.bare'` - is fetched through the options' fetch function, relative to the including
-script.
 
 ### MarkdownUp Output
 
@@ -388,7 +405,7 @@ The include library suite is the reference implementations' own, vendored under
 `lib/include/test`, and this runtime's output for it is identical to the JavaScript
 implementation's byte for byte - a conformance check on the parser, the runtime, the library, the
 regex engine, the linter, and the CLI at once. The one difference is the text of two `jsonParse`
-debug messages, which follow the Python implementation - see [Compatibility](#compatibility).
+debug messages, which report CPython's message text - see [Compatibility](#compatibility).
 
 
 ## Performance
@@ -396,170 +413,69 @@ debug messages, which follow the Python implementation - see [Compatibility](#co
 On real-world code this runtime beats V8's bytecode interpreter, CPython, Lua, Ruby, and Perl, as a
 plain bytecode interpreter with no JIT. Two suites back that up: `make perfx`, real-world-like
 applications ported to six languages, and `make perf`, the include library's own suite, which the
-JavaScript and Python implementations also run. Each table's last column scores a language against
-the best one: the language effect of a multiplicative model fitted by least squares on the log
-scale, relative to the best language, so 1x is the best and 2x is twice its typical cost.
+JavaScript and Python implementations also run.
 
 The numbers live on the
 [BareScript (C) Performance](https://craigahobbs.github.io/bare-script-c/perf/), a MarkdownUp
-application that reads `static/perf/data/` (`perf.csv`, `perfx.json`, `size.json`). Re-measure and publish:
+application that reads `static/perf/data/` (`perf.csv`, `perfx.json`, `size.json`).
+
+To re-measure and publish:
 
 ```sh
 make perf-data PERF_RUNS=5
 make gh-pages
 ```
 
-The first `gh-pages` publish needs an empty `gh-pages` branch:
-
-```sh
-git checkout --orphan gh-pages
-git reset --hard
-git commit --allow-empty -m "initializing gh-pages branch"
-git push origin gh-pages
-git checkout main
-```
-
-```sh
-make perfx
-make perfx PERFX_ARGS="--apps nbody --runs 5"   # options pass through; see perfx/perfx.py --help
-make perfx-check                                # every port at a small size: do they all agree?
-make perf
-make perf TEST=mandelbrot PERF_RUNS=5
-```
-
-`make perf` merges the results of `../bare-script` and `../bare-script-py` when present;
-`perf/test.c` is the native C baseline. A BareScript program can read the clock only in whole
-milliseconds, so `make perf` asks the suite for a 100 ms floor (`PERF_TIME_FLOOR`) and multiplies
-each test's iteration count until the timed run reaches it. Run the suite directly and it keeps
-its fixed counts, which is what a build-to-build comparison and this runtime's profile-guided
-training run need.
-
 
 ## Compatibility
 
-This runtime defines BareScript's behavior. Its regular expressions and its Unicode whitespace
-and case behavior are standard JavaScript's; the other ports - the JavaScript and Python
-implementations - are the same as this one, within reason. The three match, including error
-messages and their column numbers, except as recorded here: where the two ports disagree with each
-other, this implementation's behavior is the one shown in bold.
+This implementation defines BareScript. Where a port or a document disagrees with it, this
+runtime's behavior is the language's and the other is the bug. The ports - the
+[JavaScript](https://github.com/craigahobbs/bare-script) and
+[Python](https://github.com/craigahobbs/bare-script-py) implementations - aspire to behave
+identically, within reason: each is built on a host language with its own strings, numbers, and
+regular expressions, and matching this runtime exactly is not always worth what it costs there. A
+difference that cannot change what a real script computes is not worth writing down; one visible
+enough to surprise a script author belongs in that port's README. None is recorded today.
 
-| Behavior                               | JavaScript        | Python          | This implementation |
-| -------------------------------------- | ----------------- | --------------- | ------------------- |
-| String length and indexing             | UTF-16 code units | code points     | **code points**     |
-| `stringDecode` of a non-number element | a NUL character   | `null`          | **`null`**          |
-| An unmatched capture group in a match  | omitted           | `null`          | **omitted**         |
-| Zero-width `regexSplit` matches        | never split at the last split's end | split at each | **never split at the last split's end** |
-| `$&`, `` $` ``, `$'` in a `regexReplace` replacement | the match, the text before it, the text after it | literal text | **the match, the text before it, the text after it** |
-| A repeated group's captures, `(a*)*` on `a` | unset each iteration, an empty iteration past the minimum rejected | the last iteration's | **as JavaScript** |
-| A lookbehind body                      | matched right to left, so `(?<=(\w+) )x` captures the word | left to right at each length | **right to left** |
-| A group name reused within one alternative, `(?<n>a)(?<n>b)` | `redefinition`  | `redefinition`  | **`redefinition`** |
-| A group name reused across an alternation's branches, `(?<n>a)\|(?<n>b)` | the branch that matched | `redefinition` | **the branch that matched** |
-| A named backreference before its group, `\k<n>(?<n>a)` | matches empty, then the group | `unknown group name` | **matches empty, then the group** |
-| A group name beginning with a digit, or with a non-ASCII letter | a digit rejected, a letter accepted | the same | **both rejected - a name is a BareScript identifier** |
-| A quantified lookahead, `(?=a)*`       | accepted          | accepted        | **`nothing to repeat`** |
-| A repeated flag, `regexNew('a', 'ii')` | `null`            | accepted        | **`null`**          |
-| `String(1e-7)`                         | `1e-7`            | `1e-07`         | **`1e-7`**          |
-| `String(-0)`                           | `0`               | `-0`            | **`0`**             |
-| `-7 % 3`                               | `-1` (truncated)  | `2` (floored)   | **`-1`**            |
-| Bitwise operators                      | 32-bit            | arbitrary width | **32-bit**          |
-| A `regexNew` repeat count past 2^32    | accepted          | uncaught error  | **accepted**, saturating at 2^31 - 1 |
-| `numberToString` past 2^53             | shortest round trip, exponential past 1e21 | the value's exact digits | **the value's exact digits** |
-| A `systemFetch` array                  | fetched concurrently | fetched in order | **URLs concurrently, then files in order** |
-| `numberToFixed` from 1e21              | exponential, `1e+21` | the value's digits; `null` when scaled past the double range | **the value's digits; `null` when scaled past the double range** |
-| A datetime past year 9999              | JavaScript's `Date` range, 8.64e15 ms either side of the epoch | `null`, an error | **JavaScript's `Date` range** |
-| `numberToFixed` past 100 digits        | `null`, a `RangeError` | the digits    | **`null`**          |
-| `stringFromCharCode` past 0xFFFF       | the low 16 bits   | the code point  | **the code point**  |
-| `regexEscape`                          | the metacharacters | also `-`, `#`, `&`, `~`, and whitespace | **the metacharacters** |
-| A relative path normalizing to nothing, `a/..` | the empty string | `.`      | **`.`**             |
-| Unicode whitespace past the spaces both match | also U+FEFF   | also U+0085 and U+001C-U+001F | **also U+FEFF** |
-| `\w`, `\d`, `\b`                       | ASCII             | Unicode letters and digits | **ASCII**     |
-| `.` and multi-line `^` `$` at CR, U+2028, U+2029 | line terminators | LF only    | **line terminators** |
-| `$` before a trailing LF               | no match          | matches         | **no match**        |
-| The statements before the one that passes the statement limit | run | run | **not run** - a block is charged as a whole; the error names the same statement |
-| Coverage of the statements after one that raises a runtime error | not recorded | not recorded | **recorded**, to the end of their block |
-| The `i` flag on ß, ı, İ, K (Kelvin), ſ | not folded        | folded to ẞ, I, i, k, s | **not folded** |
+The definition, as far as a script needs it:
 
-`objectKeys` returns keys in insertion order, matching both references for ordinary keys.
-JavaScript additionally hoists integer-like keys to the front in ascending numeric order; this
-implementation does not, matching Python.
+- **Strings** measure and index by Unicode code point.
 
-BareScript's regular expressions are standard JavaScript's - their syntax, and the matching
-semantics of every construct: the rows above record where the Python port differs. Where
-JavaScript accepts a legacy form that can only be a mistake, correctness wins over its behavior:
-a backreference to a group the pattern never defines (`(a)\2`, an octal escape in JavaScript), an
-incomplete `\x4` or `\u12`, `\8` and `\9`, and `\k<n>` in a pattern with no named groups are
-errors here - as they are in JavaScript's unicode mode - and a quantified lookaround is an error
-whichever way it looks. The `regexNew` messages section below lists these with Python's messages.
+- **Numbers** are IEEE 754 doubles: `%` truncates, so `-7 % 3` is `-1`, the bitwise operators are
+  32-bit, and there is no NaN and no infinity - an operation that would produce one yields null.
 
-BareScript's Unicode whitespace and case behavior is standard JavaScript's. Whitespace - the
-regex `\s` class, `stringTrim`, and the space around a parsed number - is
-JavaScript's WhiteSpace and LineTerminator sets: the ASCII spaces, U+00A0, U+1680, U+2000-U+200A,
-U+2028, U+2029, U+202F, U+205F, U+3000, and U+FEFF. The regex `\w`, `\d`, and `\b` are ASCII; `.`
-and the multi-line anchors know every line terminator - LF, CR, U+2028, U+2029 - and `$` alone is
-the end of the string. `stringUpper` and `stringLower` apply Unicode's full case mapping (Unicode
-16.0): ß upper-cases to `SS`, the ligatures expand, and a capital sigma that ends a word
-lower-cases to the final sigma. The `i` flag folds as JavaScript does: a code point matches the
-ones sharing its simple upper case, but never across the ASCII boundary, and never through an
-expanding upper case. JavaScript has all of this natively. The Python implementation keeps
-Python's own definitions where they differ - the rows above - which is within reason: in
-practice the differences are a leading byte-order mark, whitespace here and in JavaScript but not
-in Python, and `$` before a trailing newline, which Python's `$` matches.
+- **`objectKeys`** returns keys in insertion order. Integer-like keys are not hoisted to the front,
+  as they are on a JavaScript object.
 
-One capability of the reference implementations is out of scope here:
+- **Regular expressions** are standard JavaScript's: the syntax DESIGN.md's
+  [Regular Expressions](DESIGN.md#regular-expressions) table lists, with JavaScript's matching
+  semantics. Where JavaScript accepts a legacy form that can only be a mistake, correctness wins
+  over its behavior: a backreference to a group the pattern never defines (`(a)\2`, an octal escape
+  in JavaScript), an incomplete `\x4` or `\u12`, `\8` and `\9`, `\k<n>` in a pattern with no named
+  groups, and a quantified lookaround are errors here, as they are in JavaScript's unicode mode. A
+  pattern may have at most 127 capture groups.
 
-- **Asynchronous functions.** Like the Python implementation, every function executes
-  synchronously; the `async` keyword parses and is recorded in the model, but imposes no
-  restriction. Scripts written for the JavaScript runtime run unchanged, and the linter's async
-  checks - which need to know which functions are async - are skipped, as they are in Python.
-- **A match's group key order.** A match model's `groups` object keys each named group right after
-  its number; both references list every number first, then the names. Only `objectKeys` can tell.
+- **Whitespace** - the regex `\s` class, `stringTrim`, and the space around a parsed number - is
+  JavaScript's WhiteSpace and LineTerminator sets: the ASCII spaces, U+00A0, U+1680, U+2000-U+200A,
+  U+2028, U+2029, U+202F, U+205F, U+3000, and U+FEFF. The regex `\w`, `\d`, and `\b` are ASCII; `.`
+  and the multi-line anchors know every line terminator - LF, CR, U+2028, U+2029 - and `$` alone is
+  the end of the string.
 
-An input nested more deeply than the evaluator's expression depth limit is reported as a parse
-error rather than crashing; the JavaScript implementation overflows its own stack on the same
-input.
+- **Case** is Unicode 16.0's. `stringUpper` and `stringLower` apply the full case mapping: ß
+  upper-cases to `SS`, the ligatures expand, and a capital sigma that ends a word lower-cases to the
+  final sigma. The regex `i` flag folds as JavaScript does: a code point matches the ones sharing
+  its simple upper case, but never across the ASCII boundary, and never through an expanding upper
+  case.
 
-### `jsonParse` and `regexNew` messages
+- **Every function is synchronous.** The `async` keyword parses and is recorded in the model, but
+  imposes no restriction, so a script written for an asynchronous runtime runs unchanged; the
+  linter's async checks, which need to know which functions are async, are skipped.
 
-A failed `jsonParse` or `regexNew` reports its own decoder's or compiler's message, so the two
-reference implementations already differ from each other here. This implementation matches the
-Python one: `jsonParse` reports CPython's `json` messages with their `line L column C (char N)`
-position, and `regexNew` reports CPython's `re` messages with their `at position N`.
-
-`jsonParse` matches exactly - every message, every position. So does `regexNew`, wherever the two
-engines agree a pattern is invalid. They do not always agree, because BareScript specifies
-JavaScript regular expressions and `re` is not one:
-
-| Pattern         | JavaScript and this implementation | Python `re`                     |
-| --------------- | ---------------------------------- | ------------------------------- |
-| `(?i)`, `(?#c)` | `unknown extension`                | inline flags and comments       |
-| `(?<n>a)`, `(?P<n>a)` | a named group, `unknown extension ?P` | `unknown extension ?<n`, a named group |
-| `(?>a)`, `(?(1)a)` | `unknown extension`             | atomic groups and conditionals  |
-| `a*+`           | `multiple repeat`                  | a possessive quantifier         |
-| `x{,5}`         | the literal text                   | the quantifier `{0,5}`          |
-| `[]`            | a set that never matches           | `unterminated character set`    |
-| `[\k]`, `\cA`     | identity and control escapes       | `bad escape`                    |
-| `\1(a)`         | a forward reference, matches empty | `invalid group reference`       |
-| `(?<=a*)b`      | a variable-width lookbehind        | `look-behind requires fixed-width pattern` |
-
-Some cases go the other way, each a pattern JavaScript accepts that can only be a mistake. A
-numbered backreference to a group the pattern never defines - `(a)\2` - is a legacy octal escape in
-JavaScript, matching the control character U+0002; this implementation reports `re`'s `invalid group
-reference`. (A reference to a group defined later in the pattern is still a forward reference, as the
-table says, and so is a named one - `\k<n>(?<n>a)` - which `re` rejects.) A character class range
-with a class escape as either bound - `[\d-z]` - is a literal `-` in JavaScript and `bad character
-range` here; a named backreference to a name the pattern never defines - `\k<n>` - is the literal
-text in JavaScript and `unknown group name` here; an incomplete hexadecimal escape - `\x4`, `\u12` -
-is the literal text in JavaScript and `incomplete escape` here; `\8` and `\9` are the digits in
-JavaScript and `invalid group reference` here; a three-digit octal escape past `\377` - `\477`,
-which JavaScript reads as `\47` then `7` - is `octal escape value \477 outside of range` here; and a
-quantified lookahead - `(?=a)*` - is `nothing to repeat` here, as a quantified lookbehind is in
-JavaScript, where both `re` and the unicode-mode JavaScript syntax also reject the lookahead. A group
-name shared by two groups of one alternative - `(?<n>a)(?<n>b)` - is `re`'s `redefinition of group
-name`, as in JavaScript. This implementation also limits a pattern to 127 capture groups,
-reporting `sorry, but this version only supports 127 groups`; both references allow more.
-
-Where a pattern is invalid in both, the message and position match, except for a pattern that is
-invalid for two reasons, where each engine reports the one it meets first.
+- **`jsonParse` and `regexNew`** report their own decoder's and compiler's message: CPython's
+  `json` messages with their `line L column C (char N)` position, and CPython's `re` messages with
+  their `at position N`. A pattern that `re` reads differently - BareScript's regular expressions
+  are JavaScript's, and `re`'s are not - is described by the nearest `re` message.
 
 
 ## Design

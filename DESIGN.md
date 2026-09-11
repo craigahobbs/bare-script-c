@@ -619,8 +619,8 @@ aborts, platform-specific fallbacks, and the checks that guard against a corrupt
 All three produce output identical to the JavaScript implementation's, so a diff against
 `bare-script` is a conformance check on the parser, the runtime, the library, the regex engine, the
 linter, and the CLI at once. The one difference is the text of two `jsonParse` debug messages,
-which this implementation reports the way the Python implementation does - see
-[Compatibility](#compatibility).
+which this implementation reports with CPython's message text - see
+[Compatibility](README.md#compatibility).
 
 `make test-language` runs this project's own suite, written against a small self-contained harness
 so it runs unchanged on all three implementations.

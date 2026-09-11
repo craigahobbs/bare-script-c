@@ -575,7 +575,7 @@ perf-measure: $(RELEASE_CLI)
 perf-data: $(RELEASE_CLI) $(PERF_NATIVE)
 	@mkdir -p $(PERF_DATA_DIR)
 	$(MAKE) perf PERF_RUNS=$(PERF_RUNS) PERF_TIME_FLOOR=$(PERF_TIME_FLOOR) PERF_REPORT=
-	$(MAKE) perfx PERFX_ARGS="$(PERFX_ARGS)"
+	$(MAKE) perfx PERFX_ARGS="--runs $(PERF_RUNS) $(PERFX_ARGS)"
 	cp $(PERF_CSV) $(PERF_DATA_DIR)/perf.csv
 	cp $(BUILD_DIR)/perfx/results.json $(PERF_DATA_DIR)/perfx.json
 	$(MAKE) perf-measure

@@ -68,15 +68,16 @@ perf` merges their results when present.
   after changing `lib/include/` or `bin/includeSource.bare`.
 - `jsonParse` and `regexNew` messages match CPython's `json` and `re` exactly, including
   positions. Where they cannot, it is because BareScript specifies *JavaScript* regular
-  expressions; those divergences are tabulated in README's **Compatibility** section. Verify
-  changes here empirically against CPython rather than by inspection.
-- README's **Compatibility** section records every deliberate behavioral choice where the two
-  references disagree with each other. Update it when behavior changes.
+  expressions, and the nearest `re` message is used. Verify changes here empirically against
+  CPython rather than by inspection.
 - This implementation defines BareScript's behavior; agreement between the two references is
   evidence, not authority, and a behavior change is the user's decision. Regular expressions and
   Unicode whitespace and case behavior are defined as standard JavaScript's. The other ports are
-  defined as the same as this implementation, within reason; README's **Compatibility** section
-  records the definitions and the ports' deviations.
+  defined as the same as this implementation, within reason.
+- README's **Compatibility** section states that definition - the behavior a script can count on -
+  not a catalog of how the ports differ from it. A port difference that cannot change what a real
+  script computes goes unrecorded; one visible enough to surprise a script author belongs in that
+  port's README. Update the section when the definition changes.
 
 ## Architecture
 
