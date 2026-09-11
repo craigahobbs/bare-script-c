@@ -14,8 +14,8 @@ python3 perfx/perfx.py --help                     # the runner directly
 The runner needs the release build of `bare` (`make release`, or `--bare PATH`) and assumes the
 other interpreters are installed and on the path: `node`, `python3`, `lua`, `ruby`, `perl`.
 
-The results from this suite on one machine are summarized under **Performance** in the top-level
-[README](../README.md#performance).
+The results from this suite on one machine are on the
+[BareScript (C) Performance](https://craigahobbs.github.io/bare-script-c/perf/).
 
 ## The applications
 

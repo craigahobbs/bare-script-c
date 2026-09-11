@@ -133,19 +133,19 @@ COVER_BIN := $(BUILD_DIR)/$(CLI_NAME)-cover
 #
 # Everything that must pass before a commit, as it is in the JavaScript and Python
 # implementations: the unit tests under coverage, the include library suite - which includes its
-# static analysis run - and this project's own language tests. The release build runs too, and
-# then those suites run again against it, so a flag, LTO, or profile problem cannot reach a commit
-# unnoticed. Under "make -j" every suite runs as soon as the binary it tests is linked, alongside
-# the release build.
+# static analysis run - this project's own language tests, and the BareScript (C) Performance app's
+# tests. The release build runs too, and then those suites run again against it, so a flag, LTO, or
+# profile problem cannot reach a commit unnoticed. Under "make -j" every suite runs as soon as the
+# binary it tests is linked, alongside the release build.
 #
 
 .PHONY: commit
-commit: test cover test-include test-language release test-release
+commit: test cover test-include test-language test-static release test-release
 
 
 .PHONY: help
 help:
-	@echo "usage: make [commit|compile|test|cover|test-include|test-language|test-release|perf|perfx|perfx-check|release|includes|install|clean]"
+	@echo "usage: make [commit|compile|test|cover|test-include|test-language|test-static|test-release|perf|perf-data|perfx|perfx-check|doc|gh-pages|sync|release|includes|install|clean]"
 	@echo
 	@echo "  commit        everything that must pass before a commit"
 	@echo "  compile       build the shared library and the command-line interface"
@@ -154,11 +154,16 @@ help:
 	@echo "                VERBOSE=1 lists each uncovered line"
 	@echo "  test-include  run the BareScript include library test suite"
 	@echo "  test-language run this project's own BareScript language tests"
+	@echo "  test-static   run the BareScript (C) Performance app tests"
 	@echo "  test-release  run those suites again against the release build"
 	@echo "                test-release-{lint,markdownup,run,language} run one of them"
 	@echo "  perf          run the performance suite against the release build"
+	@echo "  perf-data     re-measure and update static/perf/data/"
 	@echo "  perfx         run the cross-language application suite against the release build"
 	@echo "  perfx-check   verify that every perfx port computes the same result"
+	@echo "  doc           copy static/ to build/doc/"
+	@echo "  gh-pages      publish build/doc/ to the gh-pages branch"
+	@echo "  sync          copy include library and static/perf to the JS and Python repos"
 	@echo "  release       profile-guided optimization build in build/release"
 	@echo "  includes      regenerate the bundled include library source"
 	@echo "  install       build the release and install it to \$$(PREFIX), default /usr/local"
@@ -472,6 +477,14 @@ test-language test-release-language:
 	$(BARE) -d -m $(TEST_DIR)/include/runTests.bare
 
 
+# The BareScript (C) Performance MarkdownUp app
+.PHONY: test-static
+test-static: $(CLI_BIN)
+	$(CLI_BIN) -d -m static/perf/test/runTests.bare$(if $(TEST), -v vUnittestTest "'$(TEST)'")
+	$(CLI_BIN) -x -m static/perf/*.bare static/perf/test/test*.bare
+	$(CLI_BIN) -s -m static/perf/test/runTests.bare
+
+
 #
 # Performance
 #
@@ -492,25 +505,30 @@ PERF_CSV_TMP := $(BUILD_DIR)/perf-$$PPID.csv
 PERF_MERGE := 1
 PERF_REPORT := 1
 PERF_RUNS := 2
+PERF_TIME_FLOOR := 100
 PERF_NATIVE := $(BUILD_DIR)/perf-native
 
 .PHONY: perf
 perf: $(RELEASE_CLI) $(PERF_NATIVE)
 	echo "language,test,runs,timeMs" > $(PERF_CSV_TMP)
-	set -e; for X in $$(seq 1 $(PERF_RUNS)); do \
+	set -e; set -o pipefail; for X in $$(seq 1 $(PERF_RUNS)); do \
 	    echo "Run $$X of $(PERF_RUNS) - BareScript (C)"; \
-	    $(RELEASE_CLI) $(PERF_DIR)/test.bare -v vLanguage "'BareScript (C)'"$(if $(TEST), -v vTest "'$(TEST)'") \
+	    $(RELEASE_CLI) $(PERF_DIR)/test.bare -v vLanguage "'BareScript (C)'" \
+	        -v vTimeFloor $(PERF_TIME_FLOOR)$(if $(TEST), -v vTest "'$(TEST)'") \
 	        >> $(PERF_CSV_TMP); \
 	    echo "Run $$X of $(PERF_RUNS) - C"; \
 	    $(PERF_NATIVE) "C"$(if $(TEST), "$(TEST)") >> $(PERF_CSV_TMP); \
-	done
+	$(if $(TEST),,    echo "Run $$X of $(PERF_RUNS) - BareScript (C) testSuite"; \
+	    { /usr/bin/time -p $(RELEASE_CLI) -d -m $(INCLUDE_TEST_DIR)/runTests.bare > /dev/null; } 2>&1 \
+	        | awk '/^real/ { printf "BareScript (C),testSuite,1000,%.0f\n", $$2 * 1000 }' >> $(PERF_CSV_TMP); \
+	)	done
 ifneq '$(PERF_MERGE)' ''
 ifneq '$(wildcard $(PERF_BARE_JS_DIR))' ''
-	$(MAKE) -C $(PERF_BARE_JS_DIR) perf PERF_RUNS=$(PERF_RUNS) TEST=$(TEST) PERF_MERGE= PERF_REPORT=
+	$(MAKE) -C $(PERF_BARE_JS_DIR) perf PERF_RUNS=$(PERF_RUNS) PERF_TIME_FLOOR=$(PERF_TIME_FLOOR) TEST=$(TEST) PERF_MERGE= PERF_REPORT=
 	tail -n +2 $(PERF_BARE_JS_DIR)/$(PERF_CSV) >> $(PERF_CSV_TMP)
 endif
 ifneq '$(wildcard $(PERF_BARE_PY_DIR))' ''
-	$(MAKE) -C $(PERF_BARE_PY_DIR) perf PERF_RUNS=$(PERF_RUNS) TEST=$(TEST) PERF_MERGE= PERF_REPORT=
+	$(MAKE) -C $(PERF_BARE_PY_DIR) perf PERF_RUNS=$(PERF_RUNS) PERF_TIME_FLOOR=$(PERF_TIME_FLOOR) TEST=$(TEST) PERF_MERGE= PERF_REPORT=
 	tail -n +2 $(PERF_BARE_PY_DIR)/$(PERF_CSV) >> $(PERF_CSV_TMP)
 endif
 endif
@@ -519,7 +537,10 @@ ifneq '$(PERF_REPORT)' ''
 	$(RELEASE_CLI) $(CURDIR)/bin/perfReport.bare -v vCSV "'$(CURDIR)/$(PERF_CSV)'"
 endif
 
-# The native C baseline, for the tests it implements
+# The native C baseline, for the tests it implements - built with the release library's own
+# optimization flags, so the comparison is release against release. The profile-guided stages the
+# library gets buy it nothing: -O3, -march=native, and a trained profile all measured within the
+# machine's own 3% wall-time drift of plain -O2 with link-time optimization.
 $(PERF_NATIVE): $(PERF_DIR)/test.c
 	@mkdir -p $(dir $@)
 	$(CC) $(BASE_CFLAGS) $(RELEASE_CFLAGS) -o $@ $< -lm
@@ -538,6 +559,60 @@ perfx: $(RELEASE_CLI)
 # Run every port at a small workload and check that they all compute the same result
 perfx-check: $(RELEASE_CLI)
 	python3 perfx/perfx.py --bare $(RELEASE_CLI) --check
+
+
+# Memory and size figures for the app (static/perf/data/size.json)
+.PHONY: perf-measure
+PERF_DATA_DIR := static/perf/data
+perf-measure: $(RELEASE_CLI)
+	@mkdir -p $(PERF_DATA_DIR)
+	$(PERF_DIR)/measure.sh $(RELEASE_CLI) $(RELEASE_LIB_SO) $(INCLUDE_TEST_DIR)/runTests.bare \
+	    src/includeSource.c > $(PERF_DATA_DIR)/size.json
+
+
+# Run the suites and copy their outputs into static/perf/data/.
+.PHONY: perf-data
+perf-data: $(RELEASE_CLI) $(PERF_NATIVE)
+	@mkdir -p $(PERF_DATA_DIR)
+	$(MAKE) perf PERF_RUNS=$(PERF_RUNS) PERF_TIME_FLOOR=$(PERF_TIME_FLOOR) PERF_REPORT=
+	$(MAKE) perfx PERFX_ARGS="$(PERFX_ARGS)"
+	cp $(PERF_CSV) $(PERF_DATA_DIR)/perf.csv
+	cp $(BUILD_DIR)/perfx/results.json $(PERF_DATA_DIR)/perfx.json
+	$(MAKE) perf-measure
+
+
+#
+# Documentation and GitHub Pages
+#
+
+.PHONY: doc
+doc:
+	mkdir -p $(BUILD_DIR)/doc
+	cp -R static/* $(BUILD_DIR)/doc/
+
+
+.PHONY: gh-pages
+gh-pages: commit doc
+	if [ ! -d ../$(notdir $(CURDIR)).gh-pages ]; then \
+	    git clone -b gh-pages `git config --get remote.origin.url` ../$(notdir $(CURDIR)).gh-pages; \
+	fi
+	cd ../$(notdir $(CURDIR)).gh-pages && git pull
+	rsync -rv --delete --exclude=.git/ $(BUILD_DIR)/doc/ ../$(notdir $(CURDIR)).gh-pages
+	touch ../$(notdir $(CURDIR)).gh-pages/.nojekyll
+
+
+.PHONY: sync
+sync:
+ifneq '$(wildcard $(PERF_BARE_JS_DIR))' ''
+	rsync -rv --delete --exclude=.git/ $(INCLUDE_LIB_DIR)/ $(PERF_BARE_JS_DIR)/lib/include/
+	mkdir -p $(PERF_BARE_JS_DIR)/static/perf
+	rsync -rv --delete static/perf/ $(PERF_BARE_JS_DIR)/static/perf/
+endif
+ifneq '$(wildcard $(PERF_BARE_PY_DIR))' ''
+	rsync -rv --delete --exclude=.git/ $(INCLUDE_LIB_DIR)/ $(PERF_BARE_PY_DIR)/src/bare_script/include/
+	mkdir -p $(PERF_BARE_PY_DIR)/static/perf
+	rsync -rv --delete static/perf/ $(PERF_BARE_PY_DIR)/static/perf/
+endif
 
 
 #

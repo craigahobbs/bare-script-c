@@ -1,0 +1,861 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+include <markdown.bare>
+include <unittest.bare>
+include <unittestMock.bare>
+include '../perf.bare'
+
+
+# A small snapshot so page-render tests do not depend on the published numbers
+testPerfData = { \
+    'when': '2026-01-01', \
+    'machine': 'test', \
+    'includeLibrary': { \
+        'BareScript (C)': { \
+            'mandelbrot': 9000, 'schemaParse': 90, 'schemaValidate': 120, \
+            'markdownParse': 700, 'markdownElements': 200, 'qrcodeMatrix': 900, \
+            'urlEncode': 4, 'urlDecode': 5, 'testSuite': 160000 \
+        }, \
+        'JavaScript (V8)': { \
+            'mandelbrot': 1500, 'schemaParse': 70, 'schemaValidate': 50, \
+            'markdownParse': 600, 'markdownElements': 30, \
+            'urlEncode': 2, 'urlDecode': 5 \
+        }, \
+        'BareScript (JS)': { \
+            'mandelbrot': 90000, 'schemaParse': 900, 'schemaValidate': 1200, \
+            'markdownParse': 7000, 'markdownElements': 2000, 'qrcodeMatrix': 9000, \
+            'urlEncode': 40, 'urlDecode': 50, 'testSuite': 1600000 \
+        }, \
+        'C': {'mandelbrot': 800} \
+    }, \
+    'crossLanguage': { \
+        'empty': { \
+            'bare': {'app_ms': 0, 'wall_ms': 2.5, 'rss_mb': 2.5}, \
+            'js': {'app_ms': 0, 'wall_ms': 26, 'rss_mb': 38}, \
+            'jsless': {'app_ms': 0, 'wall_ms': 28, 'rss_mb': 37}, \
+            'lua': {'app_ms': 0, 'wall_ms': 2.6, 'rss_mb': 1.7} \
+        }, \
+        'nbody': { \
+            'bare': {'app_ms': 340, 'rss_mb': 2.6, 'n': 300000}, \
+            'js': {'app_ms': 17, 'rss_mb': 44}, \
+            'jsless': {'app_ms': 800, 'rss_mb': 40}, \
+            'lua': {'app_ms': 590, 'rss_mb': 1.8} \
+        }, \
+        'pathfind': { \
+            'bare': {'app_ms': 430, 'rss_mb': 17, 'n': 800}, \
+            'js': {'app_ms': 130, 'rss_mb': 69}, \
+            'jsless': {'app_ms': 730, 'rss_mb': 86}, \
+            'lua': {'app_ms': 460, 'rss_mb': 39} \
+        } \
+    }, \
+    'versions': {'bare': '1.0.0', 'js': 'v26.8.2', 'lua': 'Lua 5.5.1'}, \
+    'runs': 3, \
+    'measure': { \
+        'emptyRss': 2.5, 'emptyPeak': 1.7, 'perfRss': 6, 'suiteRss': 28, 'coverRss': 46, \
+        'dylibBytes': 436224, 'textBytes': 218112, 'includeBytes': 126976 \
+    } \
+}
+
+function testPerfCsv(includeLibrary):
+    lines = ['language,test,runs,timeMs']
+    for language in objectKeys(includeLibrary):
+        tests = objectGet(includeLibrary, language)
+        for testName in objectKeys(tests):
+            arrayPush(lines, language + ',' + testName + ',1000,' + objectGet(tests, testName))
+        endfor
+    endfor
+    return arrayJoin(lines, '\n')
+endfunction
+
+
+function testPerfSizeJson(data):
+    size = objectCopy(objectGet(data, 'measure'))
+    objectSet(size, 'when', objectGet(data, 'when'))
+    objectSet(size, 'machine', objectGet(data, 'machine'))
+    return jsonStringify(size)
+endfunction
+
+
+function testPerfFetch(data):
+    return { \
+        'data/perf.csv': testPerfCsv(objectGet(data, 'includeLibrary')), \
+        'data/perfx.json': jsonStringify({ \
+            'summary': objectGet(data, 'crossLanguage'), \
+            'versions': objectGet(data, 'versions'), \
+            'runs_per_test': objectGet(data, 'runs') \
+        }), \
+        'data/size.json': testPerfSizeJson(data) \
+    }
+endfunction
+
+
+async function testPerfMain_missingData():
+    unittestMockAll()
+    perfMain()
+    unittestDeepEqual( \
+        unittestMockEnd(), \
+        [ \
+            ['systemFetch', [[perfDataCsv, perfDataPerfx, perfDataSize]]], \
+            ['markdownPrint', ['**Error:** Failed to load performance data']] \
+        ] \
+    )
+endfunction
+unittestRunTest('testPerfMain_missingData')
+
+
+async function testPerfMain():
+    unittestMockAll({'systemFetch': testPerfFetch(testPerfData)})
+    perfMain()
+    unittestDeepEqual( \
+        unittestMockEnd(), \
+        [ \
+            ['systemFetch', [[perfDataCsv, perfDataPerfx, perfDataSize]]], \
+            ['documentSetTitle', [perfTitle]], \
+            ['markdownPrint', [ \
+                '# ' + perfTitle, \
+                '', \
+                perfIntro(testPerfData), \
+                '', \
+                '`make perfx` and `make perf` compare this runtime with V8, CPython, Lua, Ruby, Perl, and the ' + \
+                    'JavaScript and Python BareScript implementations. Lower is better throughout. Each ' + \
+                    "table's last column scores a language against the best one, so 1x is the best and 2x " + \
+                    'costs twice as much; a difference under about 5% is run-to-run drift.', \
+                '', \
+                'Measured on ' + markdownEscape('test') + ', 2026-01-01.', \
+                '', \
+                '[Source](https://github.com/craigahobbs/bare-script-c)', \
+                '', \
+                '## Cross-Language Benchmarks', \
+                '', \
+                perfCrossBlurb(testPerfData), \
+                '', \
+                perfTableLanguages(testPerfData), \
+                '', \
+                '## Include Library Benchmarks', \
+                '', \
+                perfIncludeBlurb(testPerfData), \
+                '', \
+                perfTableInclude(testPerfData), \
+                '', \
+                '## Memory', \
+                '', \
+                perfMemoryBlurb(testPerfData), \
+                '', \
+                perfTableMemory(testPerfData), \
+                '', \
+                '## Startup', \
+                '', \
+                perfStartupBlurb(testPerfData), \
+                '', \
+                perfTableStartup(testPerfData), \
+                '', \
+                '## Size', \
+                '', \
+                perfSizeLead, \
+                '', \
+                perfTableSize(testPerfData), \
+                '', \
+                '## Method', \
+                '', \
+                perfMethod(testPerfData) \
+            ]] \
+        ] \
+    )
+endfunction
+unittestRunTest('testPerfMain')
+
+
+# The opener names this runtime's place among the interpreters, the JIT set aside
+function testPerfIntroClaim():
+    unittestEqual(perfIntroClaim({}), '')
+    unittestEqual( \
+        perfIntroClaim(testPerfData), \
+        'It is the fastest interpreter among the languages measured here (JavaScript and Lua).' \
+    )
+    unittestEqual(perfPlainName('Python'), 'Python')
+endfunction
+unittestRunTest('testPerfIntroClaim')
+
+
+function testPerfIntroClaim_secondFastest():
+    data = {'crossLanguage': { \
+        'empty': { \
+            'bare': {'wall_ms': 2, 'rss_mb': 2}, \
+            'py': {'wall_ms': 2, 'rss_mb': 2}, \
+            'lua': {'wall_ms': 2, 'rss_mb': 2} \
+        }, \
+        'nbody': { \
+            'bare': {'app_ms': 20, 'rss_mb': 2}, \
+            'py': {'app_ms': 30, 'rss_mb': 2}, \
+            'lua': {'app_ms': 10, 'rss_mb': 2} \
+        } \
+    }}
+    unittestEqual( \
+        perfIntroClaim(data), \
+        'It is the second fastest interpreter among the languages measured here (Python and Lua).' \
+    )
+endfunction
+unittestRunTest('testPerfIntroClaim_secondFastest')
+
+
+# With nothing to measure it against there is no claim to make
+function testPerfIntroClaim_alone():
+    data = {'crossLanguage': { \
+        'empty': {'bare': {'wall_ms': 2, 'rss_mb': 2}}, \
+        'nbody': {'bare': {'app_ms': 20, 'rss_mb': 2}} \
+    }}
+    unittestEqual(perfIntroClaim(data), '')
+endfunction
+unittestRunTest('testPerfIntroClaim_alone')
+
+
+function testPerfIntro_fallback():
+    unittestEqual(perfIntro({}), 'BareScript (C) is a plain bytecode interpreter with no JIT.')
+    unittestEqual( \
+        perfIntro({'includeLibrary': { \
+            'C': {'mandelbrot': 1}, \
+            'BareScript (C)': {'mandelbrot': 2} \
+        }}), \
+        'BareScript (C) is a plain bytecode interpreter with no JIT.\n\n' + \
+            '- **Performance:** 2.0x slower than C (mandelbrot).' \
+    )
+endfunction
+unittestRunTest('testPerfIntro_fallback')
+
+
+function testPerfIntroPerformance():
+    unittestEqual(perfIntroPerformance({}), '')
+    unittestEqual( \
+        perfIntroPerformance(testPerfData), \
+        '- **Performance:** 1.4x faster than Lua. 8.1x slower than JavaScript (V8 JIT). ' + \
+            '11.3x slower than C (mandelbrot).' \
+    )
+endfunction
+unittestRunTest('testPerfIntroPerformance')
+
+
+# Nothing on one side of it, and nothing on either. Only the language it beats takes the label.
+function testPerfNeighbors_ends():
+    unittestDeepEqual(perfNeighbors({}, 'bare', ', the next slowest'), [])
+    unittestDeepEqual(perfNeighbors({'bare': 1}, 'bare', ', the next slowest'), [])
+    unittestDeepEqual( \
+        perfNeighbors({'bare': 1, 'js': 2.4}, 'bare', ', the next slowest'), \
+        ['2.4x faster than JavaScript (V8 JIT), the next slowest'] \
+    )
+    unittestDeepEqual( \
+        perfNeighbors({'js': 1, 'bare': 2.4}, 'bare', ''), \
+        ['2.4x slower than JavaScript (V8 JIT)'] \
+    )
+    unittestDeepEqual(perfJoinSerial([]), '')
+    unittestDeepEqual(perfJoinSerial(['a']), 'a')
+    unittestDeepEqual(perfJoinSerial(['a', 'b']), 'a, and b')
+endfunction
+unittestRunTest('testPerfNeighbors_ends')
+
+
+function testPerfIntroSize():
+    unittestEqual(perfIntroSize({}), '')
+    unittestEqual(perfIntroSize({'measure': {}}), '')
+    unittestEqual(perfIntroSize(testPerfData), '- **Size:** A 426 KB shared library.')
+endfunction
+unittestRunTest('testPerfIntroSize')
+
+
+function testPerfCrossStanding():
+    unittestEqual(perfCrossStanding({}), '')
+    unittestEqual(perfCrossStanding({'bare': 1}), '')
+    unittestEqual( \
+        perfCrossStanding({'bare': 1, 'js': 2.4}), \
+        'On this suite, BareScript (C) is 2.4x faster than JavaScript (V8 JIT), the next slowest.' \
+    )
+    unittestEqual( \
+        perfCrossStanding({'js': 1, 'bare': 2.42}), \
+        'On this suite, BareScript (C) is 2.4x slower than JavaScript (V8 JIT).' \
+    )
+    unittestEqual( \
+        perfCrossStanding({'js': 1, 'lua': 1.5, 'bare': 2.4, 'rb': 4.8}), \
+        'On this suite, BareScript (C) is 2.0x faster than Ruby, the next slowest, and 1.6x ' + \
+            'slower than Lua.' \
+    )
+endfunction
+unittestRunTest('testPerfCrossStanding')
+
+
+function testPerfIntroMemory_bestAlone():
+    data = {'crossLanguage': {'empty': {'bare': {'wall_ms': 2.5, 'rss_mb': 2.5}}}}
+    unittestEqual( \
+        perfIntroMemory(data), \
+        '- **Memory:** 2.5 MB minimum footprint, the lowest.' \
+    )
+    unittestEqual(perfIntroMemory({}), '')
+endfunction
+unittestRunTest('testPerfIntroMemory_bestAlone')
+
+
+function testPerfIntroMemory_notBest():
+    data = {'crossLanguage': {'empty': { \
+        'bare': {'wall_ms': 2.5, 'rss_mb': 2.2}, \
+        'lua': {'wall_ms': 2.5, 'rss_mb': 2} \
+    }}}
+    unittestEqual( \
+        perfIntroMemory(data), \
+        '- **Memory:** 2.2 MB minimum footprint, the second lowest.' \
+    )
+endfunction
+unittestRunTest('testPerfIntroMemory_notBest')
+
+
+# Without the empty program's own figure there is no bullet to write
+function testPerfIntroMemory_noEmpty():
+    data = {'crossLanguage': { \
+        'empty': {'bare': {'wall_ms': 2.5}}, \
+        'nbody': {'bare': {'app_ms': 1, 'rss_mb': 5}} \
+    }}
+    unittestEqual(perfIntroMemory(data), '')
+endfunction
+unittestRunTest('testPerfIntroMemory_noEmpty')
+
+
+function testPerfIntroStartup_bestAlone():
+    data = {'crossLanguage': {'empty': {'bare': {'wall_ms': 2.5, 'rss_mb': 2.5}}}}
+    unittestEqual(perfIntroStartup(data), '- **Startup:** 2.5 ms, the fastest.')
+    unittestEqual(perfIntroStartup({}), '')
+endfunction
+unittestRunTest('testPerfIntroStartup_bestAlone')
+
+
+function testPerfIntroStartup_notBest():
+    data = {'crossLanguage': {'empty': { \
+        'bare': {'wall_ms': 2.7, 'rss_mb': 2.5}, \
+        'lua': {'wall_ms': 2.4, 'rss_mb': 1.7} \
+    }}}
+    unittestEqual(perfIntroStartup(data), '- **Startup:** 2.7 ms, the second fastest.')
+    objectSet(objectGet(objectGet(objectGet(data, 'crossLanguage'), 'empty'), 'lua'), 'wall_ms', 2.68)
+    unittestEqual(perfIntroStartup(data), '- **Startup:** 2.7 ms, tied with Lua for the fastest.')
+endfunction
+unittestRunTest('testPerfIntroStartup_notBest')
+
+
+function testPerfLanguageName_unknown():
+    unittestEqual(perfLanguageName('nope'), 'nope')
+endfunction
+unittestRunTest('testPerfLanguageName_unknown')
+
+
+function testPerfChunks():
+    unittestDeepEqual(perfChunks([], 6), [])
+    unittestDeepEqual(perfChunks(['a', 'b'], 6), [['a', 'b']])
+    unittestDeepEqual(perfChunks(['a', 'b', 'c'], 2), [['a', 'b'], ['c']])
+    unittestDeepEqual( \
+        perfChunks(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'], 6), \
+        [['a', 'b', 'c', 'd', 'e'], ['f', 'g', 'h', 'i']] \
+    )
+    unittestDeepEqual(perfChunks(['a'], 0), [])
+    unittestEqual(perfSplitNote(6), '')
+    unittestEqual(perfSplitNote(7), 'At most 6 tests per table.')
+endfunction
+unittestRunTest('testPerfChunks')
+
+
+function testPerfJoinAnd():
+    unittestEqual(perfJoinAnd([]), '')
+    unittestEqual(perfJoinAnd(['a']), 'a')
+    unittestEqual(perfJoinAnd(['a', 'b']), 'a and b')
+    unittestEqual(perfJoinAnd(['a', 'b', 'c']), 'a, b, and c')
+    unittestEqual(perfJoinParts([], ' '), '')
+    unittestEqual(perfJoinParts(['a', '', 'b'], ' '), 'a b')
+endfunction
+unittestRunTest('testPerfJoinAnd')
+
+
+function testPerfCrossWins_leads():
+    unittestEqual( \
+        perfCrossWins(testPerfData), \
+        'BareScript (C) leads every interpreter on every application.' \
+    )
+endfunction
+unittestRunTest('testPerfCrossWins_leads')
+
+
+function testPerfCrossWins_wins():
+    data = jsonParse(jsonStringify(testPerfData))
+    objectSet(objectGet(objectGet(objectGet(data, 'crossLanguage'), 'nbody'), 'bare'), 'app_ms', 10)
+    objectSet(objectGet(objectGet(objectGet(data, 'crossLanguage'), 'pathfind'), 'bare'), 'app_ms', 10)
+    unittestEqual(perfCrossWins(data), 'BareScript (C) is the fastest on every application.')
+    objectSet(objectGet(objectGet(objectGet(data, 'crossLanguage'), 'pathfind'), 'bare'), 'app_ms', 430)
+    unittestEqual( \
+        perfCrossWins(data), \
+        'BareScript (C) is the fastest on nbody and leads every interpreter on every application.' \
+    )
+endfunction
+unittestRunTest('testPerfCrossWins_wins')
+
+
+function testPerfCrossWins_winsOnly():
+    data = { \
+        'crossLanguage': { \
+            'empty': { \
+                'bare': {'wall_ms': 2, 'rss_mb': 2}, \
+                'js': {'wall_ms': 20, 'rss_mb': 20} \
+            }, \
+            'nbody': { \
+                'bare': {'app_ms': 10, 'rss_mb': 2}, \
+                'js': {'app_ms': 20, 'rss_mb': 20} \
+            }, \
+            'pathfind': { \
+                'bare': {'app_ms': 200, 'rss_mb': 2}, \
+                'js': {'app_ms': 10, 'rss_mb': 20} \
+            } \
+        } \
+    }
+    unittestEqual(perfCrossWins(data), 'BareScript (C) is the fastest on nbody.')
+endfunction
+unittestRunTest('testPerfCrossWins_winsOnly')
+
+
+function testPerfCrossWins_none():
+    data = {'crossLanguage': { \
+        'empty': { \
+            'bare': {'wall_ms': 2, 'rss_mb': 2}, \
+            'js': {'wall_ms': 20, 'rss_mb': 20} \
+        }, \
+        'nbody': { \
+            'bare': {'app_ms': 20, 'rss_mb': 2}, \
+            'js': {'app_ms': 10, 'rss_mb': 20} \
+        } \
+    }}
+    unittestEqual(perfCrossWins(data), '')
+endfunction
+unittestRunTest('testPerfCrossWins_none')
+
+
+# A port whose result did not match the others has no time
+function testPerfTimeRows_failedPort():
+    data = jsonParse(jsonStringify(testPerfData))
+    objectSet(objectGet(objectGet(objectGet(data, 'crossLanguage'), 'nbody'), 'js'), 'ok', false)
+    unittestDeepEqual(objectGet(perfTimeRows(data), 'js'), [null, 130])
+endfunction
+unittestRunTest('testPerfTimeRows_failedPort')
+
+
+function testPerfFastestApps_nulls():
+    unittestDeepEqual(perfFastestApps({}, ['nbody'], 'bare'), [])
+    unittestDeepEqual( \
+        perfFastestApps({'bare': [null], 'js': [1]}, ['nbody'], 'bare'), \
+        [] \
+    )
+endfunction
+unittestRunTest('testPerfFastestApps_nulls')
+
+
+function testPerfLeadsOthers_gaps():
+    unittestEqual(perfLeadsOthers({}, 'bare', ['js']), false)
+    unittestEqual(perfLeadsOthers({'bare': [1]}, 'bare', ['js']), false)
+    unittestEqual(perfLeadsOthers({'bare': [null], 'lua': [2]}, 'bare', ['js']), false)
+    unittestEqual(perfLeadsOthers({'bare': [3], 'lua': [2]}, 'bare', ['js']), false)
+endfunction
+unittestRunTest('testPerfLeadsOthers_gaps')
+
+
+function testPerfIncludeStanding():
+    unittestEqual(perfIncludeStanding({}), '')
+    unittestEqual( \
+        perfIncludeStanding(testPerfData), \
+        'On this suite, BareScript (C) is 2.2x slower than JavaScript (V8), and 11.3x slower than ' + \
+            'C (mandelbrot).' \
+    )
+    # The other BareScript implementations are not what the standing ranks it among
+    references = {'includeLibrary': { \
+        'BareScript (C)': {'mandelbrot': 9000}, \
+        'BareScript (Py)': {'mandelbrot': 900000} \
+    }}
+    unittestEqual(perfIncludeStanding(references), '')
+endfunction
+unittestRunTest('testPerfIncludeStanding')
+
+
+function testPerfIncludeLegend():
+    unittestEqual(perfIncludeLegend({}), '')
+    unittestEqual( \
+        perfIncludeLegend(testPerfData), \
+        'The other rows: JavaScript (V8) is a native JavaScript port and BareScript (JS) is the ' + \
+            'JavaScript implementation.' \
+    )
+endfunction
+unittestRunTest('testPerfIncludeLegend')
+
+
+function testPerfIncludeNote():
+    unittestEqual(perfIncludeNote({}), '')
+    unittestEqual( \
+        perfIncludeNote(testPerfData), \
+        'The C port runs 1 of the 9 tests, too few for a score, so it is left out.' \
+    )
+endfunction
+unittestRunTest('testPerfIncludeNote')
+
+
+# The C port is compared as a ratio of means over the tests both run, not by the table's fit
+function testPerfVsCPhrase():
+    unittestEqual(perfVsCPhrase({}), '')
+    unittestEqual(perfVsCPhrase(testPerfData), '11.3x slower than C (mandelbrot)')
+    unittestEqual(perfVsCPhrase({'includeLibrary': {'C': {'urlEncode': 1}}}), '')
+    unittestEqual(perfVsCPhrase({'includeLibrary': { \
+        'C': {'urlEncode': 1}, \
+        'BareScript (C)': {'mandelbrot': 5} \
+    }}), '')
+    unittestEqual(perfVsCPhrase({'includeLibrary': { \
+        'C': {'mandelbrot': 1}, \
+        'BareScript (C)': {'mandelbrot': 0} \
+    }}), '')
+    faster = {'includeLibrary': { \
+        'C': {'mandelbrot': 10, 'urlEncode': 0}, \
+        'BareScript (C)': {'mandelbrot': 5, 'urlEncode': 8} \
+    }}
+    unittestEqual(perfVsCPhrase(faster), '2.0x faster than C (mandelbrot)')
+    twoTests = {'includeLibrary': { \
+        'C': {'mandelbrot': 2, 'urlEncode': 8}, \
+        'BareScript (C)': {'mandelbrot': 8, 'urlEncode': 32} \
+    }}
+    unittestEqual(perfVsCPhrase(twoTests), '4.0x slower than C')
+    tie = {'includeLibrary': { \
+        'C': {'mandelbrot': 5}, \
+        'BareScript (C)': {'mandelbrot': 5} \
+    }}
+    unittestEqual(perfVsCPhrase(tie), '1.0x faster than C (mandelbrot)')
+endfunction
+unittestRunTest('testPerfVsCPhrase')
+
+
+function testPerfStartupBlurb_empty():
+    unittestEqual( \
+        perfStartupBlurb({}), \
+        'Each figure is for the empty program: the wall time of the whole process, and the ' + \
+            'memory an interpreter takes before it runs any code.' \
+    )
+    unittestEqual( \
+        perfStartupExtra(testPerfData), \
+        'BareScript (C) starts in 2.5 ms, the fastest. JavaScript (V8 JIT) takes 26.0 ms, ' + \
+            '10.4x slower than BareScript (C).' \
+    )
+    data = {'crossLanguage': {'empty': { \
+        'bare': {'wall_ms': 2.7, 'rss_mb': 2.5}, \
+        'lua': {'wall_ms': 2.5, 'rss_mb': 1.7}, \
+        'js': {'wall_ms': 26, 'rss_mb': 38} \
+    }}}
+    unittestEqual( \
+        perfStartupExtra(data), \
+        'BareScript (C) starts in 2.7 ms, the second fastest, and 9.6x faster than ' + \
+            'JavaScript (V8 JIT), the next slowest.' \
+    )
+    dataPerl = {'crossLanguage': {'empty': { \
+        'bare': {'wall_ms': 2.7, 'rss_mb': 2.5}, \
+        'lua': {'wall_ms': 2.5, 'rss_mb': 1.7}, \
+        'pl': {'wall_ms': 4.4, 'rss_mb': 4.3}, \
+        'js': {'wall_ms': 26, 'rss_mb': 38} \
+    }}}
+    unittestEqual( \
+        perfStartupExtra(dataPerl), \
+        'BareScript (C) starts in 2.7 ms, the second fastest, and 1.6x faster than Perl, the ' + \
+            'next slowest. JavaScript (V8 JIT) takes 26.0 ms, 9.6x slower than BareScript (C).' \
+    )
+    dataJsNext = {'crossLanguage': {'empty': { \
+        'bare': {'wall_ms': 2.5, 'rss_mb': 2.5}, \
+        'js': {'wall_ms': 26, 'rss_mb': 38} \
+    }}}
+    unittestEqual( \
+        perfStartupExtra(dataJsNext), \
+        'BareScript (C) starts in 2.5 ms, the fastest, and 10.4x faster than ' + \
+            'JavaScript (V8 JIT), the next slowest.' \
+    )
+    dataJsBest = {'crossLanguage': {'empty': { \
+        'bare': {'wall_ms': 30, 'rss_mb': 2.5}, \
+        'js': {'wall_ms': 10, 'rss_mb': 38} \
+    }}}
+    unittestEqual( \
+        perfStartupExtra(dataJsBest), \
+        'BareScript (C) starts in 30.0 ms, the second fastest.' \
+    )
+    dataAlone = {'crossLanguage': {'empty': {'bare': {'wall_ms': 2.5, 'rss_mb': 2.5}}}}
+    unittestEqual(perfStartupExtra(dataAlone), 'BareScript (C) starts in 2.5 ms, the fastest.')
+endfunction
+unittestRunTest('testPerfStartupBlurb_empty')
+
+
+function testPerfMemoryBlurb_empty():
+    unittestEqual( \
+        perfMemoryBlurb({}), \
+        "Each figure is an application's peak resident set under `make perfx`. `empty` is the " + \
+            "empty program - the interpreter's own baseline, which every other figure includes." \
+    )
+    unittestEqual( \
+        perfMemoryExtra({'crossLanguage': {'empty': {'bare': {'rss_mb': 2.5, 'wall_ms': 2}}}}), \
+        "BareScript (C)'s minimum footprint is 2.5 MB, the lowest." \
+    )
+    dataNotBest = {'crossLanguage': { \
+        'empty': { \
+            'bare': {'rss_mb': 5, 'wall_ms': 2}, \
+            'lua': {'rss_mb': 1, 'wall_ms': 2} \
+        }, \
+        'nbody': { \
+            'bare': {'rss_mb': 5, 'app_ms': 1}, \
+            'lua': {'rss_mb': 1, 'app_ms': 1} \
+        } \
+    }}
+    unittestEqual( \
+        perfMemoryExtra(dataNotBest), \
+        "BareScript (C)'s minimum footprint is 5.0 MB, the second lowest." \
+    )
+    dataAll = {'crossLanguage': { \
+        'empty': { \
+            'bare': {'rss_mb': 1, 'wall_ms': 2}, \
+            'lua': {'rss_mb': 2, 'wall_ms': 2} \
+        }, \
+        'nbody': { \
+            'bare': {'rss_mb': 1, 'app_ms': 1}, \
+            'lua': {'rss_mb': 2, 'app_ms': 1} \
+        } \
+    }}
+    unittestEqual( \
+        perfMemoryExtra(dataAll), \
+        "BareScript (C)'s minimum footprint is 1.0 MB, the lowest, and 2.0x lighter than Lua, " + \
+            'the next lightest. BareScript (C) is the lightest on every application.' \
+    )
+    dataSomeWins = {'crossLanguage': { \
+        'empty': { \
+            'bare': {'rss_mb': 20, 'wall_ms': 2}, \
+            'lua': {'rss_mb': 1, 'wall_ms': 2} \
+        }, \
+        'nbody': { \
+            'bare': {'rss_mb': 1, 'app_ms': 1}, \
+            'lua': {'rss_mb': 10, 'app_ms': 1} \
+        } \
+    }}
+    unittestEqual( \
+        perfMemoryExtra(dataSomeWins), \
+        "BareScript (C)'s minimum footprint is 20.0 MB, the second lowest. BareScript (C) is " + \
+            'the lightest on nbody.' \
+    )
+endfunction
+unittestRunTest('testPerfMemoryBlurb_empty')
+
+
+function testPerfMethod():
+    unittestEqual( \
+        perfMethod(testPerfData), \
+        'Each timing is the lowest of its runs; the cross-language suite ran each application 3 ' + \
+            'times. The size and memory figures come from one run apiece. `make perf-data` ' + \
+            're-measures all three and rewrites the files this page reads. The cross-language ' + \
+            "suite's applications, ports, and protocol are described in " + \
+            '[perfx/README.md](https://github.com/craigahobbs/bare-script-c/blob/main/perfx/README.md).' + \
+            '\n\nThe cross-language suite ran these interpreters:\n\n' + \
+            '- **BareScript (C):** `1.0.0`\n' + \
+            '- **JavaScript (V8 JIT):** `v26.8.2`\n' + \
+            '- **Lua:** `Lua 5.5.1`' \
+    )
+    unittestEqual(stringStartsWith(perfMethod({}), 'Each timing is the lowest of its runs. '), true)
+    unittestEqual(perfVersionList({}), '')
+endfunction
+unittestRunTest('testPerfMethod')
+
+
+function testPerfCrossBlurb_empty():
+    unittestEqual(perfCrossBlurb({}), '`make perfx` runs the cross-language application suite.')
+endfunction
+unittestRunTest('testPerfCrossBlurb_empty')
+
+
+function testPerfCrossLead():
+    unittestEqual( \
+        perfCrossLead(testPerfData), \
+        '`make perfx` runs an n-body simulation (300,000 steps) and grid pathfinding (800 x 800 ' + \
+            'cells), each ported line for line to the languages in the table. Each figure is ' + \
+            'application time, the best of 3 runs; the program clocks itself, so interpreter ' + \
+            'startup is not counted. A blank cell is a port that failed or whose result did not ' + \
+            'match the others.' \
+    )
+    data = jsonParse(jsonStringify(testPerfData))
+    objectDelete(data, 'runs')
+    objectDelete(objectGet(objectGet(objectGet(data, 'crossLanguage'), 'nbody'), 'bare'), 'n')
+    unittestEqual( \
+        perfCrossLead(data), \
+        '`make perfx` runs an n-body simulation and grid pathfinding (800 x 800 cells), each ' + \
+            'ported line for line to the languages in the table. Each figure is application time; ' + \
+            'the program clocks itself, so interpreter startup is not counted. A blank cell is a ' + \
+            'port that failed or whose result did not match the others.' \
+    )
+endfunction
+unittestRunTest('testPerfCrossLead')
+
+
+function testPerfIncludeBlurb_empty():
+    unittestEqual( \
+        perfIncludeBlurb({}), \
+        perfIncludeLead + ' At most ' + perfMaxTableTests + ' tests per table.' \
+    )
+endfunction
+unittestRunTest('testPerfIncludeBlurb_empty')
+
+
+function testPerfScores_complete():
+    scores = perfScores({'A': [1, 2], 'B': [2, 4]})
+    unittestEqual(numberToFixed(objectGet(scores, 'A'), 2), '1.00')
+    unittestEqual(numberToFixed(objectGet(scores, 'B'), 2), '2.00')
+endfunction
+unittestRunTest('testPerfScores_complete')
+
+
+function testPerfScores_missingCell():
+    scores = perfScores({'A': [1, 2], 'B': [2, null]})
+    unittestEqual(numberToFixed(objectGet(scores, 'A'), 2), '1.00')
+    unittestEqual(numberToFixed(objectGet(scores, 'B'), 2), '2.00')
+endfunction
+unittestRunTest('testPerfScores_missingCell')
+
+
+function testPerfScores_empty():
+    unittestDeepEqual(perfScores({'A': [null, null]}), {})
+    unittestDeepEqual(perfScores({}), {})
+endfunction
+unittestRunTest('testPerfScores_empty')
+
+
+function testPerfScores_nullColumn():
+    scores = perfScores({'A': [1, null], 'B': [2, null]})
+    unittestEqual(numberToFixed(objectGet(scores, 'A'), 2), '1.00')
+    unittestEqual(numberToFixed(objectGet(scores, 'B'), 2), '2.00')
+endfunction
+unittestRunTest('testPerfScores_nullColumn')
+
+
+function testPerfFmtPerf():
+    unittestEqual(perfFmtPerf(null), '')
+    unittestEqual(perfFmtPerf(3.8), '3.8 ms')
+    unittestEqual(perfFmtPerf(195), '195 ms')
+    unittestEqual(perfFmtPerf(9000), '9.00 s')
+    unittestEqual(perfFmtPerf(15000), '15.0 s')
+    unittestEqual(perfFmtPerf(160000), '160 s')
+    unittestEqual(perfFmtPerf(1590000), '1,590 s')
+endfunction
+unittestRunTest('testPerfFmtPerf')
+
+
+function testPerfFmtMs():
+    unittestEqual(perfFmtMs(17.6), '17.6 ms')
+    unittestEqual(perfFmtMs(340), '340 ms')
+    unittestEqual(perfFmtMs(1160), '1.16 s')
+endfunction
+unittestRunTest('testPerfFmtMs')
+
+
+function testPerfFmtMbKbScore():
+    unittestEqual(perfFmtMb(2.5), '2.5 MB')
+    unittestEqual(perfFmtMb(109.1), '109.1 MB')
+    unittestEqual(perfFmtKb(436224), '426 KB')
+    unittestEqual(perfFmtKb(10000000), '9,766 KB')
+    unittestEqual(perfFmtScore(1), '1.0x')
+    unittestEqual(perfFmtScore(2.37), '2.4x')
+endfunction
+unittestRunTest('testPerfFmtMbKbScore')
+
+
+function testPerfCommas():
+    unittestEqual(perfCommas('12'), '12')
+    unittestEqual(perfCommas('1234'), '1,234')
+    unittestEqual(perfCommas('1234.5'), '1,234.5')
+endfunction
+unittestRunTest('testPerfCommas')
+
+
+function testPerfBold_empty():
+    unittestDeepEqual(perfBold([]), [])
+endfunction
+unittestRunTest('testPerfBold_empty')
+
+
+function testPerfCells_best():
+    csv = 'language,test,runs,timeMs\n' + \
+        'BareScript (C),mandelbrot,1000,9000\n' + \
+        'BareScript (C),mandelbrot,1000,8000\n' + \
+        'BareScript (C),testSuite,1000,160000\n' + \
+        'JavaScript,urlEncode,1000,2\n' + \
+        'short,row\n'
+    cells = perfCells(csv)
+    unittestEqual(objectGet(objectGet(cells, 'BareScript (C)'), 'mandelbrot'), 8000)
+    unittestEqual(objectGet(objectGet(cells, 'BareScript (C)'), 'testSuite'), 160000)
+    unittestEqual(objectGet(objectGet(cells, 'JavaScript (V8)'), 'urlEncode'), 2)
+endfunction
+unittestRunTest('testPerfCells_best')
+
+
+function testPerfCells_null():
+    unittestDeepEqual(perfCells(null), {})
+endfunction
+unittestRunTest('testPerfCells_null')
+
+
+async function testPerfLoad_plainSummary():
+    unittestMockAll({'systemFetch': { \
+        'data/perf.csv': 'language,test,runs,timeMs\n', \
+        'data/perfx.json': jsonStringify(objectGet(testPerfData, 'crossLanguage')), \
+        'data/size.json': testPerfSizeJson(testPerfData) \
+    }})
+    data = perfLoad()
+    unittestMockEnd()
+    unittestEqual(objectGet(objectGet(objectGet(data, 'crossLanguage'), 'empty'), 'bare') != null, true)
+    unittestEqual(objectGet(data, 'versions'), null)
+    unittestEqual(objectGet(data, 'runs'), null)
+endfunction
+unittestRunTest('testPerfLoad_plainSummary')
+
+
+async function testPerfLoad_badJson():
+    systemLogDebug('NOTICE: The following "jsonParse" error is expected:')
+    unittestMockAll({'systemFetch': { \
+        'data/perf.csv': 'language,test,runs,timeMs\n', \
+        'data/perfx.json': 'not-json', \
+        'data/size.json': testPerfSizeJson(testPerfData) \
+    }})
+    unittestEqual(perfLoad(), null)
+    unittestMockEnd()
+endfunction
+unittestRunTest('testPerfLoad_badJson')
+
+
+function testPerfFetchNull(urls):
+    return if(arrayLength(urls) < 0, [], null)
+endfunction
+
+
+function testPerfFetchShort(urls):
+    return if(arrayLength(urls) < 0, [], ['a', 'b'])
+endfunction
+
+
+async function testPerfLoad_fetchNull():
+    unittestMockOne('systemFetch', testPerfFetchNull)
+    unittestEqual(perfLoad(), null)
+    unittestMockEnd()
+endfunction
+unittestRunTest('testPerfLoad_fetchNull')
+
+
+async function testPerfLoad_shortFetch():
+    unittestMockOne('systemFetch', testPerfFetchShort)
+    unittestEqual(perfLoad(), null)
+    unittestMockEnd()
+endfunction
+unittestRunTest('testPerfLoad_shortFetch')
+
+
+async function testPerfLoad_noSummary():
+    unittestMockAll({'systemFetch': { \
+        'data/perf.csv': 'language,test,runs,timeMs\n', \
+        'data/perfx.json': '{}', \
+        'data/size.json': testPerfSizeJson(testPerfData) \
+    }})
+    unittestEqual(perfLoad(), null)
+    unittestMockEnd()
+endfunction
+unittestRunTest('testPerfLoad_noSummary')

@@ -1,0 +1,1373 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+include <markdown.bare>
+
+
+# The include library suite's tests, in table-column order, and the ones whose column heading is
+# shortened to fit - a test not named here heads its column with its own name
+perfIncludeTests = [ \
+    'mandelbrot', 'schemaParse', 'schemaValidate', 'markdownParse', 'markdownElements', \
+    'qrcodeMatrix', 'urlEncode', 'urlDecode', 'testSuite' \
+]
+perfIncludeHeadings = { \
+    'schemaParse': 'schParse', 'schemaValidate': 'schValidate', 'markdownParse': 'mdParse', \
+    'markdownElements': 'mdElements', 'qrcodeMatrix': 'qrcode' \
+}
+
+# Test/application columns per table, not counting Language or vs best
+perfMaxTableTests = 6
+
+# The two native baselines report under their language's name; the table shows the runtime that runs them
+perfIncludeNames = {'JavaScript': 'JavaScript (V8)', 'Python': 'Python (CPython)'}
+
+# The include library table's other rows, in the order the blurbs name them, each with what the
+# legend says it runs: the native ports of the same workloads, then the other BareScript
+# implementations. The C port runs one test and is left out of the table - perfVsC compares it.
+perfIncludeNative = [ \
+    ['JavaScript (V8)', 'a native JavaScript port'], \
+    ['Python (CPython)', 'a native Python port'] \
+]
+perfIncludeReference = [ \
+    ['BareScript (JS)', 'the JavaScript implementation'], \
+    ['BareScript (PyC)', "the Python implementation's C runtime"], \
+    ['BareScript (Py)', "the Python implementation's pure-Python runtime"] \
+]
+
+# What the include library suite runs, and how to read its tables
+perfIncludeLead = '`make perf` runs the include library suite - the BareScript library this runtime ' + \
+    'ships - on every BareScript implementation, alongside native ports of the same workloads. The ' + \
+    'tests are a Mandelbrot set, schema parsing and validation, Markdown parsing and element ' + \
+    "rendering, a QR code matrix, URL encoding and decoding, and the library's own test suite. Each " + \
+    'figure is time per 1000 runs, except `testSuite`, which is a single run of that test suite; a ' + \
+    'blank cell is a workload with no port in that language.'
+
+# What the size table measures
+perfSizeLead = 'The runtime ships as one shared library with no required dependency but libm; the ' + \
+    'compressed include library it carries holds the BareScript parser and linter.'
+
+# The cross-language suite's languages, in the order its report lists them, and the one the startup
+# table leaves out - it compares runtimes, not V8's two modes
+perfLanguages = [ \
+    ['bare', 'BareScript (C)'], ['js', 'JavaScript (V8 JIT)'], ['jsless', 'JavaScript (V8 jitless)'], \
+    ['py', 'Python'], ['lua', 'Lua'], ['rb', 'Ruby'], ['pl', 'Perl'] \
+]
+perfStartupSkip = ['jsless']
+
+# The languages a "fastest interpreter" claim sets aside - V8's optimizing compilers are not one
+perfJitLanguages = ['js']
+
+# A place in a ranking, one for every language perfLanguages can hold; the first place needs no word
+perfPlaces = ['', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh']
+# The cross-language suite's applications, in table-column order, each with the phrase the blurb
+# uses and its workload size, "%n%" standing for the size the suite ran
+perfAppText = { \
+    'nbody': ['an n-body simulation', '%n% steps'], \
+    'loganalyze': ['web log analysis', '%n% log lines'], \
+    'jsonetl': ['a JSON pipeline', '%n% orders'], \
+    'pathfind': ['grid pathfinding', '%n% x %n% cells'], \
+    'salesreport': ['a CSV sales report', '%n% rows'] \
+}
+perfTitle = 'BareScript (C) Performance'
+perfDataCsv = 'data/perf.csv'
+perfDataPerfx = 'data/perfx.json'
+perfDataSize = 'data/size.json'
+
+
+async function perfMain():
+    data = perfLoad()
+    if data == null:
+        markdownPrint('**Error:** Failed to load performance data')
+        return
+    endif
+    documentSetTitle(perfTitle)
+    markdownPrint( \
+        '# ' + perfTitle, \
+        '', \
+        perfIntro(data), \
+        '', \
+        '`make perfx` and `make perf` compare this runtime with V8, CPython, Lua, Ruby, Perl, and the ' + \
+            'JavaScript and Python BareScript implementations. Lower is better throughout. Each ' + \
+            "table's last column scores a language against the best one, so 1x is the best and 2x " + \
+            'costs twice as much; a difference under about 5% is run-to-run drift.', \
+        '', \
+        'Measured on ' + markdownEscape(objectGet(data, 'machine')) + ', ' + \
+            objectGet(data, 'when') + '.', \
+        '', \
+        '[Source](https://github.com/craigahobbs/bare-script-c)', \
+        '', \
+        '## Cross-Language Benchmarks', \
+        '', \
+        perfCrossBlurb(data), \
+        '', \
+        perfTableLanguages(data), \
+        '', \
+        '## Include Library Benchmarks', \
+        '', \
+        perfIncludeBlurb(data), \
+        '', \
+        perfTableInclude(data), \
+        '', \
+        '## Memory', \
+        '', \
+        perfMemoryBlurb(data), \
+        '', \
+        perfTableMemory(data), \
+        '', \
+        '## Startup', \
+        '', \
+        perfStartupBlurb(data), \
+        '', \
+        perfTableStartup(data), \
+        '', \
+        '## Size', \
+        '', \
+        perfSizeLead, \
+        '', \
+        perfTableSize(data), \
+        '', \
+        '## Method', \
+        '', \
+        perfMethod(data) \
+    )
+endfunction
+
+
+# Fetch the three published files together. Returns null if any is missing.
+async function perfLoad():
+    urls = [perfDataCsv, perfDataPerfx, perfDataSize]
+    texts = systemFetch(urls)
+    if texts == null || arrayLength(texts) != 3:
+        return null
+    endif
+    csvText = arrayGet(texts, 0)
+    perfxText = arrayGet(texts, 1)
+    sizeText = arrayGet(texts, 2)
+    if csvText == null || perfxText == null || sizeText == null:
+        return null
+    endif
+    perfx = jsonParse(perfxText)
+    size = jsonParse(sizeText)
+    if perfx == null || size == null:
+        return null
+    endif
+    versions = objectGet(perfx, 'versions')
+    runs = objectGet(perfx, 'runs_per_test')
+    if objectGet(perfx, 'empty') == null:
+        perfx = objectGet(perfx, 'summary')
+        if perfx == null:
+            return null
+        endif
+    endif
+    data = { \
+        'when': objectGet(size, 'when', ''), \
+        'machine': objectGet(size, 'machine', ''), \
+        'includeLibrary': perfCells(csvText), \
+        'crossLanguage': perfx, \
+        'versions': versions, \
+        'runs': runs, \
+        'measure': size \
+    }
+    perfCacheTables(data)
+    return data
+endfunction
+
+
+# The page renders each of its three tables from several places and fits each of them twice over, so
+# the rows and the fit are computed here, once. Data this did not build - a test's literal - has
+# neither, and every reader below computes what it needs instead.
+function perfCacheTables(data):
+    timeRows = perfTimeRows(data)
+    memoryRows = perfMemoryRows(data)
+    includeRows = perfIncludeRows(data)
+    objectSet(data, 'timeRows', timeRows)
+    objectSet(data, 'memoryRows', memoryRows)
+    objectSet(data, 'includeRows', includeRows)
+    objectSet(data, 'timeScores', perfScores(timeRows))
+    objectSet(data, 'memoryScores', perfScores(memoryRows))
+    objectSet(data, 'includeScores', perfScores(includeRows))
+endfunction
+
+
+# Language to test to milliseconds per 1000 runs, the best of the CSV rows
+function perfCells(csvText):
+    cells = {}
+    if csvText == null:
+        return cells
+    endif
+    for row in stringSplitLines(csvText):
+        fields = stringSplit(stringTrim(row), ',')
+        if arrayLength(fields) != 4 || arrayGet(fields, 0) == 'language':
+            continue
+        endif
+        language = objectGet(perfIncludeNames, arrayGet(fields, 0), arrayGet(fields, 0))
+        test = arrayGet(fields, 1)
+        runs = numberParseFloat(arrayGet(fields, 2))
+        per1000 = 1000 * numberParseFloat(arrayGet(fields, 3)) / runs
+        tests = objectGet(cells, language)
+        if tests == null:
+            tests = {}
+            objectSet(cells, language, tests)
+        endif
+        best = objectGet(tests, test)
+        if best == null || per1000 < best:
+            objectSet(tests, test, per1000)
+        endif
+    endfor
+    return cells
+endfunction
+
+
+function perfApps(perfx):
+    apps = []
+    if perfx == null:
+        return apps
+    endif
+    for name in objectKeys(perfAppText):
+        if objectGet(perfx, name) != null:
+            arrayPush(apps, name)
+        endif
+    endfor
+    return apps
+endfunction
+
+
+# A language's measurements of an application, or null where it has none
+function perfEntry(perfx, app, key):
+    return objectGet(objectGet(perfx, app), key)
+endfunction
+
+
+function perfPresentLanguages(perfx):
+    languages = []
+    for language in perfLanguages:
+        if perfEntry(perfx, 'empty', arrayGet(language, 0)) != null:
+            arrayPush(languages, language)
+        endif
+    endfor
+    return languages
+endfunction
+
+
+# The languages the suite ran, V8's two modes counted once - the startup table compares runtimes
+function perfDistinctLanguages(perfx):
+    languages = []
+    for language in perfPresentLanguages(perfx):
+        if arrayIndexOf(perfStartupSkip, arrayGet(language, 0)) < 0:
+            arrayPush(languages, language)
+        endif
+    endfor
+    return languages
+endfunction
+
+
+function perfLanguageName(key):
+    for language in perfLanguages:
+        if arrayGet(language, 0) == key:
+            return arrayGet(language, 1)
+        endif
+    endfor
+    return key
+endfunction
+
+
+function perfTimeRows(data):
+    rows = objectGet(data, 'timeRows')
+    if rows != null:
+        return rows
+    endif
+    perfx = objectGet(data, 'crossLanguage')
+    return perfRows(perfx, perfApps(perfx), 'app_ms', true)
+endfunction
+
+
+function perfMemoryRows(data):
+    rows = objectGet(data, 'memoryRows')
+    if rows != null:
+        return rows
+    endif
+    perfx = objectGet(data, 'crossLanguage')
+    return perfRows(perfx, perfMemoryApps(perfx), 'rss_mb', false)
+endfunction
+
+
+# The memory table's columns: the empty program - the interpreter's baseline - then each application
+function perfMemoryApps(perfx):
+    apps = ['empty']
+    arrayExtend(apps, perfApps(perfx))
+    return apps
+endfunction
+
+
+# Language to one value per application, read from "field". A port whose result did not match the
+# others has no time to report, which is what "checked" drops; its memory figure is a real
+# measurement either way.
+function perfRows(perfx, apps, field, checked):
+    rows = {}
+    if perfx == null:
+        return rows
+    endif
+    for language in perfPresentLanguages(perfx):
+        key = arrayGet(language, 0)
+        values = []
+        for app in apps:
+            entry = perfEntry(perfx, app, key)
+            ok = !checked || objectGet(entry, 'ok') != false
+            arrayPush(values, if(ok, objectGet(entry, field)))
+        endfor
+        objectSet(rows, key, values)
+    endfor
+    return rows
+endfunction
+
+
+function perfStartupTimes(data):
+    perfx = objectGet(data, 'crossLanguage')
+    times = {}
+    if perfx == null:
+        return times
+    endif
+    for language in perfDistinctLanguages(perfx):
+        key = arrayGet(language, 0)
+        objectSet(times, key, objectGet(perfEntry(perfx, 'empty', key), 'wall_ms'))
+    endfor
+    return times
+endfunction
+
+
+function perfIncludeRows(data):
+    rows = objectGet(data, 'includeRows')
+    if rows != null:
+        return rows
+    endif
+    cells = objectCopy(objectGet(data, 'includeLibrary', {}))
+    objectDelete(cells, 'C')
+    rows = {}
+    for language in objectKeys(cells):
+        values = []
+        for test in perfIncludeTests:
+            arrayPush(values, objectGet(objectGet(cells, language), test))
+        endfor
+        objectSet(rows, language, values)
+    endfor
+    return rows
+endfunction
+
+
+# The fitted score each table's last column reports: the row effect of a multiplicative model,
+# value = row x column, fitted by least squares on the log scale, so a missing cell neither rewards
+# nor penalizes a row - for a complete table it is the geometric mean of each row's ratio to any
+# fixed reference, and 1.00 is the best row. The same fit perfx.py's scores() computes for its report.
+# The page's three fits, from perfCacheTables where the page has them
+function perfTimeScores(data):
+    return perfCachedScores(data, 'timeScores', perfTimeRows(data))
+endfunction
+
+
+function perfMemoryScores(data):
+    return perfCachedScores(data, 'memoryScores', perfMemoryRows(data))
+endfunction
+
+
+function perfIncludeScores(data):
+    return perfCachedScores(data, 'includeScores', perfIncludeRows(data))
+endfunction
+
+
+function perfCachedScores(data, name, rows):
+    scores = objectGet(data, name)
+    if scores != null:
+        return scores
+    endif
+    return perfScores(rows)
+endfunction
+
+
+function perfScores(matrix):
+    # The rows with something to fit, and the logarithm of each of their cells - the fit reads every
+    # cell four hundred times, so it reads a number rather than computing one
+    names = []
+    logs = []
+    for name in objectKeys(matrix):
+        row = []
+        measured = false
+        for value in objectGet(matrix, name):
+            if value != null && value > 0:
+                arrayPush(row, mathLn(value))
+                measured = true
+            else:
+                arrayPush(row, null)
+            endif
+        endfor
+        if measured:
+            arrayPush(names, name)
+            arrayPush(logs, row)
+        endif
+    endfor
+    scores = {}
+    if !names:
+        return scores
+    endif
+
+    columnCount = arrayLength(arrayGet(logs, 0))
+    effects = arrayNewSize(arrayLength(names), 0)
+    scale = arrayNewSize(columnCount, 0)
+    iteration = 0
+    while iteration < 200:
+        # An iteration that moves nothing is the fixed point - every iteration after it computes the
+        # same numbers, so the two hundred are a ceiling, not a count
+        settled = true
+        for row, ixRow in logs:
+            total = 0
+            count = 0
+            for value, ixColumn in row:
+                if value != null:
+                    total = total + value - arrayGet(scale, ixColumn)
+                    count = count + 1
+                endif
+            endfor
+            effect = total / count
+            settled = settled && effect == arrayGet(effects, ixRow)
+            arraySet(effects, ixRow, effect)
+        endfor
+        ixColumn = 0
+        while ixColumn < columnCount:
+            total = 0
+            count = 0
+            for row, ixRow in logs:
+                value = arrayGet(row, ixColumn)
+                if value != null:
+                    total = total + value - arrayGet(effects, ixRow)
+                    count = count + 1
+                endif
+            endfor
+            if count:
+                settled = settled && total / count == arrayGet(scale, ixColumn)
+                arraySet(scale, ixColumn, total / count)
+            endif
+            ixColumn = ixColumn + 1
+        endwhile
+        if settled:
+            break
+        endif
+        iteration = iteration + 1
+    endwhile
+
+    best = null
+    for effect in effects:
+        if best == null || effect < best:
+            best = effect
+        endif
+    endfor
+    for name, ixRow in names:
+        objectSet(scores, name, mathE() ** (arrayGet(effects, ixRow) - best))
+    endfor
+    return scores
+endfunction
+
+
+function perfSortedKeys(scores):
+    keys = []
+    for key in objectKeys(scores):
+        if objectGet(scores, key) != null:
+            arrayPush(keys, key)
+        endif
+    endfor
+    return arraySort(keys, systemPartial(perfCompareScore, scores))
+endfunction
+
+
+# The items, comma separated, the last joined with "and" - a pair needs no comma
+function perfJoinAnd(items):
+    if arrayLength(items) != 2:
+        return perfJoinSerial(items)
+    endif
+    return arrayGet(items, 0) + ' and ' + arrayGet(items, 1)
+endfunction
+
+
+# The parts, comma separated, the last joined with "and" - always a serial comma, for parts that
+# carry a comma of their own
+function perfJoinSerial(parts):
+    count = arrayLength(parts)
+    if count <= 1:
+        return arrayJoin(parts, '')
+    endif
+    return arrayJoin(arraySlice(parts, 0, count - 1), ', ') + ', and ' + arrayGet(parts, count - 1)
+endfunction
+
+
+# The non-empty parts, joined
+function perfJoinParts(parts, separator):
+    kept = []
+    for part in parts:
+        if part != '':
+            arrayPush(kept, part)
+        endif
+    endfor
+    return arrayJoin(kept, separator)
+endfunction
+
+
+function perfSplitNote(nCols):
+    if nCols <= perfMaxTableTests:
+        return ''
+    endif
+    return 'At most ' + perfMaxTableTests + ' tests per table.'
+endfunction
+
+
+# Spread items across ceil(n / size) tables so lengths differ by at most one (9 at size 6 is 5+4, not 6+3).
+function perfChunks(items, size):
+    chunks = []
+    n = arrayLength(items)
+    if n == 0 || size <= 0:
+        return chunks
+    endif
+    nTables = mathCeil(n / size)
+    base = mathFloor(n / nTables)
+    extra = n - base * nTables
+    i = 0
+    ix = 0
+    while ix < nTables:
+        count = base
+        if ix < extra:
+            count = count + 1
+        endif
+        arrayPush(chunks, arraySlice(items, i, i + count))
+        i = i + count
+        ix = ix + 1
+    endwhile
+    return chunks
+endfunction
+
+
+function perfSliceRows(rows, start, count):
+    sliced = {}
+    for key in objectKeys(rows):
+        objectSet(sliced, key, arraySlice(objectGet(rows, key), start, start + count))
+    endfor
+    return sliced
+endfunction
+
+
+# True where "value" is a column's lowest (ties count), the rows in "skip" not counted. Its own row
+# is not worth skipping - no value is below itself.
+function perfWinsColumn(rows, ixColumn, value, skip):
+    if value == null:
+        return false
+    endif
+    for other in objectKeys(rows):
+        if arrayIndexOf(skip, other) >= 0:
+            continue
+        endif
+        otherValue = arrayGet(objectGet(rows, other), ixColumn)
+        if otherValue != null && otherValue < value:
+            return false
+        endif
+    endfor
+    return true
+endfunction
+
+
+# Column names where "key" is the fastest (ties count)
+function perfFastestApps(rows, apps, key):
+    wins = []
+    values = objectGet(rows, key)
+    if values == null:
+        return wins
+    endif
+    for value, ix in values:
+        if perfWinsColumn(rows, ix, value, []):
+            arrayPush(wins, arrayGet(apps, ix))
+        endif
+    endfor
+    return wins
+endfunction
+
+
+# True if "key" is no slower than every language except those in "skip" on every app
+function perfLeadsOthers(rows, key, skip):
+    values = objectGet(rows, key)
+    if values == null:
+        return false
+    endif
+    anyOther = false
+    for other in objectKeys(rows):
+        if other != key && arrayIndexOf(skip, other) < 0:
+            anyOther = true
+            break
+        endif
+    endfor
+    if !anyOther:
+        return false
+    endif
+    for value, ix in values:
+        if !perfWinsColumn(rows, ix, value, skip):
+            return false
+        endif
+    endfor
+    return true
+endfunction
+
+
+# A one-line opener plus a short labeled list of claims, each a different yardstick.
+function perfIntro(data):
+    opener = perfJoinParts([ \
+        perfLanguageName('bare') + ' is a plain bytecode interpreter with no JIT.', \
+        perfIntroClaim(data) \
+    ], ' ')
+    items = perfJoinParts([ \
+        perfIntroPerformance(data), perfIntroMemory(data), perfIntroStartup(data), \
+        perfIntroSize(data) \
+    ], '\n')
+    if items == '':
+        return opener
+    endif
+    return opener + '\n\n' + items
+endfunction
+
+
+# The languages ahead of this runtime, best first, from any map of costs by language key
+function perfAheadOfBare(costs):
+    keys = perfSortedKeys(costs)
+    names = []
+    for key in arraySlice(keys, 0, arrayIndexOf(keys, 'bare')):
+        arrayPush(names, perfLanguageName(key))
+    endfor
+    return names
+endfunction
+
+
+# Where the cross-language suite places this runtime among the interpreters it ran - a JIT is not
+# one of those - naming the languages as a reader would name them
+function perfIntroClaim(data):
+    scores = perfTimeScores(data)
+    if objectGet(scores, 'bare') == null:
+        return ''
+    endif
+    names = []
+    for language in perfPresentLanguages(objectGet(data, 'crossLanguage')):
+        name = perfPlainName(arrayGet(language, 1))
+        if arrayGet(language, 0) != 'bare' && arrayIndexOf(names, name) < 0:
+            arrayPush(names, name)
+        endif
+    endfor
+    if !names:
+        return ''
+    endif
+    return 'It is the ' + perfJoinParts([perfPlaceWord(scores, perfJitLanguages), 'fastest'], ' ') + \
+        ' interpreter among the languages measured here (' + perfJoinAnd(names) + ').'
+endfunction
+
+
+# The word for this runtime's place in a ranking, the languages in "skip" not counted
+function perfPlaceWord(costs, skip):
+    place = 0
+    for key in perfSortedKeys(costs):
+        if key == 'bare':
+            break
+        endif
+        if arrayIndexOf(skip, key) < 0:
+            place = place + 1
+        endif
+    endfor
+    return arrayGet(perfPlaces, place)
+endfunction
+
+
+# The language a runtime runs, without the runtime: "JavaScript (V8 JIT)" is JavaScript
+function perfPlainName(name):
+    return arrayGet(stringSplit(name, ' ('), 0)
+endfunction
+
+
+# Where the cross-language suite puts this runtime - the applications are the closest thing here to
+# the code someone would actually write - and how far the native C port of a test is ahead
+function perfIntroPerformance(data):
+    parts = perfNeighbors(perfTimeScores(data), 'bare', '')
+    phrase = perfVsCPhrase(data)
+    if phrase != '':
+        arrayPush(parts, phrase)
+    endif
+    if !parts:
+        return ''
+    endif
+    return '- **Performance:** ' + arrayJoin(parts, '. ') + '.'
+endfunction
+
+
+# A suite's nearest language on each side of this runtime - the one it beats first, which "label"
+# names, then the one ahead of it
+function perfNeighbors(costs, subject, label):
+    parts = []
+    bare = objectGet(costs, subject)
+    if bare == null:
+        return parts
+    endif
+    keys = perfSortedKeys(costs)
+    ixBare = arrayIndexOf(keys, subject)
+    for ix in [ixBare + 1, ixBare - 1]:
+        if ix >= 0 && ix < arrayLength(keys):
+            key = arrayGet(keys, ix)
+            versus = perfVersus(perfLanguageName(key), bare, objectGet(costs, key))
+            arrayPush(parts, versus + if(ix > ixBare, label, ''))
+        endif
+    endfor
+    return parts
+endfunction
+
+
+# The empty program's resident set - the first column of the memory table - and where the suite's
+# footprints put this runtime
+function perfIntroMemory(data):
+    rows = perfMemoryRows(data)
+    scores = perfMemoryScores(data)
+    bare = objectGet(scores, 'bare')
+    if bare == null:
+        return ''
+    endif
+    empty = arrayGet(objectGet(rows, 'bare'), 0)
+    if empty == null:
+        return ''
+    endif
+    return '- **Memory:** ' + perfJoinParts([perfFmtMb(empty) + ' minimum footprint', \
+        perfPlacePhrase(scores, 'lowest'), perfNextPhrase(scores, 'lighter')], ', ') + '.'
+endfunction
+
+
+function perfIntroStartup(data):
+    times = perfStartupTimes(data)
+    bareTime = objectGet(times, 'bare')
+    if bareTime == null:
+        return ''
+    endif
+    return '- **Startup:** ' + perfJoinParts([perfFmtMs(bareTime), \
+        perfPlacePhrase(times, 'fastest'), perfNextPhrase(times, 'faster')], ', ') + '.'
+endfunction
+
+
+# "1.1x lighter than Lua" - this runtime against the next language down the ranking, or "" where
+# there is none or the gap rounds away
+function perfNextPhrase(costs, better):
+    keys = perfSortedKeys(costs)
+    ixNext = arrayIndexOf(keys, 'bare') + 1
+    if ixNext >= arrayLength(keys):
+        return ''
+    endif
+    nextKey = arrayGet(keys, ixNext)
+    ratio = objectGet(costs, nextKey) / objectGet(costs, 'bare')
+    if perfFmtScore(ratio) == perfFmtScore(1):
+        return ''
+    endif
+    return perfFmtScore(ratio) + ' ' + better + ' than ' + perfLanguageName(nextKey)
+endfunction
+
+
+# Where a ranking puts this runtime: "the fastest", "the second fastest", or "tied with Lua for the
+# fastest" where the gap rounds away
+function perfPlacePhrase(costs, superlative):
+    keys = perfSortedKeys(costs)
+    names = perfAheadOfBare(costs)
+    if names && perfFmtScore(objectGet(costs, 'bare') / objectGet(costs, arrayGet(keys, 0))) == \
+            perfFmtScore(1):
+        return 'tied with ' + perfJoinAnd(names) + ' for the ' + superlative
+    endif
+    return 'the ' + perfJoinParts([perfPlaceWord(costs, []), superlative], ' ')
+endfunction
+
+
+# What a program that embeds the runtime links against
+function perfIntroSize(data):
+    measure = objectGet(data, 'measure')
+    if measure == null || objectGet(measure, 'dylibBytes') == null:
+        return ''
+    endif
+    return '- **Size:** A ' + perfFmtKb(objectGet(measure, 'dylibBytes')) + ' shared library.'
+endfunction
+
+
+function perfCrossBlurb(data):
+    extra = perfJoinParts([ \
+        perfCrossStanding(perfTimeScores(data)), \
+        perfCrossWins(data), \
+        perfSplitNote(arrayLength(perfApps(objectGet(data, 'crossLanguage')))) \
+    ], ' ')
+    return perfJoinParts([perfCrossLead(data), extra], '\n\n')
+endfunction
+
+
+# What the cross-language suite runs, at what size, and what one of its figures is
+function perfCrossLead(data):
+    phrases = perfAppPhrases(data)
+    if !phrases:
+        return '`make perfx` runs the cross-language application suite.'
+    endif
+    runs = objectGet(data, 'runs')
+    return '`make perfx` runs ' + perfJoinAnd(phrases) + ', each ported line for line to the ' + \
+        'languages in the table. Each figure is application time' + \
+        if(runs == null, '', ', the best of ' + runs + ' runs') + \
+        '; the program clocks itself, so interpreter startup is not counted. A blank cell is a ' + \
+        'port that failed or whose result did not match the others.'
+endfunction
+
+
+# "an n-body simulation (300,000 steps)" for each application the suite ran
+function perfAppPhrases(data):
+    perfx = objectGet(data, 'crossLanguage')
+    phrases = []
+    for app in perfApps(perfx):
+        text = objectGet(perfAppText, app)
+        size = perfAppSize(objectGet(perfx, app))
+        arrayPush(phrases, arrayGet(text, 0) + \
+            if(size == null, '', ' (' + stringReplace(arrayGet(text, 1), '%n%', size) + ')'))
+    endfor
+    return phrases
+endfunction
+
+
+# An application's workload size, from the first language that reports one
+function perfAppSize(entries):
+    for key in objectKeys(entries):
+        size = objectGet(objectGet(entries, key), 'n')
+        if size != null:
+            return perfCommas(numberToFixed(size, 0))
+        endif
+    endfor
+    return null
+endfunction
+
+
+function perfCrossStanding(scores):
+    parts = perfNeighbors(scores, 'bare', ', the next slowest')
+    if !parts:
+        return ''
+    endif
+    return 'On this suite, ' + perfLanguageName('bare') + ' is ' + perfJoinSerial(parts) + '.'
+endfunction
+
+
+# The applications this runtime wins, and whether it leads every interpreter
+function perfCrossWins(data):
+    perfx = objectGet(data, 'crossLanguage')
+    rows = perfTimeRows(data)
+    apps = perfApps(perfx)
+    wins = perfFastestApps(rows, apps, 'bare')
+    name = perfLanguageName('bare')
+    parts = []
+    if wins:
+        arrayPush(parts, name + ' is the fastest on ' + perfWinsWhere(wins, apps))
+    endif
+    if arrayLength(wins) != arrayLength(apps) && perfLeadsOthers(rows, 'bare', perfJitLanguages):
+        arrayPush(parts, if(parts, 'leads', name + ' leads') + \
+            ' every interpreter on every application')
+    endif
+    if !parts:
+        return ''
+    endif
+    return perfJoinAnd(parts) + '.'
+endfunction
+
+
+# "nbody and pathfind", or "every application" where this runtime wins them all
+function perfWinsWhere(wins, names):
+    if arrayLength(wins) == arrayLength(names):
+        return 'every application'
+    endif
+    return perfJoinAnd(wins)
+endfunction
+
+
+function perfIncludeBlurb(data):
+    return perfJoinParts([ \
+        perfJoinParts([perfIncludeLead, perfSplitNote(arrayLength(perfIncludeTests))], ' '), \
+        perfJoinParts([perfIncludeLegend(data), perfIncludeNote(data)], ' '), \
+        perfIncludeStanding(data) \
+    ], '\n\n')
+endfunction
+
+
+# What each row of the include library table runs, this runtime aside
+function perfIncludeLegend(data):
+    rows = perfIncludeRows(data)
+    parts = []
+    for group in [perfIncludeNative, perfIncludeReference]:
+        for row in group:
+            if objectGet(rows, arrayGet(row, 0)) != null:
+                arrayPush(parts, arrayGet(row, 0) + ' is ' + arrayGet(row, 1))
+            endif
+        endfor
+    endfor
+    if !parts:
+        return ''
+    endif
+    return 'The other rows: ' + perfJoinAnd(parts) + '.'
+endfunction
+
+
+# This runtime's score beside the native ports' - the rows the standing ranks it among, the other
+# BareScript implementations having a sentence of their own
+function perfIncludeNativeScores(data):
+    scores = perfIncludeScores(data)
+    kept = {}
+    names = [perfLanguageName('bare')]
+    for row in perfIncludeNative:
+        arrayPush(names, arrayGet(row, 0))
+    endfor
+    for name in names:
+        score = objectGet(scores, name)
+        if score != null:
+            objectSet(kept, name, score)
+        endif
+    endfor
+    return kept
+endfunction
+
+
+# Where the include library suite puts this runtime: the native ports either side of it, then the
+# native C port of a test
+function perfIncludeStanding(data):
+    name = perfLanguageName('bare')
+    versus = perfNeighbors(perfIncludeNativeScores(data), name, ', the next slowest')
+    phrase = perfVsCPhrase(data)
+    if phrase != '':
+        arrayPush(versus, phrase)
+    endif
+    if !versus:
+        return ''
+    endif
+    return 'On this suite, ' + name + ' is ' + perfJoinSerial(versus) + '.'
+endfunction
+
+
+# Why the C port is not a row of the table
+function perfIncludeNote(data):
+    vsC = perfVsC(data)
+    if vsC == null:
+        return ''
+    endif
+    return 'The C port runs ' + arrayLength(objectGet(vsC, 'tests')) + ' of the ' + \
+        arrayLength(perfIncludeTests) + ' tests, too few for a score, so it is left out.'
+endfunction
+
+
+# "2.1x faster than X" or "2.0x slower than X", from two costs where lower is better
+function perfVersus(name, cost, other):
+    if other >= cost:
+        return perfFmtScore(other / cost) + ' faster than ' + name
+    endif
+    return perfFmtScore(cost / other) + ' slower than ' + name
+endfunction
+
+
+# This runtime against the native C port, over the tests both run, or null without one
+function perfVsC(data):
+    cells = objectGet(data, 'includeLibrary')
+    if cells == null:
+        return null
+    endif
+    native = objectGet(cells, 'C')
+    bare = objectGet(cells, perfLanguageName('bare'))
+    if native == null || bare == null:
+        return null
+    endif
+    tests = []
+    for test in perfIncludeTests:
+        nativeMs = objectGet(native, test)
+        if nativeMs != null && nativeMs > 0 && objectGet(bare, test) != null:
+            arrayPush(tests, test)
+        endif
+    endfor
+    if !tests:
+        return null
+    endif
+    bareMean = perfMeanTime(bare, tests)
+    nativeMean = perfMeanTime(native, tests)
+    if bareMean == null || nativeMean == null:
+        return null
+    endif
+    return {'tests': tests, 'bare': bareMean, 'native': nativeMean}
+endfunction
+
+
+function perfMeanTime(values, tests):
+    total = 0
+    for test in tests:
+        value = objectGet(values, test)
+        if value == null || value <= 0:
+            return null
+        endif
+        total = total + mathLn(value)
+    endfor
+    return mathE() ** (total / arrayLength(tests))
+endfunction
+
+
+function perfVsCNote(tests):
+    if arrayLength(tests) != 1:
+        return ''
+    endif
+    return ' (' + arrayGet(tests, 0) + ')'
+endfunction
+
+
+function perfVsCPhrase(data):
+    vsC = perfVsC(data)
+    if vsC == null:
+        return ''
+    endif
+    return perfVersus('C' + perfVsCNote(objectGet(vsC, 'tests')), objectGet(vsC, 'bare'), \
+        objectGet(vsC, 'native'))
+endfunction
+
+
+function perfStartupBlurb(data):
+    return perfJoinParts([ \
+        'Each figure is for the empty program: the wall time of the whole process, and the ' + \
+            'memory an interpreter takes before it runs any code.', \
+        perfStartupExtra(data) \
+    ], ' ')
+endfunction
+
+
+function perfStartupExtra(data):
+    times = perfStartupTimes(data)
+    if objectGet(times, 'bare') == null:
+        return ''
+    endif
+    name = perfLanguageName('bare')
+    keys = perfSortedKeys(times)
+    ixBare = arrayIndexOf(keys, 'bare')
+    bareTime = objectGet(times, 'bare')
+    nextKey = if(ixBare + 1 < arrayLength(keys), arrayGet(keys, ixBare + 1))
+    lead = name + ' starts in ' + perfFmtMs(bareTime) + ', ' + perfPlacePhrase(times, 'fastest')
+    next = perfNextPhrase(times, 'faster')
+    if next != '':
+        lead = lead + ', and ' + next + ', the next slowest'
+    endif
+    parts = [lead + '.']
+    jsTime = objectGet(times, 'js')
+    if jsTime != null && jsTime > bareTime:
+        mentioned = nextKey == 'js' || (ixBare > 0 && arrayGet(keys, 0) == 'js')
+        if !mentioned:
+            arrayPush(parts, 'JavaScript (V8 JIT) takes ' + perfFmtMs(jsTime) + ', ' + \
+                perfFmtScore(jsTime / bareTime) + ' slower than ' + name + '.')
+        endif
+    endif
+    return arrayJoin(parts, ' ')
+endfunction
+
+
+function perfMemoryBlurb(data):
+    perfx = objectGet(data, 'crossLanguage')
+    return perfJoinParts([ \
+        "Each figure is an application's peak resident set under `make perfx`. `empty` is the " + \
+            "empty program - the interpreter's own baseline, which every other figure includes.", \
+        perfMemoryExtra(data), \
+        perfSplitNote(arrayLength(perfMemoryApps(perfx))) \
+    ], ' ')
+endfunction
+
+
+function perfMemoryExtra(data):
+    rows = perfMemoryRows(data)
+    if objectGet(rows, 'bare') == null:
+        return ''
+    endif
+    name = perfLanguageName('bare')
+    scores = perfMemoryScores(data)
+    standing = name + "'s minimum footprint is " + perfFmtMb(arrayGet(objectGet(rows, 'bare'), 0)) + \
+        ', ' + perfPlacePhrase(scores, 'lowest')
+    next = perfNextPhrase(scores, 'lighter')
+    if next != '':
+        standing = standing + ', and ' + next + ', the next lightest'
+    endif
+    parts = [standing + '.']
+    if arrayLength(objectKeys(rows)) > 1:
+        appNames = perfMemoryApps(objectGet(data, 'crossLanguage'))
+        wins = perfFastestApps(rows, appNames, 'bare')
+        if wins:
+            arrayPush(parts, name + ' is the lightest on ' + perfWinsWhere(wins, appNames) + '.')
+        endif
+    endif
+    return arrayJoin(parts, ' ')
+endfunction
+
+
+# How the figures were taken, and on what
+function perfMethod(data):
+    runs = objectGet(data, 'runs')
+    text = 'Each timing is the lowest of its runs' + \
+        if(runs == null, '', '; the cross-language suite ran each application ' + runs + ' times') + \
+        '. The size and memory figures come from one run apiece. `make perf-data` re-measures all ' + \
+        "three and rewrites the files this page reads. The cross-language suite's applications, " + \
+        'ports, and protocol are described in ' + \
+        '[perfx/README.md](https://github.com/craigahobbs/bare-script-c/blob/main/perfx/README.md).'
+    versions = perfVersionList(data)
+    if versions == '':
+        return text
+    endif
+    return text + '\n\nThe cross-language suite ran these interpreters:\n\n' + versions
+endfunction
+
+
+# A line per interpreter the cross-language suite measured, with the version it reported
+function perfVersionList(data):
+    versions = objectGet(data, 'versions')
+    if versions == null:
+        return ''
+    endif
+    lines = []
+    for language in perfLanguages:
+        version = objectGet(versions, arrayGet(language, 0))
+        if version != null:
+            arrayPush(lines, '- **' + arrayGet(language, 1) + ':** `' + version + '`')
+        endif
+    endfor
+    return arrayJoin(lines, '\n')
+endfunction
+
+
+function perfTableLanguages(data):
+    perfx = objectGet(data, 'crossLanguage')
+    return perfRankedTables( \
+        perfTimeRows(data), perfTimeScores(data), perfPresentLanguages(perfx), perfApps(perfx), \
+        perfFmtMs \
+    )
+endfunction
+
+
+function perfTableStartup(data):
+    perfx = objectGet(data, 'crossLanguage')
+    languages = arraySort(perfDistinctLanguages(perfx), systemPartial(perfCompareStartup, perfx))
+    rows = []
+    columns = []
+    for language in languages:
+        entry = perfEntry(perfx, 'empty', arrayGet(language, 0))
+        wall = objectGet(entry, 'wall_ms')
+        rss = objectGet(entry, 'rss_mb')
+        arrayPush(rows, [arrayGet(language, 1), perfFmtMs(wall), perfFmtMb(rss)])
+        arrayPush(columns, [wall, rss])
+    endfor
+    return perfTable(['Language', 'Wall', 'Peak RSS'], rows, perfBold(columns))
+endfunction
+
+
+function perfTableMemory(data):
+    perfx = objectGet(data, 'crossLanguage')
+    colHeaders = perfMemoryApps(perfx)
+    return perfRankedTables( \
+        perfMemoryRows(data), perfMemoryScores(data), perfPresentLanguages(perfx), colHeaders, \
+        perfFmtMb \
+    )
+endfunction
+
+
+function perfRankedTables(rows, scores, languages, colHeaders, fmt):
+    chunks = perfChunks(colHeaders, perfMaxTableTests)
+    tables = []
+    start = 0
+    for chunk in chunks:
+        arrayPush(tables, perfRankedTable( \
+            perfSliceRows(rows, start, arrayLength(chunk)), languages, chunk, fmt, scores \
+        ))
+        start = start + arrayLength(chunk)
+    endfor
+    return arrayJoin(tables, '\n\n')
+endfunction
+
+
+function perfRankedTable(rows, languages, colHeaders, fmt, scores):
+    order = perfOrder(languages, scores)
+    headers = ['Language']
+    arrayExtend(headers, colHeaders)
+    arrayPush(headers, 'vs best')
+    tableRows = []
+    columns = []
+    for language in order:
+        key = arrayGet(language, 0)
+        row = [arrayGet(language, 1)]
+        values = objectGet(rows, key)
+        for value in values:
+            arrayPush(row, fmt(value))
+        endfor
+        arrayPush(row, perfFmtScore(objectGet(scores, key)))
+        arrayPush(tableRows, row)
+        arrayPush(columns, values)
+    endfor
+    return perfTable(headers, tableRows, perfBold(columns))
+endfunction
+
+
+function perfTableInclude(data):
+    rows = perfIncludeRows(data)
+    pairs = []
+    for name in objectKeys(rows):
+        arrayPush(pairs, [name, name])
+    endfor
+    headers = []
+    for test in perfIncludeTests:
+        arrayPush(headers, objectGet(perfIncludeHeadings, test, test))
+    endfor
+    return perfRankedTables(rows, perfIncludeScores(data), pairs, headers, perfFmtPerf)
+endfunction
+
+
+function perfTableSize(data):
+    measure = objectGet(data, 'measure')
+    return perfTable(['This runtime', ''], [ \
+        ['Shared library', perfFmtKb(objectGet(measure, 'dylibBytes'))], \
+        ['... of which compressed include library', perfFmtKb(objectGet(measure, 'includeBytes'))], \
+        ['... of which code', perfFmtKb(objectGet(measure, 'textBytes'))], \
+        ['Empty script, resident set', numberToFixed(objectGet(measure, 'emptyRss'), 1) + ' MB'], \
+        ['Empty script, peak footprint', numberToFixed(objectGet(measure, 'emptyPeak'), 1) + ' MB'], \
+        ['`make perf` test, peak', numberToFixed(objectGet(measure, 'perfRss'), 0) + ' MB'], \
+        ['Include library test suite, peak', numberToFixed(objectGet(measure, 'suiteRss'), 0) + ' MB'], \
+        ['... recording coverage', numberToFixed(objectGet(measure, 'coverRss'), 0) + ' MB'] \
+    ], [])
+endfunction
+
+
+function perfOrder(languages, scores):
+    return arraySort(languages, systemPartial(perfCompareLanguage, scores))
+endfunction
+
+
+function perfCompareLanguage(scores, languageA, languageB):
+    return objectGet(scores, arrayGet(languageA, 0)) - objectGet(scores, arrayGet(languageB, 0))
+endfunction
+
+
+function perfCompareScore(scores, nameA, nameB):
+    return objectGet(scores, nameA) - objectGet(scores, nameB)
+endfunction
+
+
+function perfCompareStartup(perfx, languageA, languageB):
+    wallA = objectGet(perfEntry(perfx, 'empty', arrayGet(languageA, 0)), 'wall_ms')
+    wallB = objectGet(perfEntry(perfx, 'empty', arrayGet(languageB, 0)), 'wall_ms')
+    return wallA - wallB
+endfunction
+
+
+# The [row, column] pairs holding each column's smallest value, the missing ones ignored
+function perfBold(columns):
+    bold = []
+    if !columns:
+        return bold
+    endif
+    ixColumn = 0
+    while ixColumn < arrayLength(arrayGet(columns, 0)):
+        best = null
+        for values in columns:
+            value = arrayGet(values, ixColumn)
+            if value != null && (best == null || value < best):
+                best = value
+            endif
+        endfor
+        if best != null:
+            for values, ixRow in columns:
+                if arrayGet(values, ixColumn) == best:
+                    arrayPush(bold, [ixRow, ixColumn + 1])
+                endif
+            endfor
+        endif
+        ixColumn = ixColumn + 1
+    endwhile
+    return bold
+endfunction
+
+
+# A markdown table, the first column left-aligned and the rest right, padded to its widest cell
+function perfTable(headers, rows, bold):
+    for pair in bold:
+        row = arrayGet(rows, arrayGet(pair, 0))
+        ixCell = arrayGet(pair, 1)
+        arraySet(row, ixCell, '**' + arrayGet(row, ixCell) + '**')
+    endfor
+
+    widths = []
+    for header, ixColumn in headers:
+        width = stringLength(header)
+        for row in rows:
+            width = mathMax(width, stringLength(arrayGet(row, ixColumn)))
+        endfor
+        arrayPush(widths, width)
+    endfor
+
+    lines = [perfRow(headers, widths)]
+    dashes = []
+    for width, ixColumn in widths:
+        arrayPush(dashes, if(ixColumn == 0, stringRepeat('-', width), stringRepeat('-', width - 1) + ':'))
+    endfor
+    arrayPush(lines, '| ' + arrayJoin(dashes, ' | ') + ' |')
+    for row in rows:
+        arrayPush(lines, perfRow(row, widths))
+    endfor
+    return arrayJoin(lines, '\n')
+endfunction
+
+
+function perfRow(cells, widths):
+    padded = []
+    for cell, ixCell in cells:
+        pad = stringRepeat(' ', arrayGet(widths, ixCell) - stringLength(cell))
+        arrayPush(padded, if(ixCell == 0, cell + pad, pad + cell))
+    endfor
+    return '| ' + arrayJoin(padded, ' | ') + ' |'
+endfunction
+
+
+# A time in the include library table, per 1000 runs, so it spans microseconds to an hour. Seconds
+# carry decimals only below 100 s.
+function perfFmtPerf(ms):
+    if ms == null:
+        return ''
+    endif
+    if ms >= 100000:
+        return perfCommas(numberToFixed(ms / 1000, 0)) + ' s'
+    endif
+    if ms >= 10000:
+        return numberToFixed(ms / 1000, 1) + ' s'
+    endif
+    return perfFmtMs(ms)
+endfunction
+
+
+function perfFmtMs(ms):
+    if ms >= 1000:
+        return numberToFixed(ms / 1000, 2) + ' s'
+    endif
+    if ms >= 100:
+        return numberToFixed(ms, 0) + ' ms'
+    endif
+    return numberToFixed(ms, 1) + ' ms'
+endfunction
+
+
+function perfFmtMb(mb):
+    return perfCommas(numberToFixed(mb, 1)) + ' MB'
+endfunction
+
+
+function perfFmtKb(bytes):
+    return perfCommas(numberToFixed(bytes / 1024, 0)) + ' KB'
+endfunction
+
+
+function perfFmtScore(score):
+    return numberToFixed(score, 1) + 'x'
+endfunction
+
+
+function perfCommas(text):
+    dot = stringIndexOf(text, '.')
+    whole = if(dot < 0, text, stringSlice(text, 0, dot))
+    rest = if(dot < 0, '', stringSlice(text, dot))
+    ix = stringLength(whole) - 3
+    while ix > 0:
+        whole = stringSlice(whole, 0, ix) + ',' + stringSlice(whole, ix)
+        ix = ix - 3
+    endwhile
+    return whole + rest
+endfunction

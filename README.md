@@ -38,10 +38,10 @@ endfor
 
 The reference implementations are in [JavaScript](https://github.com/craigahobbs/bare-script) and
 [Python](https://github.com/craigahobbs/bare-script-py). This one produces byte-identical output
-across their 1,407-test suite, with 100% line coverage of its own C. It is also fast and small: on
-real-world code it matches V8's bytecode interpreter and beats CPython, Lua, Ruby, and Perl, in a
-438 KB library with no dependency beyond libm that starts in 3 ms and 2.6 MB. The measurements are
-under [Performance](#performance).
+across their 1,407-test suite, with 100% line coverage of its own C. On real-world code it beats
+V8's bytecode interpreter, CPython, Lua, Ruby, and Perl, as a plain bytecode interpreter with no
+JIT. Measurements are on the
+[BareScript (C) Performance](https://craigahobbs.github.io/bare-script-c/perf/).
 
 ```sh
 make compile
@@ -65,9 +65,6 @@ make compile
   - [Threads](#threads)
 - [Testing](#testing)
 - [Performance](#performance)
-  - [Cross-Language Benchmarks](#cross-language-benchmarks)
-  - [Include Library Benchmarks](#include-library-benchmarks)
-  - [Memory and Size](#memory-and-size)
 - [Compatibility](#compatibility)
   - [jsonParse and regexNew messages](#jsonparse-and-regexnew-messages)
 - [Design](#design)
@@ -384,6 +381,7 @@ The public headers are in `include/barescript`: `value.h`, `parser.h`, `runtime.
 make test           # the C unit tests, at 100% line coverage
 make test-include   # the BareScript include library's own 1,407-test suite
 make test-language  # this project's own BareScript language tests
+make test-static    # the BareScript (C) Performance MarkdownUp app
 ```
 
 The include library suite is the reference implementations' own, vendored under
@@ -395,121 +393,47 @@ debug messages, which follow the Python implementation - see [Compatibility](#co
 
 ## Performance
 
-On real-world code this runtime beats V8's bytecode interpreter, CPython, Lua, Ruby, and Perl,
-starts in 2.5 ms and 2.5 MB, and does it as a plain bytecode interpreter - no JIT - in 213 KB of
-code. Two suites back that up: `make perfx`, real-world-like applications ported to six
-languages, and `make perf`, the include library's own suite, which the JavaScript and Python
-implementations also run. Each table's last column scores a language against the best one: its
-geometric mean across the tests, every test weighted equally, relative to the language with the
-lowest mean, so 1.00x is the best language and 2x is twice its typical cost. Differences under
-about 5% are within run-to-run drift.
+On real-world code this runtime beats V8's bytecode interpreter, CPython, Lua, Ruby, and Perl, as a
+plain bytecode interpreter with no JIT. Two suites back that up: `make perfx`, real-world-like
+applications ported to six languages, and `make perf`, the include library's own suite, which the
+JavaScript and Python implementations also run. Each table's last column scores a language against
+the best one: the language effect of a multiplicative model fitted by least squares on the log
+scale, relative to the best language, so 1x is the best and 2x is twice its typical cost.
 
-### Cross-Language Benchmarks
+The numbers live on the
+[BareScript (C) Performance](https://craigahobbs.github.io/bare-script-c/perf/), a MarkdownUp
+application that reads `static/perf/data/` (`perf.csv`, `perfx.json`, `size.json`). Re-measure and publish:
 
-`make perfx` runs an n-body simulation, web log analysis, a JSON pipeline, grid pathfinding, and
-a CSV sales report, each ported to BareScript, JavaScript (V8 with and without its JIT), Python,
-Lua, Ruby, and Perl, every port fed identical generated input and checked for the same result.
+```sh
+make perf-data PERF_RUNS=5
+make gh-pages
+```
+
+The first `gh-pages` publish needs an empty `gh-pages` branch:
+
+```sh
+git checkout --orphan gh-pages
+git reset --hard
+git commit --allow-empty -m "initializing gh-pages branch"
+git push origin gh-pages
+git checkout main
+```
 
 ```sh
 make perfx
 make perfx PERFX_ARGS="--apps nbody --runs 5"   # options pass through; see perfx/perfx.py --help
 make perfx-check                                # every port at a small size: do they all agree?
-```
-
-Application time on an Apple M3 Max (Node 26, Python 3.14, Lua 5.5, Ruby 2.6, Perl 5.34), best of
-three, with the fastest per application in bold:
-
-| Language                |       nbody | loganalyze |    jsonetl |   pathfind | salesreport | vs best |
-| ----------------------- | ----------: | ---------: | ---------: | ---------: | ----------: | ------: |
-| JavaScript (V8 JIT)     | **17.0 ms** |     495 ms | **108 ms** | **130 ms** |  **141 ms** |   1.00x |
-| BareScript              |      333 ms | **408 ms** |     109 ms |     442 ms |      212 ms |   2.42x |
-| JavaScript (V8 jitless) |      800 ms |     967 ms |     168 ms |     734 ms |      339 ms |   4.55x |
-| Python                  |      925 ms |     993 ms |     298 ms |     767 ms |      406 ms |   5.52x |
-| Lua                     |      587 ms |     972 ms |     1.28 s |     462 ms |      617 ms |   6.60x |
-| Ruby                    |      1.12 s |     1.04 s |     504 ms |     1.08 s |      1.03 s |   8.29x |
-| Perl                    |      2.14 s |     1.16 s |     4.47 s |     2.79 s |      992 ms |  17.92x |
-
-Only V8's JIT is faster overall, and BareScript beats it on the regex test. It now leads every
-interpreter on every application, pathfinding included - where every element access is a library
-call, and where it draws level with Lua. (Lua's JSON is a pure-Lua codec; Perl's is its core
-`JSON::PP`.) Launching the empty program:
-
-| Language            |    Wall | Peak RSS |
-| ------------------- | ------: | -------: |
-| BareScript          |  2.5 ms |   2.5 MB |
-| Lua                 |  2.6 ms |   1.7 MB |
-| Perl                |  4.4 ms |   4.3 MB |
-| Python              | 16.1 ms |  14.6 MB |
-| JavaScript (V8 JIT) | 26.9 ms |  38.3 MB |
-| Ruby                | 43.4 ms |  28.0 MB |
-
-### Include Library Benchmarks
-
-`make perf` runs the suite and merges the results of `../bare-script` and `../bare-script-py`
-when present; `perf/test.c` is the native C baseline.
-
-```sh
 make perf
 make perf TEST=mandelbrot PERF_RUNS=5
 ```
 
-Time per 1000 runs on the same machine, best of five. `PyC` is the Python implementation with its
-C extension; V8 and CPython 3.14 run the JavaScript and Python packages the library was ported
-from (Python has no markdown ports). `testSuite` is the include library's test suite, which parses
-about 2 MB of BareScript before its first test. Six of the nine tests are shown - `schemaParse`,
-`qrcodeMatrix`, and `urlDecode` track `markdownParse`, `schemaValidate`, and `urlEncode` - and the
-score covers all nine, each test's scale estimated from every implementation that runs it:
+`make perf` merges the results of `../bare-script` and `../bare-script-py` when present;
+`perf/test.c` is the native C baseline. A BareScript program can read the clock only in whole
+milliseconds, so `make perf` asks the suite for a 100 ms floor (`PERF_TIME_FLOOR`) and multiplies
+each test's iteration count until the timed run reaches it. Run the suite directly and it keeps
+its fixed counts, which is what a build-to-build comparison and this runtime's profile-guided
+training run need.
 
-| Language         | mandelbrot |  mdElements |    mdParse | schValidate |  urlEncode | testSuite | vs best |
-| ---------------- | ---------: | ----------: | ---------: | ----------: | ---------: | --------: | ------: |
-| JavaScript (V8)  | **1.56 s** | **32.4 ms** | **619 ms** | **57.1 ms** | **2.3 ms** |           |   1.00x |
-| BareScript (C)   |     9.00 s |      195 ms |     696 ms |      120 ms |     3.5 ms | **160 s** |   2.04x |
-| Python (CPython) |     46.6 s |             |            |      204 ms |    10.5 ms |           |   4.20x |
-| BareScript (JS)  |      259 s |      678 ms |     2.24 s |      1.75 s |    44.5 ms |   1,590 s |  20.08x |
-| BareScript (PyC) |      110 s |      624 ms |     7.27 s |      1.07 s |    52.0 ms |   7,150 s |  25.05x |
-| BareScript (Py)  |    3,529 s |      5.27 s |     21.2 s |      14.1 s |     372 ms |   9,460 s | 175.11x |
-
-The closest race is `markdownParse`, regular expressions against V8's JIT-compiled regex engine,
-1.1x; the widest is `markdownElements`, V8's inline caches allocating nested objects 6.0x faster,
-then `mandelbrot`, arithmetic against the JIT, 5.8x. Native C runs `mandelbrot` in 0.79 ms, 11x
-ahead.
-
-### Memory and Size
-
-Peak resident set of each perfx application, `empty` being the empty program, with the smallest
-per column in bold:
-
-| Language                |      empty |      nbody |   loganalyze |     jsonetl |    pathfind | salesreport | vs best |
-| ----------------------- | ---------: | ---------: | -----------: | ----------: | ----------: | ----------: | ------: |
-| BareScript              |     2.5 MB |     2.6 MB |     109.1 MB | **92.1 MB** | **17.4 MB** |     61.3 MB |   1.00x |
-| Lua                     | **1.7 MB** | **1.8 MB** |     138.2 MB |    201.4 MB |     39.4 MB | **36.0 MB** |   1.09x |
-| Perl                    |     4.3 MB |     6.6 MB |     136.7 MB |    219.0 MB |    113.2 MB |     86.6 MB |   2.22x |
-| Python                  |    14.6 MB |    15.2 MB | **106.9 MB** |    161.7 MB |     56.3 MB |     73.5 MB |   2.47x |
-| Ruby                    |    28.0 MB |    28.1 MB |     189.0 MB |    206.5 MB |     42.9 MB |    105.2 MB |   3.54x |
-| JavaScript (V8 JIT)     |    38.3 MB |    44.7 MB |     363.6 MB |    159.4 MB |     69.7 MB |    194.2 MB |   5.17x |
-| JavaScript (V8 jitless) |    37.6 MB |    40.8 MB |     357.1 MB |    181.1 MB |     86.0 MB |    196.2 MB |   5.36x |
-
-BareScript has the lowest footprint overall, holding the JSON pipeline in 92 MB where Lua needs
-201 MB and V8 159 MB, and the pathfinding grid in 17 MB. It is single-threaded, so its CPU time
-equals its wall time; V8 spends up to a third more CPU than wall on background threads. Lua interns
-every short string, which halves its sales report footprint, where the CSV fields repeat.
-
-| This runtime                            |        |
-| --------------------------------------- | -----: |
-| Shared library                          | 426 KB |
-| ... of which compressed include library | 124 KB |
-| ... of which Unicode case tables        |   8 KB |
-| ... of which code                       | 213 KB |
-| Empty script, resident set              | 2.5 MB |
-| Empty script, peak footprint            | 1.7 MB |
-| `make perf` test, peak                  |   6 MB |
-| Include library test suite, peak        |  28 MB |
-| ... recording coverage                  |  46 MB |
-
-The empty script's floor is the process itself: libcurl loads on the first HTTP fetch, the parser
-compiles from its model a statement at a time without building the model's objects, and a
-script keeps its model only where lint or
-coverage reads it. Memory figures are from `/usr/bin/time -l`.
 
 ## Compatibility
 

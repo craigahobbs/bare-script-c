@@ -93,6 +93,8 @@ def main():
     parser.add_argument('--check', action='store_true',
                         help='verify only: run every port at a small size and report whether the results agree')
     parser.add_argument('--list', action='store_true', help='list the applications and languages and exit')
+    parser.add_argument('--merge', action='store_true',
+                        help='keep the previous results for the applications and languages not measured now')
     parser.add_argument('--quiet', action='store_true', help='do not print the report to standard output')
     opt = parser.parse_args()
 
@@ -111,11 +113,25 @@ def main():
 
     apps = select(APPS, opt.apps, 'name', 'application')
     langs = select(LANGUAGES, opt.langs, 'key', 'language')
+    measuredKeys = {lang['key'] for lang in langs}
     if not os.path.exists(opt.bare):
         sys.exit(f'perfx: {opt.bare} not found - run "make release" or pass --bare')
     missing = [lang['name'] for lang in langs if lang['key'] != 'bare' and shutil.which(lang['cmd'](opt, '', 0)[0]) is None]
     if missing:
         sys.exit('perfx: interpreter not found for ' + ', '.join(missing))
+
+    # The previous run's measurements, for the applications and languages this one does not cover
+    prior = {}
+    priorVersions = {}
+    if opt.merge:
+        priorPath = os.path.join(opt.out, 'results.json')
+        if os.path.exists(priorPath):
+            with open(priorPath, encoding='utf-8') as fh:
+                stored = json.load(fh)
+            if stored.get('scale') != opt.scale:
+                sys.exit(f"perfx: {priorPath} was measured at scale {stored.get('scale')}, not {opt.scale}")
+            prior = stored.get('runs', {})
+            priorVersions = stored.get('versions', {})
 
     # Measure every port, interleaving the languages round by round so drift affects them alike
     results = {}
@@ -129,12 +145,21 @@ def main():
                 status = f"{measurement['app_ms']:.0f} ms" if measurement['error'] is None else 'FAILED'
                 print(f"{app['name']:<12} {lang['name']:<26} run {run + 1}/{opt.runs}  {status}", file=sys.stderr)
 
+    # Fill in what was not measured, and report on everything there is data for
+    for appName, byLang in prior.items():
+        for key, runs in byLang.items():
+            results.setdefault(appName, {}).setdefault(key, runs)
+    if prior:
+        apps = [app for app in APPS if app['name'] in results]
+        langs = [lang for lang in LANGUAGES if any(lang['key'] in byLang for byLang in results.values())]
+
     summary = summarize(apps, langs, results, opt)
     if opt.check:
         return report_check(summary)
 
     os.makedirs(opt.out, exist_ok=True)
-    versions = {lang['key']: version(lang['version'](opt)) for lang in langs}
+    versions = {lang['key']: version(lang['version'](opt)) if lang['key'] in measuredKeys
+                else priorVersions.get(lang['key']) for lang in langs}
     text = report(summary, apps, langs, versions, opt)
     with open(os.path.join(opt.out, 'report.md'), 'w', encoding='utf-8') as fh:
         fh.write(text)

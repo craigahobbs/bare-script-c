@@ -11,21 +11,27 @@ libcurl is used for HTTP if found at build time.
 
 `PROMPT.md` holds the original design requirements. `DESIGN.md` documents the design in depth -
 read it before making non-trivial changes. `README.md` is for users: building, the command line,
-embedding, and the measurements.
+embedding, and a pointer to [BareScript (C) Performance](https://craigahobbs.github.io/bare-script-c/perf/).
 
 ## Commands
 
 ```sh
-make commit         # the pre-commit gate: test + cover + test-include + test-language + release
+make commit         # the pre-commit gate: test + cover + test-include + test-language + test-static + release + test-release
 make compile        # build build/libbarescript.{so,dylib}, build/libbarescript.a, build/bare
 make test           # C unit tests
 make cover          # C unit tests with line coverage; FAILS THE BUILD under 100%
 make test-include   # the BareScript include library suite (1407 tests, 100% coverage)
 make test-language  # this project's own BareScript language tests
+make test-static    # the BareScript (C) Performance MarkdownUp app tests (100% coverage)
 make perf           # performance suite -> build/perf.csv
 make perf PERF_MERGE= PERF_RUNS=5   # this runtime only (no sibling suites), best of five
 make perfx          # cross-language application suite -> build/perfx/report.md (see perfx/README.md)
+make perf-data      # re-measure and update static/perf/data/ (PERF_DATA_ALL=1 for every language)
+make perf-measure   # the memory and size figures -> static/perf/data/size.json
 make perfx-check    # verify every perfx port computes the same result
+make doc            # copy static/ to build/doc/
+make gh-pages       # publish build/doc/ to the gh-pages branch
+make sync           # copy lib/include and static/perf to the JS and Python repos
 make release        # three-stage PGO+LTO build in build/release
 make includes       # regenerate src/includeSource.c (checked in; only after lib/include changes)
 make release INCLUDE="url.bare"                    # bundle only these includes (and the parser and linter)
@@ -43,7 +49,7 @@ make cover VERBOSE=1                # list every uncovered line
 make test-include TEST=testSchemaParse   # filter the BareScript suite
 ```
 
-Always run `make commit` before committing.
+Always run `make commit` before committing. `make commit` is test + cover + test-include + test-language + test-static + release + test-release.
 
 ## Conformance discipline
 
@@ -215,9 +221,10 @@ subset BareScript exposes - see DESIGN.md's **Regular Expressions** table.
 | `src/internal.h`          | declarations shared across implementation files               |
 | `test/`                   | C unit tests; `test/include/` is the BareScript language suite |
 | `lib/include/`            | **vendored** reference include library and its test suite     |
-| `bin/`                    | BareScript build tools (include source generator, perf report)   |
-| `perf/`                   | the benchmark and a native C baseline                         |
+| `bin/`                    | BareScript build tools: the include source generator, `perfReport.bare` |
+| `perf/`                   | the benchmark, a native C baseline, and the memory and size measurements |
 | `perfx/`                  | the cross-language application suite: runner, ports, report   |
+| `static/perf/`            | BareScript (C) Performance MarkdownUp app; published files in `data/` |
 
 ## Tests and coverage
 
@@ -254,9 +261,15 @@ lib/include/test/runTestsMarkdownUp.bare`, `bare -d -m test/include/runTests.bar
 3. Performance: run each `perf/test.bare` test (`-v vTest "'name'"`), the include suite, and an
    empty script as separate processes under `/usr/bin/time -l`, three rounds interleaving the
    baseline and the candidate, and compare the minimum **instructions retired**, cycles, and
-   maximum RSS. Instructions are stable to about ±0.3%; wall time drifts 5-10% across a day, so it
-   is never the deciding metric. Under `-d`, the suite's own `executed in` line is what a reader
-   compares by hand.
+   maximum RSS. Leave `vTimeFloor` alone here: the suite's fixed iteration counts are what makes two
+   builds comparable, and `make perf` only raises them - growing a count until the timed run lasts
+   `PERF_TIME_FLOOR` milliseconds, 100 by default - to beat the millisecond clock when it reports a
+   time. That floor is where precision stops costing time: above about 25 ms the machine's own noise
+   dominates, so the spread across runs stays 2-4% whatever the floor, while a 500 ms floor takes
+   five times as long and reads 1-5% slower. Only figures measured at one floor compare, so changing
+   it means re-measuring `static/perf/data/`. Instructions are stable to about ±0.3%; wall time
+   drifts 5-10% across a day, so it is never the deciding metric. Under `-d`,
+   the suite's own `executed in` line is what a reader compares by hand.
 4. Size: `size -m build/release/libbarescript.dylib` for `__text` (code) and `__const` (the
    compressed includes). When `__text` moves more than a few hundred bytes, find out why:
    `nm -n` both libraries, difference adjacent symbol addresses for per-function sizes, and join
@@ -335,36 +348,56 @@ Profile first, change what the profile names, measure, keep or revert:
   `pathfind` spend their time in `objectGet`/`arrayGet` calls - where the include suite is
   parser-bound.
 
-### Updating README's Performance section
+### Publishing BareScript (C) Performance
 
-The section has three parts - the cross-language perfx benchmarks, the include library benchmarks
-with the suite time as a column, and memory and size - and every number in it is re-measured, not
-edited:
+The app at `static/perf/` ([published](https://craigahobbs.github.io/bare-script-c/perf/)) fetches
+three files from `static/perf/data/` in one parallel `systemFetch`. It does not write, and it does
+not read C sources. README points at the app and must not grow figures the app already shows.
 
-1. `make perf PERF_RUNS=5` re-runs this runtime and, when the sibling checkouts are present, the
-   JavaScript and Python suites; `PERF_MERGE=` skips the siblings when only this runtime changed,
-   and their columns stay as they were.
-2. The include suite wall time, best of five, as `{ /usr/bin/time -p build/release/bare -d -m
-   lib/include/test/runTests.bare > /dev/null; } 2>&1 | awk '/^real/'`; redirecting stderr inside
-   the braces swallows the timer's report. The sibling rows come from `node bin/bare.js` in
-   `../bare-script` and the venv `bare` in `../bare-script-py` (pure Python needs
-   `BARESCRIPT_RUNTIME_PY=1`), and stay as they were when only this runtime changed.
-3. `make perfx` (best of three) for the Across Languages table, the startup table, and the memory
-   paragraph; `/usr/bin/time -l` for the empty script and suite figures; `ls -l` and `size -m` on
-   the release library for the sizes.
-4. Tables follow the perfx report's layout: languages as rows sorted by score, tests as columns,
-   the fastest per column in bold, times as `s`/`ms` (no decimals from 100 s and from 100 ms, one
-   from 10 s and below 100 ms, two from 1 s), and a final `vs best` column. The score is the one
-   `scores()` in `perfx/perfx.py` computes: the language effect of a multiplicative model fitted
-   by least squares on the log scale, relative to the best language - the plain geometric mean
-   of ratios when the table is complete, and unbiased by missing cells when it is not (the
-   include library table has them: no native `qrcodeMatrix` or `testSuite`, no Python markdown).
-   That table shows six representative columns (`mandelbrot`, `mdElements`, `mdParse`,
-   `schValidate`, `urlEncode`, and `testSuite`, the suite's wall time scaled to the per-1000-run
-   unit) but its score covers all nine tests. Generate the cells with a script that calls
-   `scores()` rather than by hand.
-5. `markdownParse` parses this README, so its figure moves when the file changes: measure it last,
-   after the edits, and update its cells and the means it feeds.
+```sh
+make perf-data PERF_RUNS=5
+make gh-pages
+```
+
+`make perf-data` runs the suites and copies their outputs:
+
+| File                          | Written by          | Holds                         |
+| ----------------------------- | ------------------- | ----------------------------- |
+| `static/perf/data/perf.csv`   | `make perf`         | include library suite         |
+| `static/perf/data/perfx.json` | `make perfx`        | cross-language suite          |
+| `static/perf/data/size.json`  | `perf/measure.sh`   | RSS, library size, date       |
+
+`static/perf/perf.bare` draws the tables and writes every sentence around them from the same data -
+the summary bullets, each section's blurb, and the Method section's run count and interpreter
+versions (`runs_per_test` and `versions`, which `perfx.json` carries beside its `summary`). A claim
+the data cannot support drops out of its sentence rather than going stale. `perfMaxTableTests` (6)
+is the column cap, not counting Language or vs best; include library's nine tests therefore become
+two tables of 5 and 4. Each table's vs best
+is the same fit `perfx.py`'s `scores()` computes, over **all tests** (repeated on each table).
+`testSuite` is written as `runs=1000`
+wall-milliseconds so `1000 * timeMs / runs` is the wall time in milliseconds, the include-library
+table's per-1000-run unit. The include library table's rows are named in `perfIncludeNative` and
+`perfIncludeReference` - native ports of the workloads, then the other BareScript implementations -
+which also carry the legend the blurb prints; C runs one test, too few to score, so it is compared
+as a ratio of means rather than given a row.
+
+To profile the app itself, run it under coverage and read the statement counts - the recipe is in
+BareScript's `SKILL.md`, under optimizing and simplifying. That profile put `perfScores` at 98.7% of
+the page's statements, which is why the fit looks as it does: it takes the logarithm of every cell
+once rather than on each pass, and it stops at its bit-exact fixed point, which it reaches after 3 to
+17 of the 200 iterations - a ceiling now, not a count. `perfCacheTables` then fits each of the three
+tables once in `perfLoad` instead of nine times across the page; a reader handed data `perfLoad` did
+not build, such as a test's literal, computes its own. Together those took the page from 1.6M
+statements and 1.03 ms to 47K and 0.35 ms with the rendered page byte-identical. Measured and not
+worth keeping: memoizing the fit on `jsonStringify(matrix)` (slower than recomputing), a single-pass
+`perfBold` (inside the noise), and dropping the table alignment `perfTable` and `perfRow` compute,
+which is 28% of the render's statements but only 0.02 ms. `perfx.json` is published as the suite
+writes it, per-run `runs` detail included: the page reads 17.5 KB of its 55 KB and spends 0.094 ms
+parsing rather than the 0.030 ms a trimmed copy would take, and it stays whole.
+
+`make gh-pages` depends on `commit` and `doc` (`cp -R static/* build/doc/`) then rsyncs `build/doc/`
+to `../bare-script-c.gh-pages`. It does not remeasure. `make sync` copies `lib/include/` and
+`static/perf/` to the JavaScript and Python checkouts when they are present.
 
 The gate runs before the commit even for a documentation-only change.
 
