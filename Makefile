@@ -161,7 +161,7 @@ help:
 	@echo "  perf-data     re-measure and update static/perf/data/"
 	@echo "  perfx         run the cross-language application suite against the release build"
 	@echo "  perfx-check   verify that every perfx port computes the same result"
-	@echo "  doc           copy static/ to build/doc/"
+	@echo "  doc           copy static/ and the Markdown docs to build/doc/"
 	@echo "  gh-pages      publish build/doc/ to the gh-pages branch"
 	@echo "  sync          copy include library and static/perf to the JS and Python repos"
 	@echo "  release       profile-guided optimization build in build/release"
@@ -589,6 +589,7 @@ perf-data: $(RELEASE_CLI) $(PERF_NATIVE)
 doc:
 	mkdir -p $(BUILD_DIR)/doc
 	cp -R static/* $(BUILD_DIR)/doc/
+	cp README.md DESIGN.md LICENSE $(BUILD_DIR)/doc/
 
 
 .PHONY: gh-pages
