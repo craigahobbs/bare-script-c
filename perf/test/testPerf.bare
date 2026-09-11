@@ -113,6 +113,8 @@ async function testPerfMain():
             ['systemFetch', [[perfDataCsv, perfDataPerfx, perfDataSize]]], \
             ['documentSetTitle', [perfTitle]], \
             ['markdownPrint', [ \
+                '[Home](../)', \
+                '', \
                 '# ' + perfTitle, \
                 '', \
                 perfIntro(testPerfData), \

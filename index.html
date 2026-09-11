@@ -3,10 +3,15 @@
     <head>
         <title>bare-script-c</title>
         <meta charset="utf-8">
-        <meta http-equiv="refresh" content="0; url=perf/">
-        <link rel="canonical" href="perf/">
+        <meta name="description" content="A pure-C implementation of the BareScript runtime">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="stylesheet" href="https://craigahobbs.github.io/markdown-up/app.css">
+        <link rel="preload" href="https://craigahobbs.github.io/markdown-up/bare-script/static/markdown.css" as="style">
+        <link rel="modulepreload" href="https://craigahobbs.github.io/markdown-up/lib/appImports.js" as="script">
     </head>
-    <body>
-        <p><a href="perf/">BareScript (C) Performance</a></p>
-    </body>
+    <script type="module">
+        import {MarkdownUp} from 'https://craigahobbs.github.io/markdown-up/lib/appImports.js';
+        const app = new MarkdownUp(window, {'url': 'README.md'});
+        app.run();
+    </script>
 </html>
