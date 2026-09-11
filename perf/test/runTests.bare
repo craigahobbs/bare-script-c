@@ -1,0 +1,13 @@
+# Licensed under the MIT License
+# https://github.com/craigahobbs/bare-script-c/blob/main/LICENSE
+
+include <unittest.bare>
+include <unittestMock.bare>
+
+unittestCoverageStart()
+
+include 'testPerf.bare'
+
+unittestCoverageStop()
+
+return unittestReport({'coverageMin': 100, 'coverageExclude': ['runTests.bare']})
