@@ -181,6 +181,10 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 
+.PHONY: superclean
+superclean: clean
+
+
 #
 # The bundled include library source
 #
