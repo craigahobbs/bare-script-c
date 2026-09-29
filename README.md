@@ -304,8 +304,9 @@ typedef BSValue (*BSFunctionFn)(const BSValue *args, size_t argCount, BSOptions 
 
 A `BSValue` is one 64-bit word passed by value. A number is a double as itself; every other value
 lives in the space of negative quiet NaNs, which no number uses: the top thirteen bits set, a
-four-bit type tag, and a 47-bit payload - an immediate null or boolean, or a pointer to a
-reference-counted heap object. Strings, arrays, objects, functions, regexes, and datetimes are the
+three-bit type tag, and a 48-bit payload - an immediate null or boolean, or a pointer to a
+reference-counted heap object. Forty-eight bits hold any user-space pointer on the 64-bit platforms
+supported, Linux on ARM64 included, where the heap lies above 2^47. Strings, arrays, objects, functions, regexes, and datetimes are the
 heap types: a datetime is boxed because JavaScript's `Date` range, 8.64e15 milliseconds either side
 of the epoch, needs more than a payload holds. Read a value through the accessors, never its bits:
 

@@ -60,7 +60,8 @@ typedef struct BSOptions BSOptions;
 /*
  * A BareScript value: one 64-bit word. A number is a double as itself. Every other value lives in
  * the space of negative quiet NaNs, which no number uses - BareScript has no NaN, and bsNumber makes
- * a null of one: the top thirteen bits set, then a four-bit type tag - the BSType - and a 47-bit
+ * a null of one: the top thirteen bits set, then a three-bit type tag - the BSType, less one past
+ * BS_NUMBER, which is never boxed, so the eight boxed types keep their order - and a 48-bit
  * payload, which is an immediate null or boolean, or a pointer to a reference-counted heap object:
  * a datetime, string, array, object, function, or regex. Read a value through the accessors below;
  * a zero-initialized value is the number zero, as a zeroed double is, and a null value is bsNull().
@@ -69,14 +70,17 @@ typedef struct BSValue {
     uint64_t bits;
 } BSValue;
 
-#define BS_VALUE_TAG_SHIFT 47
-#define BS_VALUE_BOXED 0x1FFF0u /* a boxed value's bits above the tag, shifted down: sign, exponent, quiet bit */
+#define BS_VALUE_TAG_SHIFT 48
+#define BS_VALUE_BOXED 0xFFF8u /* a boxed value's bits above the tag, shifted down: sign, exponent, quiet bit */
 #define BS_VALUE_PAYLOAD (((uint64_t) 1 << BS_VALUE_TAG_SHIFT) - 1)
+
+/* A boxed type's tag - a constant expression for a constant type */
+#define BS_VALUE_TAG(type) ((unsigned) (type) - ((type) > BS_NUMBER))
 
 /* A boxed value of a type and a payload - the runtime's own constructors */
 static inline BSValue bsValueBoxed(BSType type, uint64_t payload)
 {
-    return (BSValue) {((uint64_t) (BS_VALUE_BOXED | (unsigned) type) << BS_VALUE_TAG_SHIFT) | payload};
+    return (BSValue) {((uint64_t) (BS_VALUE_BOXED | BS_VALUE_TAG(type)) << BS_VALUE_TAG_SHIFT) | payload};
 }
 
 /* A reference type's value from its heap object */
@@ -88,18 +92,19 @@ static inline BSValue bsRefValue(BSType type, const void *ref)
 /* Whether a value is a number - not boxed */
 static inline bool bsIsNumber(BSValue value)
 {
-    return (value.bits >> (BS_VALUE_TAG_SHIFT + 4)) != 0x1FFF;
+    return (value.bits >> (BS_VALUE_TAG_SHIFT + 3)) != 0x1FFF;
 }
 
 /* Whether a value is of a boxed type - any but BS_NUMBER - in one compare */
 static inline bool bsIsType(BSValue value, BSType type)
 {
-    return (value.bits >> BS_VALUE_TAG_SHIFT) == (BS_VALUE_BOXED | (unsigned) type);
+    return (value.bits >> BS_VALUE_TAG_SHIFT) == (BS_VALUE_BOXED | BS_VALUE_TAG(type));
 }
 
 static inline BSType bsValueType(BSValue value)
 {
-    return bsIsNumber(value) ? BS_NUMBER : (BSType) ((value.bits >> BS_VALUE_TAG_SHIFT) & 15);
+    unsigned tag = (value.bits >> BS_VALUE_TAG_SHIFT) & 7;
+    return bsIsNumber(value) ? BS_NUMBER : (BSType) (tag + (tag > BS_BOOLEAN));
 }
 
 /* The payloads - each for a value of its type */

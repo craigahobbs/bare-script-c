@@ -61,7 +61,7 @@ void bsReleaseDestroyed(BSValue value);
  * word is below every boxed one and the immediates' tags below BS_DATETIME, so one compare decides
  * whether a value is counted at all, and one decrement serves them all.
  */
-#define BS_IS_REF(value) (((value).bits >> BS_VALUE_TAG_SHIFT) >= (BS_VALUE_BOXED | (unsigned) BS_DATETIME))
+#define BS_IS_REF(value) (((value).bits >> BS_VALUE_TAG_SHIFT) >= (BS_VALUE_BOXED | BS_VALUE_TAG(BS_DATETIME)))
 
 static inline int32_t *bsRefcount(BSValue value)
 {

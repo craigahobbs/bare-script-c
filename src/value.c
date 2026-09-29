@@ -45,7 +45,7 @@ static void bsOutOfMemory(void)
 BS_NOINLINE void *bsAlloc(size_t size)
 {
     void *ptr = malloc(size);
-    /* GCOV_EXCL_START - a value holds a pointer in 47 bits, which every supported platform's user space fits */
+    /* GCOV_EXCL_START - a value holds a pointer in 48 bits, which every supported platform's user space fits */
     if (ptr == NULL || ((uintptr_t) ptr & ~BS_VALUE_PAYLOAD) != 0) {
         bsOutOfMemory();
     }
@@ -2123,8 +2123,7 @@ void bsValuesFree(BSValue *values, size_t count)
 
 void bsReleaseDestroyed(BSValue value)
 {
-    /* A reference type, so its tag is its type */
-    switch ((BSType) ((value.bits >> BS_VALUE_TAG_SHIFT) & 15)) {
+    switch (bsValueType(value)) {
     case BS_STRING:
         bsStringFree(bsStringOf(value));
         break;

@@ -144,7 +144,7 @@ with it.
 ### Values and reference counting
 
 `BSValue` is one 64-bit word passed by value - a double, or a negative quiet NaN carrying a type tag
-and a 47-bit payload (an immediate, or a pointer to a refcounted heap object; datetimes are boxed) -
+and a 48-bit payload (an immediate, or a pointer to a refcounted heap object; datetimes are boxed) -
 read only through `bsValueType`, `bsIsType`, `bsIsNumber`, and the `bs<Type>Of` accessors; a zeroed
 value is the number zero, not null. DESIGN.md's **The Value System** gives the
 layout and the ownership rules (returns are owned, arguments and container accessors are borrowed),

@@ -165,12 +165,12 @@ void bsLog(BSOptions *options, const char *format, ...)
  * through to the globals object - matching the reference implementations, where an unassigned
  * local simply is not a key of the locals dictionary.
  */
-#define BS_UNSET_TYPE BS_NUMBER /* the one tag no boxed value uses - a number is never boxed - and below every reference tag */
-#define BS_IS_UNSET(value) bsIsType((value), BS_UNSET_TYPE)
+#define BS_UNSET_BITS 0x7FFFFFFFFFFFFFFFu /* a positive NaN no arithmetic makes - never a number, as bsNumber makes a null of NaN, and not boxed */
+#define BS_IS_UNSET(value) ((value).bits == BS_UNSET_BITS)
 
 static inline BSValue bsUnset(void)
 {
-    return bsValueBoxed(BS_UNSET_TYPE, 0);
+    return (BSValue) {BS_UNSET_BITS};
 }
 
 
