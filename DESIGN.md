@@ -21,8 +21,9 @@ How the runtime works and how it was tuned - the reference for changing it. The
 
 A `BSValue` is one 64-bit word passed by value. A number is a double as itself; every other value
 lives in the space of negative quiet NaNs, which no number uses: the top thirteen bits set, a
-four-bit type tag, and a 47-bit payload - an immediate null or boolean, or a pointer to a
-reference-counted heap object. Strings, arrays, objects, functions, regexes, and datetimes are the
+three-bit type tag, and a 48-bit payload - an immediate null or boolean, or a pointer to a
+reference-counted heap object. Forty-eight bits hold any user-space pointer on the 64-bit platforms
+supported, Linux on ARM64 included, where the heap lies above 2^47. Strings, arrays, objects, functions, regexes, and datetimes are the
 heap types: a datetime is boxed because JavaScript's `Date` range, 8.64e15 milliseconds either side
 of the epoch, needs more than a payload holds. Read a value through the accessors, never its bits:
 
@@ -246,7 +247,9 @@ a resident frame: its constants stay in place, a call fills only its arguments, 
 registers are released to null on the way out; a recursive call, finding the frame busy, builds one
 of its own. The emitter compiles a jump's condition as
 jumps: a comparison is one comparison jump, `and` and `or` short-circuit through jumps of their
-own, and a `not` flips the sense, so `jumpif (a < b && c < d)` is two instructions. The names a call site, load site, or unknown-label trap refers to are not operands
+own, and a `not` flips the sense, so `jumpif (a < b && c < d)` is two instructions; an `objectGet`
+or `objectHas` call whose result only decides the jump takes an opcode that jumps on the result itself,
+and on any other shape makes the call and leaves the jump to run. The names a call site, load site, or unknown-label trap refers to are not operands
 and live in a table of their own, so a frame copies only literals. A local read before
 it is assigned falls through to the global of the same name, which would cost every register read
 a test; instead the emitter runs a definite-assignment analysis over each function body - a
@@ -279,7 +282,7 @@ into the coverage object's per-line counts, each resolved the first time its sta
 a block marker increments a number per statement instead of formatting a line key and searching the
 covered object.
 
-`bsScriptToModel` (and, internally, `bsExprToModel`) return the model (with `scriptName` / `scriptLines` /
+`bsScriptToModel` returns the model (with `scriptName` / `scriptLines` /
 `system` overlaid), which is how the linter receives a script and how `barescriptEvaluateExpression`
 works. A model is several times the size of its script text and only the linter and coverage
 reporting read it, so a compiled script does not have to keep one: `bsScriptForgetModel` drops it,
@@ -575,6 +578,7 @@ and inlines call sites in the proportion the training run exercises them.
 | ------- | ---- |
 | `perf/test.bare` | the official suite - the benchmark itself |
 | `lib/include/test/runTests.bare` | the include library test suite: parses about 2 MB of BareScript from source and runs every include library function. This is the path `bare script.bare` takes; the suite never does, since it loads bundled models. |
+| `bin/includeSource.bare` | the bundled include generator, compressing four includes: a script's own code running without coverage |
 
 An earlier mix added a synthetic source-parse script, this project's language tests, and a
 static-analysis run instead of the test suite. Measured against a rebuilt identical configuration,
@@ -586,8 +590,17 @@ Training on the performance suite alone is 3% slower overall and 5% slower on th
 the test suite alone is 2% slower and 4% slower on `markdownParse`; weighting the performance
 suite 3:1 is 2% slower, weighting the test suite 3:1 is noise; and adding a third program that
 sweeps the built-in library - JSON, sorting, strings, regular expressions, objects, numbers,
-dates - grows the code 5% and moves nothing, the held-out script included. The two-program,
-equal-weight mix is the optimum.
+dates - grows the code 5% and moves nothing, the held-out script included.
+
+That two-program mix had a blind spot. The test suite records coverage, and the performance
+suite runs bundled includes, which carry no statement markers - so every statement marker the
+profile saw took the coverage path, and the release laid that path out as the likely one, with
+the ordinary path a jump away. The include generator is the third program because it is a
+script's own code running without coverage: with it, the statement-heavy `perfx` applications,
+which no training program resembles, run 3-6% fewer cycles (`pathfind` 5-6%, `salesreport`
+4%), for at most 0.3% more instructions on the include library tests. Compressing every include
+instead of four goes further on those applications (`pathfind` 11%) but costs the include
+library tests up to 0.8%.
 
 ## Testing and Coverage
 
