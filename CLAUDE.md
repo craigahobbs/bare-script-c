@@ -123,8 +123,8 @@ that might be); a call's argument operands sit in the `DATA` words that follow i
 into a borrowed argument array; `CALL_NAME`, `LOAD_NAME`, and `STORE_NAME` operands index the
 chunk's per-site caches (`caches[]`), which hold a pointer to the globals
 object's value slot validated by the object's *structural* `generation` (bumped only when a key is
-added or removed - an in-place update does not move slots); an `objectGet` or `objectSet` site's
-cache also remembers the entry index its key was last found at, checked against the entry's key
+added or removed - an in-place update does not move slots); an `objectGet`, `objectHas`, or `objectSet`
+site's cache also remembers the entry index its key was last found at, checked against the entry's key
 before the object is scanned. Runtime errors are checked after each
 call, not per statement; line numbers come from `coverPcs` on demand. A system script - a bundled
 include - is emitted without `STMT` instructions, so never assume a `STMT` precedes every

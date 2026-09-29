@@ -389,9 +389,6 @@ BSScript *bsScriptFromModelBinary(const unsigned char *data, size_t size, const 
 /* Intern the parser-model object keys so JSON decode and emit share interned names */
 void bsModelKeysInit(void);
 
-/* Convert a compiled expression to its JSON "Expression" model - returns an owned object value */
-BSValue bsExprToModel(const BSExpr *expr);
-
 /*
  * The line of the statement containing the instruction at "pc" - the last of "count" statements
  * whose first instruction, in "pcs", is at or before it - or zero before the first
@@ -429,9 +426,10 @@ struct BSInst {
  *
  * The cache points at the globals object's value slot for the name, so an assignment to the name
  * is seen through the slot. The slot is re-resolved when the globals object's structural
- * generation changes (a key added or removed) or the options instance changes. An objectGet or
- * objectSet call site also remembers the entry index its key was found at, since records built
- * the same way keep a key at the same index; the entry's key is checked before the memo is used.
+ * generation changes (a key added or removed) or the options instance changes. An objectGet,
+ * objectHas, or objectSet call site also remembers the entry index its key was found at, since
+ * records built the same way keep a key at the same index; the entry's key is checked before the
+ * memo is used.
  */
 struct BSCallCache {
     BSValue *slot;      /* the value slot in the globals object, or NULL if the name is absent */

@@ -632,13 +632,12 @@ typedef struct {
 } BSEmit;
 
 
-/* The null constant's operand: constant zero, which bsEmitInit allocates first */
 /* The operand encoding the emitter works in: the high bit names a constant, the rest its index */
 #define BS_OPERAND_CONST 0x8000u  /* an operand naming a constant rather than a register */
 #define BS_OPERAND_MAX 0x7fffu    /* the largest register or constant index an operand can name */
 #define BS_OPERAND_INDEX(o) ((o) & BS_OPERAND_MAX)
 #define BS_INDEX_MAX 0xffffu      /* the largest name or function index an instruction's a field holds */
-#define BS_OPERAND_NULL BS_OPERAND_CONST
+#define BS_OPERAND_NULL BS_OPERAND_CONST  /* constant zero, which bsEmitInit allocates first */
 
 
 static uint32_t bsEmitInst(BSEmit *e, uint8_t op, uint16_t a, uint16_t b, uint16_t c)
@@ -1098,9 +1097,8 @@ static void bsEmitArgOrNull(BSEmit *e, const BSAst *ast, uint32_t arg, uint16_t 
 
 
 /*
- * The comparison jump opcode for a jump on the expression "id" being "jumpIfTrue", when it is a
- * comparison - its operand nodes are returned - or zero. A jump on false takes the opposite
- * comparison: EQ and NE, LT and GE, LE and GT are the pairs.
+ * The comparison jump opcode for a jump on "node" being "jumpIfTrue", when it is a comparison, or
+ * zero. A jump on false takes the opposite comparison: EQ and NE, LT and GE, LE and GT are the pairs.
  */
 static uint8_t bsCompareJumpOpcode(const BSNode *node, bool jumpIfTrue)
 {
@@ -1513,6 +1511,7 @@ static inline uint16_t bsOperandRelocate(uint16_t operand, uint16_t base)
 
 static void bsCodeRelocateConstants(BSInst *inst, size_t count, uint16_t base)
 {
+    /* A DATA word matches no case: a call relocates its own, and a jump's target or a trap's line is not operands */
     for (size_t pc = 0; pc < count; pc++) {
         uint8_t op = inst[pc].op;
         if (op == BS_OP_JUMP_FALSE || op == BS_OP_JUMP_TRUE || op == BS_OP_RETURN) {
@@ -1522,13 +1521,6 @@ static void bsCodeRelocateConstants(BSInst *inst, size_t count, uint16_t base)
         } else if ((op >= BS_OP_ADD && op <= BS_OP_SHR) || (op >= BS_OP_JUMP_EQ && op <= BS_OP_JUMP_GE)) {
             inst[pc].b = bsOperandRelocate(inst[pc].b, base);
             inst[pc].c = bsOperandRelocate(inst[pc].c, base);
-            if (op >= BS_OP_JUMP_EQ) {
-                /* The target word that follows is not operands */
-                pc++;
-            }
-        } else if (op == BS_OP_JUMP_UNDEF) {
-            /* The line word that follows is not operands, and a is the label's name index */
-            pc++;
         } else if (op == BS_OP_CALL_NAME || op == BS_OP_CALL_SLOT ||
                    (op >= BS_OP_CALL_ARRAY_GET && op <= BS_OP_CALL_MATH) || op == BS_OP_CALL_OBJECT_JUMP) {
             /* The argument operands, three per data word - an unused field is zero, which names a slot */
@@ -2151,12 +2143,6 @@ bool bsScriptRestoreCover(BSScript *script)
     }
     bsRelease(model);
     return restored;
-}
-
-
-BSValue bsExprToModel(const BSExpr *expr)
-{
-    return bsRetain(expr->model);
 }
 
 

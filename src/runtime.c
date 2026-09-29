@@ -599,7 +599,7 @@ static inline uint64_t bsCacheKey(const BSOptions *options, const BSObject *glob
 }
 
 
-/* The globals object's value slot for a name site, or NULL if the name is absent */
+/* The globals object's value slot for a name site, or NULL if the name is absent or there are no globals */
 static inline BSValue *bsGlobalSlot(BSCallCache *cache, BSValue name, BSOptions *options)
 {
     if (!bsIsType(options->globals, BS_OBJECT)) {
@@ -1410,7 +1410,7 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
         return bsNull();
     }
 
-    /* The registers arrive filled: the slots, the temporaries nulled, and the constants copied in */
+    /* The registers arrive filled: the slots, the temporaries - null or zero, written before they are read - and the constants copied in */
     size_t slotCount = code->slotCount;
     size_t ownedCount = slotCount + code->tempCount;
 
@@ -1741,8 +1741,6 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
         BS_NEXT();
 
 #ifndef BS_THREADED_DISPATCH
-        default: /* GCOV_EXCL_LINE - emit never produces an unknown opcode */
-            break; /* GCOV_EXCL_LINE */
         }
     next:
         inst++;
@@ -1769,7 +1767,7 @@ BSValue bsEvaluateExpressionModel(BSValue exprModel, BSOptions *options, BSValue
     if (expr == NULL) {
         return bsNull();
     }
-    BSValue result = bsRunChunk(&expr->code, NULL, options, locals, builtins);
+    BSValue result = bsEvaluateExpression(expr, options, locals, builtins);
     bsExprFree(expr);
     return result;
 }

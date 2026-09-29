@@ -2754,7 +2754,6 @@ static bool rxRun(RxState *state, uint32_t startPc, size_t startPos, bool scan)
         state->steps = 0;
         pc = 0;
     }
-    return false; /* GCOV_EXCL_LINE - the loop leaves only by returning; this satisfies the compiler */
 }
 #undef RX_ATOM
 #undef RX_CASE

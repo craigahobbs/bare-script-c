@@ -424,13 +424,9 @@ TEST(model_expression_shapes)
     for (size_t ix = 0; ix < sizeof(expressions) / sizeof(expressions[0]); ix++) {
         BSExpr *expr = bsParseExpression(expressions[ix], strlen(expressions[ix]), 0, NULL, false, NULL);
         ASSERT_NOT_NULL(expr);
-        BSValue model = bsExprToModel(expr);
-        BSExpr *expr2 = bsExprFromModel(model);
+        BSExpr *expr2 = bsExprFromModel(expr->model);
         ASSERT_NOT_NULL(expr2);
-        BSValue model2 = bsExprToModel(expr2);
-        ASSERT_INT_EQ(bsValueCompare(model, model2), 0);
-        bsRelease(model);
-        bsRelease(model2);
+        ASSERT_INT_EQ(bsValueCompare(expr->model, expr2->model), 0);
         bsExprFree(expr);
         bsExprFree(expr2);
     }

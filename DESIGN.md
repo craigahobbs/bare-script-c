@@ -282,7 +282,7 @@ into the coverage object's per-line counts, each resolved the first time its sta
 a block marker increments a number per statement instead of formatting a line key and searching the
 covered object.
 
-`bsScriptToModel` (and, internally, `bsExprToModel`) return the model (with `scriptName` / `scriptLines` /
+`bsScriptToModel` returns the model (with `scriptName` / `scriptLines` /
 `system` overlaid), which is how the linter receives a script and how `barescriptEvaluateExpression`
 works. A model is several times the size of its script text and only the linter and coverage
 reporting read it, so a compiled script does not have to keep one: `bsScriptForgetModel` drops it,

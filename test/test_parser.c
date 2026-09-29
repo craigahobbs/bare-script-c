@@ -81,9 +81,7 @@ static BSValue bsTestParseExprOpt(const char *text, bool arrayLiterals)
         bsParserErrorFree(&error);
         return message;
     }
-    BSValue model = bsExprToModel(expr);
-    BSValue json = bsJSONEncode(model, 0);
-    bsRelease(model);
+    BSValue json = bsJSONEncode(expr->model, 0);
     bsExprFree(expr);
     return json;
 }
