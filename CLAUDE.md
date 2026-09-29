@@ -201,7 +201,8 @@ points. It is **on the parser's hot path**, so its performance properties are lo
 decoration: anchored-pattern optimization, alternations indexed by first code point (a byte or
 a word of alternative bits per ASCII code point; a predefined class contributes its ASCII
 members), the start-position scan by
-memchr or a byte table over an ASCII subject, single-code-point quantifiers that scan in one loop and give back through one
+memchr or a byte table over an ASCII subject - stepping over the inside of words for a pattern that
+cannot begin a match there (`inWordFails`) - single-code-point quantifiers that scan in one loop and give back through one
 backtrack entry, a capture and counter undo trail, and a step budget. Syntax is the JavaScript
 subset BareScript exposes - see DESIGN.md's **Regular Expressions** table.
 

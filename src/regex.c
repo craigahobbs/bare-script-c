@@ -199,6 +199,7 @@ typedef struct RxCompiler RxCompiler;
 struct BSRegex {
     int32_t refcount;
     bool anchored; /* every alternative begins with "^", so only the start position can match */
+    bool inWordFails; /* no match can begin inside a word - the search scan steps over the rest of one */
     RxFirstSet first;
     int firstByte;           /* the one byte a match can begin with, or -1 - the ASCII search scans with memchr */
     uint8_t firstBytes[256]; /* the first set's membership by byte, for the ASCII search scan */
@@ -1147,6 +1148,80 @@ static bool rxFirstSet(const RxNode *node, unsigned flags, RxFirstSet *set)
 }
 
 
+/* How a node chain fares starting inside a word - a word code point before the position and at it */
+typedef enum {
+    RX_IN_WORD_FAILS,
+    RX_IN_WORD_PASSES, /* nothing decided yet - what follows the chain decides */
+    RX_IN_WORD_MAY_MATCH
+} RxInWord;
+
+/*
+ * Inside a word, a word boundary and a line start fail, and so does a code point that cannot be a
+ * word code point; the other zero-width nodes pass to what follows
+ */
+static RxInWord rxInWord(const RxNode *node, unsigned flags)
+{
+    for (; node != NULL; node = node->next) {
+        RxInWord result = RX_IN_WORD_PASSES;
+        switch (node->kind) {
+        case RX_WORD_BOUNDARY:
+        case RX_BOL:
+            return RX_IN_WORD_FAILS;
+
+        case RX_CHAR:
+            /* A case-insensitive character may fold to a word code point - K to the Kelvin sign's */
+            return (flags & BS_REGEX_IGNORECASE) != 0 || rxIsWordCode(node->u.ch) ? RX_IN_WORD_MAY_MATCH : RX_IN_WORD_FAILS;
+
+        case RX_CLASS:
+            for (uint32_t ch = 0; ch < 128; ch++) {
+                if (rxIsWordCode(ch) && ((node->u.cls.ascii[ch >> 3] >> (ch & 7)) & 1) != 0) {
+                    return RX_IN_WORD_MAY_MATCH;
+                }
+            }
+            return RX_IN_WORD_FAILS;
+
+        case RX_ALT:
+            result = RX_IN_WORD_FAILS;
+            for (size_t ix = 0; ix < node->u.alt.count; ix++) {
+                RxInWord branch = rxInWord(node->u.alt.branches[ix], flags);
+                if (branch == RX_IN_WORD_MAY_MATCH) {
+                    return RX_IN_WORD_MAY_MATCH;
+                }
+                if (branch == RX_IN_WORD_PASSES) {
+                    result = RX_IN_WORD_PASSES;
+                }
+            }
+            break;
+
+        case RX_GROUP:
+            result = rxInWord(node->u.group.sub, flags);
+            break;
+
+        case RX_REPEAT:
+            result = rxInWord(node->u.repeat.sub, flags);
+            if (result == RX_IN_WORD_FAILS && node->u.repeat.min == 0) {
+                result = RX_IN_WORD_PASSES;
+            }
+            break;
+
+        case RX_EOL:
+        case RX_NOT_WORD_BOUNDARY:
+        case RX_LOOKAHEAD:
+        case RX_LOOKBEHIND:
+            break;
+
+        default:
+            /* RX_ANY and RX_BACKREF */
+            return RX_IN_WORD_MAY_MATCH;
+        }
+        if (result != RX_IN_WORD_PASSES) {
+            return result;
+        }
+    }
+    return RX_IN_WORD_PASSES;
+}
+
+
 /*
  * A node chain's first set, followed by "follow" - the set of code points that can begin what comes
  * after it - or NULL when unknown. Returns false when the set is unusable: the chain can match the
@@ -1832,6 +1907,7 @@ BSValue bsRegexNew(const char *pattern, size_t patternSize, unsigned flags, char
 
     /* The set of code points a match can begin with, for the search scan - by byte for an ASCII subject */
     rxFirstCompute(compiler.root, NULL, flags, &regex->first);
+    regex->inWordFails = rxInWord(compiler.root, flags) == RX_IN_WORD_FAILS;
     regex->firstByte = -1;
     if (!regex->first.any) {
         int firstCount = 0;
@@ -2120,7 +2196,7 @@ static inline bool rxGiveBackTo(const RxState *state, uint32_t ch, size_t stop, 
  * subject by memchr for a set of one byte and by the byte table otherwise; without one, every
  * position up to and including the end, where an empty match may still begin
  */
-static inline size_t rxScan(const RxState *state, size_t pos)
+static inline size_t rxScanFirst(const RxState *state, size_t pos)
 {
     const BSRegex *regex = state->regex;
     size_t length = state->length;
@@ -2143,6 +2219,29 @@ static inline size_t rxScan(const RxState *state, size_t pos)
         }
     }
     return pos < length ? pos : SIZE_MAX;
+}
+
+/*
+ * The next position a match can begin at: the first set admits the code point there, and for a
+ * pattern that cannot match inside a word - a keyword list's "\b(?:if|for|...)\b" - it is not
+ * inside one, the scan stepping over the rest of a word it lands in, out of line
+ */
+static BS_NOINLINE size_t rxScanOutsideWords(const RxState *state, size_t pos)
+{
+    while (pos != SIZE_MAX && pos > 0 && pos < state->length &&
+           rxIsWordCode(rxCode(state, pos - 1)) && rxIsWordCode(rxCode(state, pos))) {
+        while (pos < state->length && rxIsWordCode(rxCode(state, pos))) {
+            pos++;
+        }
+        pos = rxScanFirst(state, pos);
+    }
+    return pos;
+}
+
+static inline size_t rxScan(const RxState *state, size_t pos)
+{
+    pos = rxScanFirst(state, pos);
+    return state->regex->inWordFails ? rxScanOutsideWords(state, pos) : pos;
 }
 
 

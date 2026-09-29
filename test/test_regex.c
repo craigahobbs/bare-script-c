@@ -750,6 +750,29 @@ TEST(regex_first_set)
 }
 
 
+TEST(regex_in_word)
+{
+    /* A pattern that cannot match inside a word steps over the rest of one - a keyword list */
+    ASSERT_VALUE_STRING(bsTestMatch("\\b(?:if|for)\\b", "iffy fort for", 0), "for");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:\\b|[-+])[0-9]+", "x1 a-2", 0), "-2");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:\\ba)*b", "ab", 0), "ab");
+    ASSERT_VALUE_STRING(bsTestMatch("(?:\\ba)*b", "cb", 0), "b");
+    ASSERT_VALUE_STRING(bsTestMatch("[-_]x", "ax _x", 0), "_x");
+    ASSERT_VALUE_STRING(bsTestMatch("\\b.", "ab", BS_REGEX_DOTALL), "a");
+    ASSERT_VALUE_STRING(bsTestMatch("\\bq|#", "aq a#", 0), "#");
+    ASSERT_VALUE_STRING(bsTestMatch("\\bqr", "aqr", 0), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("^#|\\bq", "a #", BS_REGEX_MULTILINE), "null");
+
+    /* Anything that can match inside a word keeps every position */
+    ASSERT_VALUE_STRING(bsTestMatch("(?:\\ba|)b", "xb", 0), "b");
+    ASSERT_VALUE_STRING(bsTestMatch("(?=o)\\bo|(?<=f)o", "fo", 0), "o");
+    ASSERT_VALUE_STRING(bsTestMatch("\\B$|\\bk", "ak", BS_REGEX_MULTILINE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("\\bk", "a\xe2\x84\xaa", BS_REGEX_IGNORECASE), "null");
+    ASSERT_VALUE_STRING(bsTestMatch("\\b\\w", "ab", 0), "a");
+    ASSERT_VALUE_STRING(bsTestMatch("(a)\\1|\\bx", "aa", 0), "aa");
+}
+
+
 TEST(regex_follow_set)
 {
     /* A general repeat skips a continuation that cannot begin at the position: a lazy repeat's first

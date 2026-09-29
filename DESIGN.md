@@ -431,7 +431,11 @@ because the parser is itself regex-driven:
   for up to sixty-four, one mask for the code points past ASCII - so it tries only the
   alternatives that can begin at a position: the markdown span alternation has sixteen, a
   highlight keyword list up to sixty-two, and a position usually admits one or two. A wider
-  alternation keeps a first set per alternative and tries them one at a time.
+  alternation keeps a first set per alternative and tries them one at a time. A pattern that
+  cannot begin a match inside a word - every alternative opens with `\b` or `^`, or with a code
+  point no word holds, as a syntax highlighter's keyword, number, comment, and string
+  alternation does - has the search step over the rest of any word it lands in: most of a code
+  block's positions are inside identifiers, and none of them can start a match.
 - A quantifier whose body matches exactly one code point - `\s*`, `[0-9]+`, `.*`, the overwhelming
   majority of real patterns - scans its run in one loop and gives back one position at a time
   through a single backtrack entry, skipping the positions that cannot hold a literal that follows.
