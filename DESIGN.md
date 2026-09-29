@@ -578,6 +578,7 @@ and inlines call sites in the proportion the training run exercises them.
 | ------- | ---- |
 | `perf/test.bare` | the official suite - the benchmark itself |
 | `lib/include/test/runTests.bare` | the include library test suite: parses about 2 MB of BareScript from source and runs every include library function. This is the path `bare script.bare` takes; the suite never does, since it loads bundled models. |
+| `bin/includeSource.bare` | the bundled include generator, compressing four includes: a script's own code running without coverage |
 
 An earlier mix added a synthetic source-parse script, this project's language tests, and a
 static-analysis run instead of the test suite. Measured against a rebuilt identical configuration,
@@ -589,8 +590,17 @@ Training on the performance suite alone is 3% slower overall and 5% slower on th
 the test suite alone is 2% slower and 4% slower on `markdownParse`; weighting the performance
 suite 3:1 is 2% slower, weighting the test suite 3:1 is noise; and adding a third program that
 sweeps the built-in library - JSON, sorting, strings, regular expressions, objects, numbers,
-dates - grows the code 5% and moves nothing, the held-out script included. The two-program,
-equal-weight mix is the optimum.
+dates - grows the code 5% and moves nothing, the held-out script included.
+
+That two-program mix had a blind spot. The test suite records coverage, and the performance
+suite runs bundled includes, which carry no statement markers - so every statement marker the
+profile saw took the coverage path, and the release laid that path out as the likely one, with
+the ordinary path a jump away. The include generator is the third program because it is a
+script's own code running without coverage: with it, the statement-heavy `perfx` applications,
+which no training program resembles, run 3-6% fewer cycles (`pathfind` 5-6%, `salesreport`
+4%), for at most 0.3% more instructions on the include library tests. Compressing every include
+instead of four goes further on those applications (`pathfind` 11%) but costs the include
+library tests up to 0.8%.
 
 ## Testing and Coverage
 

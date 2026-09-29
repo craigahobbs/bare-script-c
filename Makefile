@@ -361,21 +361,31 @@ $(PGO_CLI): $(PGO_OBJS)
 
 # Stage 2 - run the training workload
 #
-# Two programs, merged by count: the performance suite, which is the benchmark itself, and the
+# Three programs, merged by count. The performance suite, which is the benchmark itself. The
 # include library test suite, which parses about 2 MB of BareScript from source and runs every
 # include library function - the path "bare script.bare" takes, and one the performance suite
-# never does since it loads bundled models. A synthetic parse script, the language tests, and a
-# static-analysis run were measured and moved neither workload beyond build-to-build noise. The
-# two are independent, so they run at once; %p so each process writes its own profraw, then merge.
-# A merge whose check fails must not leave its output behind: make would take it as up to date,
-# and the next run would go straight to stage 3, past the check.
+# never does since it loads bundled models. And the bundled include generator compressing a few
+# includes: a script's own code running without coverage. The test suite records coverage and the
+# performance suite runs bundled includes, which have no statement markers, so without the third
+# the profile sees every statement marker take the coverage path and lays that path out as the
+# likely one - measured at 3-6% of the cycles of statement-heavy scripts it never trained on, for
+# at most 0.3% on the include library's. A synthetic parse script, the language tests, and a
+# static-analysis run were measured and moved no workload beyond build-to-build noise. The three
+# are independent, so they run at once; %p so each process writes its own profraw, then merge. A
+# merge whose check fails must not leave its output behind: make would take it as up to date, and
+# the next run would go straight to stage 3, past the check.
 PROFILE_ENV := LLVM_PROFILE_FILE="$(CURDIR)/$(PROFILE_DIR)/default_%p.profraw"
-$(PROFILE_DATA): $(PGO_CLI) $(PERF_DIR)/test.bare $(INCLUDE_LIB_SRCS) $(INCLUDE_TEST_SRCS)
+PROFILE_GENERATOR_SRCS := $(patsubst %,$(INCLUDE_LIB_DIR)/%,markdownParser.bare schema.bare dataTable.bare qrcode.bare)
+$(PROFILE_DATA): $(PGO_CLI) $(PERF_DIR)/test.bare bin/includeSource.bare $(INCLUDE_LIB_SRCS) $(INCLUDE_TEST_SRCS)
 	@rm -rf $(PROFILE_DIR) $(PGO_DIR)/*.gcda
 	@mkdir -p $(PROFILE_DIR)
-	$(PROFILE_ENV) $(PGO_CLI) $(PERF_DIR)/test.bare > /dev/null & \
+	$(PROFILE_ENV) $(PGO_CLI) $(PERF_DIR)/test.bare > /dev/null & perf=$$!; \
+	$(PROFILE_ENV) $(PGO_CLI) $(CURDIR)/bin/includeSource.bare \
+	    -v vFiles "'[$(subst $(SPACE),$(COMMA),$(patsubst %,\"$(CURDIR)/%\",$(PROFILE_GENERATOR_SRCS)))]'" \
+	    -v vOutputC "'$(CURDIR)/$(PROFILE_DIR)/includeSource.c'" \
+	    -v vOutputH "'$(CURDIR)/$(PROFILE_DIR)/includeSource.h'" > /dev/null & generator=$$!; \
 	$(PROFILE_ENV) $(PGO_CLI) -d -m $(INCLUDE_TEST_DIR)/runTests.bare > /dev/null; status=$$?; \
-	wait $$! && exit $$status
+	wait $$perf && wait $$generator && exit $$status
 	( $(PROFILE_MERGE) ) || { rm -rf $(PROFILE_DATA); exit 1; }
 
 # Stage 3 - rebuild with the profile
