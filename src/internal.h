@@ -510,6 +510,12 @@ enum {
     BS_OP_JUMP_LE,
     BS_OP_JUMP_GT,
     BS_OP_JUMP_GE,
+    /*
+     * An objectGet or objectHas call whose result only decides the JUMP_FALSE or JUMP_TRUE that
+     * follows its DATA word: taken on the site's happy shape, the jump is run from the result
+     * directly; otherwise the call is made by name and the jump runs
+     */
+    BS_OP_CALL_OBJECT_JUMP,
     BS_OP_DATA = 0xFF  /* call operands, a comparison jump's target, or a trap's line; never dispatched */
 };
 

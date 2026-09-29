@@ -1123,6 +1123,35 @@ static inline bool bsIntrinObjectHas(const BSCode *code, const BSInst *inst, BSV
     return true;
 }
 
+/*
+ * The truth of an objectGet or objectHas call that decides the jump after it - 1 or 0 - or -1 for the
+ * general call. The two share an opcode: the site's global says which, by its intrinsic id.
+ */
+static inline int bsIntrinObjectTruth(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
+                                      BSOptions *options)
+{
+    const BSCallCache *cache = &code->caches[inst->b];
+    if (globals == NULL || cache->key != bsCacheKey(options, globals)) {
+        return -1;
+    }
+    const BSValue *hit = cache->slot;
+    if (hit == NULL || !bsIsType(*hit, BS_FUNCTION)) {
+        return -1;
+    }
+    unsigned char id = bsFunctionOf(*hit)->intrinsic;
+    BSValue object = bsOperandRead(regs, inst[1].a);
+    BSValue key = bsOperandRead(regs, inst[1].b);
+    if ((id != BS_INTRIN_OBJECT_GET && id != BS_INTRIN_OBJECT_HAS) || !bsIsType(object, BS_OBJECT) ||
+        !bsIsType(key, BS_STRING)) {
+        return -1;
+    }
+    BSObjectEntry *entry = bsObjectEntryMemo(bsObjectOf(object), bsStringOf(key), &code->caches[inst->b].memo);
+    if (id == BS_INTRIN_OBJECT_HAS) {
+        return entry != NULL;
+    }
+    return bsValueBoolean(entry != NULL ? entry->value : (inst->c == 3 ? bsOperandRead(regs, inst[1].c) : bsNull()));
+}
+
 static inline bool bsIntrinObjectSet(const BSCode *code, const BSInst *inst, BSValue *regs, const BSObject *globals,
                                           BSOptions *options)
 {
@@ -1434,7 +1463,7 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
         &&op_CALL_ARRAY_LENGTH, &&op_CALL_ARRAY_PUSH, &&op_CALL_ARRAY_SET, &&op_CALL_OBJECT_GET,
         &&op_CALL_OBJECT_HAS, &&op_CALL_OBJECT_SET, &&op_CALL_STRING_CHAR_CODE_AT, &&op_CALL_STRING_LENGTH,
         &&op_CALL_STRING_SLICE, &&op_CALL_MATH, &&op_JUMP_EQ,
-        &&op_JUMP_NE, &&op_JUMP_LT, &&op_JUMP_LE, &&op_JUMP_GT, &&op_JUMP_GE
+        &&op_JUMP_NE, &&op_JUMP_LT, &&op_JUMP_LE, &&op_JUMP_GT, &&op_JUMP_GE, &&op_CALL_OBJECT_JUMP
     };
     /* "inst" is the instruction being run; BS_NEXT runs the one after it, BS_GOTO the one at an index */
 #define BS_CASE(name) op_##name:
@@ -1537,6 +1566,17 @@ static BSValue bsRunCode(BSCode *code, BSScript *script, BSOptions *options, BSV
         BS_CALL_INTRIN(CALL_STRING_SLICE, bsIntrinStringSlice)
         BS_CALL_INTRIN(CALL_MATH, bsIntrinMath)
 #undef BS_CALL_INTRIN
+
+        /* The call's truth decides the JUMP_FALSE or JUMP_TRUE past its DATA word, which the general call runs instead */
+        BS_CASE(CALL_OBJECT_JUMP) {
+            int truth = bsIntrinObjectTruth(code, inst, regs, intrinGlobals, options);
+            if (truth < 0) {
+                goto call_general;
+            }
+            inst++;
+            BS_JUMP_TEST(truth == (inst[1].op == BS_OP_JUMP_TRUE))
+        }
+        BS_NEXT();
 
         BS_CASE(CALL_NAME)
         BS_CASE(CALL_SLOT)

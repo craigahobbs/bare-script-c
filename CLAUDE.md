@@ -189,6 +189,9 @@ and the library's functions live as long as the thread, so the compare that admi
 past the cache and the slot) - with a cold site, or one an expression's locals object could shadow,
 taking the general call, which resolves the cache; they have no case in `bsIntrinsicCall`, which serves the rest through the
 general call path (`arrayPush` has both: its opcode takes the two-argument shape, its case the rest).
+An `objectGet` or `objectHas` call that only decides the `JUMP_FALSE` or `JUMP_TRUE` after it is retagged
+`CALL_OBJECT_JUMP` by `bsEmitCondition`: one shared handler, told apart by the site's function like the
+math intrinsics, jumps on the result without storing it; a miss makes the general call and the jump runs.
 
 ### Regular expressions
 

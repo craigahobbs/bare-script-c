@@ -1116,6 +1116,13 @@ static uint8_t bsCompareJumpOpcode(const BSNode *node, bool jumpIfTrue)
 }
 
 
+/* Whether a call node is the conditional, if(cond, then, else) */
+static bool bsNodeIsIf(const BSAst *ast, const BSNode *node)
+{
+    return bsStringIs(bsNodeText(ast, node), "if");
+}
+
+
 /*
  * Compile a condition as the jumps that leave when its truth is "jumpIfTrue", collected in "jumps"
  * for the caller to point at the target, and fall through otherwise. A comparison emits its
@@ -1161,6 +1168,13 @@ static void bsEmitCondition(BSEmit *e, const BSAst *ast, uint32_t expr, bool jum
         return;
     }
     BSOperand cond = bsEmitExprConsumed(e, ast, expr);
+    if (node->kind == BS_NODE_CALL && (node->b == 2 || node->b == 3) && !bsNodeIsIf(ast, node)) {
+        /* An objectGet or objectHas call - the call instruction and its one DATA word - jumps on its result itself */
+        BSInst *call = &e->inst[e->count - 2];
+        if (call->a == cond && (call->op == BS_OP_CALL_OBJECT_GET || call->op == BS_OP_CALL_OBJECT_HAS)) {
+            call->op = BS_OP_CALL_OBJECT_JUMP;
+        }
+    }
     bsJumpsAdd(jumps, bsEmitJumpInst(e, jumpIfTrue ? BS_OP_JUMP_TRUE : BS_OP_JUMP_FALSE, cond, 0));
 }
 
@@ -1242,13 +1256,6 @@ static void bsEmitCallTo(BSEmit *e, const BSAst *ast, uint32_t call, uint16_t ds
     if (operands != argsInline) {
         free(operands);
     }
-}
-
-
-/* Whether a call node is the conditional, if(cond, then, else) */
-static bool bsNodeIsIf(const BSAst *ast, const BSNode *node)
-{
-    return bsStringIs(bsNodeText(ast, node), "if");
 }
 
 
@@ -1523,7 +1530,7 @@ static void bsCodeRelocateConstants(BSInst *inst, size_t count, uint16_t base)
             /* The line word that follows is not operands, and a is the label's name index */
             pc++;
         } else if (op == BS_OP_CALL_NAME || op == BS_OP_CALL_SLOT ||
-                   (op >= BS_OP_CALL_ARRAY_GET && op <= BS_OP_CALL_MATH)) {
+                   (op >= BS_OP_CALL_ARRAY_GET && op <= BS_OP_CALL_MATH) || op == BS_OP_CALL_OBJECT_JUMP) {
             /* The argument operands, three per data word - an unused field is zero, which names a slot */
             size_t argCount = inst[pc].c;
             for (size_t ix = 0; ix < argCount; ix += BS_OPERANDS_PER_DATA) {

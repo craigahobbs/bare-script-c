@@ -226,6 +226,16 @@ TEST(runtime_functions)
         "saved = arrayGet\nr = []\ni = 0\nwhile i < 3:\n    if i == 1:\n        arrayGet = 1\n    endif\n"
         "    if i == 2:\n        arrayGet = saved\n    endif\n"
         "    arrayPush(r, arrayGet([9], 0))\n    i = i + 1\nendwhile\nreturn r"), "[9,null,9]");
+    /* An objectGet or objectHas deciding a jump - either sense, a default, and a non-object taking the general call */
+    ASSERT_VALUE(bsTestExecute(
+        "r = []\nfor o in [{'a': 1}, {'a': 0}, {}, null, 'x']:\n    if objectGet(o, 'a'):\n        arrayPush(r, 'g')\n"
+        "    endif\n    if !objectGet(o, 'a', 2):\n        arrayPush(r, 'd')\n    endif\n"
+        "    if objectHas(o, 'a') && !objectHas(o, 'b'):\n        arrayPush(r, 'h')\n    endif\nendfor\nreturn r"),
+        "[\"g\",\"h\",\"d\",\"h\"]");
+    /* The global of a warm jumping objectGet site reassigned in place: the site calls whatever it holds */
+    ASSERT_VALUE(bsTestExecute(
+        "saved = objectGet\nr = []\nfor f in [objectGet, objectHas, arrayGet, objectGet, 1]:\n    objectGet = f\n"
+        "    arrayPush(r, if(objectGet({'a': 0}, 'a'), 1, 0))\nendfor\nobjectGet = saved\nreturn r"), "[0,1,0,0,0]");
     /* A site that has verified nothing admits no value - not even the number zero, whose bits are zero */
     ASSERT_VALUE(bsTestExecute(
         "arrayGet = 0\nr = []\ni = 0\nwhile i < 2:\n    arrayPush(r, arrayGet([9], 0))\n    i = i + 1\n"

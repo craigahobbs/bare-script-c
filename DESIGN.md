@@ -247,7 +247,9 @@ a resident frame: its constants stay in place, a call fills only its arguments, 
 registers are released to null on the way out; a recursive call, finding the frame busy, builds one
 of its own. The emitter compiles a jump's condition as
 jumps: a comparison is one comparison jump, `and` and `or` short-circuit through jumps of their
-own, and a `not` flips the sense, so `jumpif (a < b && c < d)` is two instructions. The names a call site, load site, or unknown-label trap refers to are not operands
+own, and a `not` flips the sense, so `jumpif (a < b && c < d)` is two instructions; an `objectGet`
+or `objectHas` call whose result only decides the jump takes an opcode that jumps on the result itself,
+and on any other shape makes the call and leaves the jump to run. The names a call site, load site, or unknown-label trap refers to are not operands
 and live in a table of their own, so a frame copies only literals. A local read before
 it is assigned falls through to the global of the same name, which would cost every register read
 a test; instead the emitter runs a definite-assignment analysis over each function body - a
