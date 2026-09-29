@@ -217,10 +217,15 @@ typedef struct BSJSONParser {
     int memoDepth;     /* the object being decoded: its depth, and the position of the key at hand */
     size_t memoIndex;
     bool memoHit;      /* the key at hand came from the memo */
-    size_t memoCount[BS_JSON_MEMO_DEPTH];   /* the last object at each depth: its key count, and whether */
-    bool memoDistinct[BS_JSON_MEMO_DEPTH];  /* every key was new to it - so a record repeating its keys in */
-    size_t memoItems[BS_JSON_MEMO_DEPTH];   /* order has distinct keys too, and appends without a scan; and */
-} BSJSONParser;                             /* the last array's item count, which sizes the next one */
+    /*
+     * The last object at each depth: its key count, and whether every key was new to it - so a
+     * record repeating its keys in order has distinct keys too, and appends without a scan. And
+     * the last array's item count, which sizes the next one.
+     */
+    size_t memoCount[BS_JSON_MEMO_DEPTH];
+    bool memoDistinct[BS_JSON_MEMO_DEPTH];
+    size_t memoItems[BS_JSON_MEMO_DEPTH];
+} BSJSONParser;
 
 
 /*

@@ -78,9 +78,9 @@ char *bsStrdup(const char *text)
 /*
  * The thread's value state
  *
- * The free lists and the intern table are per thread, so threads never
- * share a value and never contend - see README's "Threads". They are one struct so a function that
- * touches several of them computes the thread-local address once.
+ * The free lists and the intern table are per thread, so threads never share a value and never
+ * contend - see README's "Threads". They are one struct so a function that touches several of them
+ * computes the thread-local address once.
  */
 #define BS_STRING_POOL_CLASSES 5
 #define BS_ARRAY_BUF_CLASS_COUNT 6
@@ -501,7 +501,6 @@ double bsStrtod(const char *text, size_t size)
 }
 
 
-/* The offset past the Unicode spaces at "ix" */
 bool bsNumberParse(const char *text, size_t size, double *result)
 {
     /* ^\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*$ */
@@ -1144,11 +1143,9 @@ static void bsInternGrow(void)
     bsTS.internSlots = bsAlloc(capacity * sizeof(BSInternSlot));
     memset(bsTS.internSlots, 0, capacity * sizeof(BSInternSlot));
     for (size_t ix = 0; ix < oldCapacity; ix++) {
-        BSString *string = old[ix].string;
-        if (string == NULL) {
-            continue;
+        if (old[ix].string != NULL) {
+            bsInternPut(old[ix].string, old[ix].hash);
         }
-        bsInternPut(string, old[ix].hash);
     }
     free(old);
 }
@@ -1846,7 +1843,6 @@ static void bsObjectEntriesFree(BSObject *object)
 }
 
 
-/* Append a key known to be absent. Takes ownership of "item" and retains "key". */
 /* The entry holding a key string, or NULL if the object has no such key */
 BSObjectEntry *bsObjectEntryFind(BSObject *object, BSString *key)
 {
@@ -1854,6 +1850,7 @@ BSObjectEntry *bsObjectEntryFind(BSObject *object, BSString *key)
 }
 
 
+/* Append a key known to be absent. Takes ownership of "item" and retains "key". */
 void bsObjectAppend(BSValue value, BSValue key, BSValue item)
 {
     BSObject *object = bsObjectOf(value);
@@ -2439,10 +2436,8 @@ bool bsDatetimeParse(const char *text, size_t size, int64_t *result)
         tzOffsetSeconds = 0;
     } else if (ix + 6 == size && (text[ix] == '+' || text[ix] == '-') && text[ix + 3] == ':') {
         int tzHour, tzMinute;
-        if (!bsParseDigits(text, ix + 1, 2, &tzHour) || !bsParseDigits(text, ix + 4, 2, &tzMinute)) {
-            return false;
-        }
-        if (tzHour > 23 || tzMinute > 59) {
+        if (!bsParseDigits(text, ix + 1, 2, &tzHour) || !bsParseDigits(text, ix + 4, 2, &tzMinute) ||
+            tzHour > 23 || tzMinute > 59) {
             return false;
         }
         tzOffsetSeconds = (int64_t) tzHour * 3600 + tzMinute * 60;
@@ -2545,23 +2540,20 @@ bool bsValueBoolean(BSValue value)
 }
 
 
+/* A number compares by value (0 is -0) and a datetime by its time; any other value is its bits */
 bool bsValueIs(BSValue value1, BSValue value2)
 {
-    if (bsValueType(value1) != bsValueType(value2)) {
+    BSType type = bsValueType(value1);
+    if (type != bsValueType(value2)) {
         return false;
     }
-    switch (bsValueType(value1)) {
-    case BS_NULL:
-        return true;
-    case BS_BOOLEAN:
-        return bsBoolOf(value1) == bsBoolOf(value2);
-    case BS_NUMBER:
+    if (type == BS_NUMBER) {
         return bsNumberOf(value1) == bsNumberOf(value2);
-    case BS_DATETIME:
-        return bsDatetimeOf(value1) == bsDatetimeOf(value2);
-    default:
-        return bsRefOf(value1) == bsRefOf(value2);
     }
+    if (type == BS_DATETIME) {
+        return bsDatetimeOf(value1) == bsDatetimeOf(value2);
+    }
+    return value1.bits == value2.bits;
 }
 
 
