@@ -93,7 +93,7 @@ struct BSFunctionDef {
     BSCode code;
     BSValue *frame;       /* the resident frame - registers kept between calls, from the second call */
     bool frameBusy;       /* the resident frame is in use, so a recursive call builds its own */
-    bool called;          /* the function has been called once */
+    bool called;          /* the function has been called at least once */
 };
 
 
@@ -132,8 +132,8 @@ void bsParserErrorFree(BSParserError *error);
 
 
 /*
- * Parse a BareScript script. Returns the parsed script, or NULL on error, in which case "error"
- * is filled in and must be freed with bsParserErrorFree.
+ * Parse a BareScript script. Returns the parsed script, or NULL on error, in which case a non-NULL
+ * "error" is filled in and must be freed with bsParserErrorFree.
  */
 BSScript *bsParseScript(const char *text, size_t size, int startLineNumber, const char *scriptName,
                         BSParserError *error);
@@ -153,8 +153,8 @@ BSValue bsLintScript(const BSScript *script, BSValue globals);
 void bsParserCleanup(void);
 
 /*
- * Parse a BareScript expression. Returns the parsed expression, or NULL on error, in which case
- * "error" is filled in and must be freed with bsParserErrorFree. A "lineNumber" of 0 means the
+ * Parse a BareScript expression. Returns the parsed expression, or NULL on error, in which case a
+ * non-NULL "error" is filled in and must be freed with bsParserErrorFree. A "lineNumber" of 0 means the
  * expression has no line. If "arrayLiterals" is true, "[...]" parses as an array literal rather
  * than a bracketed variable name.
  */

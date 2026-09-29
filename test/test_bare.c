@@ -16,7 +16,7 @@
 #include "test.h"
 
 
-/* The captured output of the most recent bsTestMain call */
+/* The captured output of the most recent bsTestBare call */
 static BSValue bsTestMainOutput;
 
 

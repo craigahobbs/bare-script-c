@@ -94,8 +94,9 @@ struct BSOptions {
     int depthMax;
 
     /*
-     * Identity for call-site function caches. Unique per options instance so a cached include
-     * script cannot reuse a function pointer from a previous, already-freed globals object.
+     * Identity for call-site function caches. Unique per options instance, and stamped again for
+     * each bsExecuteScript, so a cached include script cannot reuse a function pointer from a
+     * previous, already-freed globals object.
      */
     uint32_t cacheEpoch;
 

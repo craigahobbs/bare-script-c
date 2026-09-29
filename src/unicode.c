@@ -51,7 +51,7 @@ typedef struct BSCodeRange32 {
 
 /* A member of a case-insensitive canonical group that has more than one lower-case form */
 typedef struct BSCasePair {
-    uint16_t canonical;
+    uint16_t first; /* the canonical form */
     uint16_t member;
 } BSCasePair;
 
@@ -1338,7 +1338,7 @@ static size_t bsCaseMapFull(bool upper, uint32_t code, uint32_t *mapped)
     const BSCaseSpecial *specials = upper ? bsUnicodeUpperSpecial : bsUnicodeLowerSpecial;
     size_t specialCount = upper ? BS_COUNT_OF(bsUnicodeUpperSpecial) : BS_COUNT_OF(bsUnicodeLowerSpecial);
     size_t low;
-    BS_TABLE_FIND(specials, code < 0x10000 ? specialCount : 0, code, low);
+    BS_TABLE_FIND(specials, specialCount, code, low);
     if (low != 0 && specials[low - 1].first == code) {
         const uint16_t *special = specials[low - 1].mapped;
         size_t count = 0;
@@ -1374,22 +1374,20 @@ static uint32_t bsCodeBefore(const char *text, size_t offset, size_t *start)
 static bool bsFinalSigma(const char *text, size_t size, size_t offset, size_t codeSize)
 {
     size_t ix = offset;
-    while (true) {
+    uint32_t code;
+    do {
         if (ix == 0) {
             return false;
         }
-        uint32_t code = bsCodeBefore(text, ix, &ix);
-        if (!bsCodeRangeHas(BS_TABLE(bsUnicodeCaseIgnorable), code)) {
-            if (!bsCodeRangeHas(BS_TABLE(bsUnicodeCased), code)) {
-                return false;
-            }
-            break;
-        }
+        code = bsCodeBefore(text, ix, &ix);
+    } while (bsCodeRangeHas(BS_TABLE(bsUnicodeCaseIgnorable), code));
+    if (!bsCodeRangeHas(BS_TABLE(bsUnicodeCased), code)) {
+        return false;
     }
     ix = offset + codeSize;
     while (ix < size) {
         size_t nextSize;
-        uint32_t code = bsUTF8Decode(text, size, ix, &nextSize);
+        code = bsUTF8Decode(text, size, ix, &nextSize);
         if (!bsCodeRangeHas(BS_TABLE(bsUnicodeCaseIgnorable), code)) {
             return !bsCodeRangeHas(BS_TABLE(bsUnicodeCased), code);
         }
@@ -1421,19 +1419,11 @@ size_t bsUnicodeCanonMembers(uint32_t canon, uint32_t *members)
     if (lower != canon && bsUnicodeCanon(lower) == canon) {
         members[count++] = lower;
     }
-    size_t low = 0;
-    size_t high = BS_COUNT_OF(bsUnicodeCaseMembers);
-    while (low < high) {
-        size_t mid = (low + high) / 2;
-        if (bsUnicodeCaseMembers[mid].canonical < canon) {
-            low = mid + 1;
-        } else {
-            high = mid;
-        }
-    }
-    for (; low < BS_COUNT_OF(bsUnicodeCaseMembers) && bsUnicodeCaseMembers[low].canonical == canon; low++) {
-        if (bsUnicodeCaseMembers[low].member != lower) {
-            members[count++] = bsUnicodeCaseMembers[low].member;
+    size_t low;
+    BS_TABLE_FIND(bsUnicodeCaseMembers, BS_COUNT_OF(bsUnicodeCaseMembers), canon, low);
+    for (; low != 0 && bsUnicodeCaseMembers[low - 1].first == canon; low--) {
+        if (bsUnicodeCaseMembers[low - 1].member != lower) {
+            members[count++] = bsUnicodeCaseMembers[low - 1].member;
         }
     }
     return count;
@@ -1472,13 +1462,11 @@ BSValue bsStringToCase(BSValue string, bool upper)
         uint32_t code = bsUTF8Decode(text, size, ix, &codeSize);
         uint32_t mapped[3];
         size_t count;
-        if (upper) {
-            count = bsCaseMapFull(true, code, mapped);
-        } else if (code == BS_CAPITAL_SIGMA && bsFinalSigma(text, size, ix, codeSize)) {
+        if (!upper && code == BS_CAPITAL_SIGMA && bsFinalSigma(text, size, ix, codeSize)) {
             mapped[0] = BS_FINAL_SIGMA;
             count = 1;
         } else {
-            count = bsCaseMapFull(false, code, mapped);
+            count = bsCaseMapFull(upper, code, mapped);
         }
         for (size_t ixMapped = 0; ixMapped < count; ixMapped++) {
             char buffer[4];

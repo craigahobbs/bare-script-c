@@ -165,8 +165,6 @@ bool bsNumberParse(const char *text, size_t size, double *result);
 /* Parse an integer string of the given radix (2 - 36); returns false if parsing fails */
 bool bsIntegerParse(const char *text, size_t size, int radix, double *result);
 
-/* Format a number the way JavaScript's Number.prototype.toString does */
-size_t bsNumberFormat(double value, char *buffer, size_t bufferSize);
 
 /*
  * Concatenate two values' string representations - returns an owned string value. The result is

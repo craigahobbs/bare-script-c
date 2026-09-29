@@ -465,12 +465,6 @@ static inline size_t bsNumberFormatFast(double number, char *buffer, size_t buff
 }
 
 
-size_t bsNumberFormat(double number, char *buffer, size_t bufferSize)
-{
-    return bsNumberFormatFast(number, buffer, bufferSize);
-}
-
-
 bool bsNumberRound(double number, double digits, double *result)
 {
     double multiplier = pow(10, digits);

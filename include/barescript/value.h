@@ -312,8 +312,9 @@ void bsAssign(BSValue *target, BSValue value);
 
 /*
  * Free the calling thread's recycled value blocks, its intern table, and the regex matcher's
- * scratch. The runtime's state is thread-local - see barescript.h - so call this last, after the other cleanups, once the thread
- * holds no values; a value created before it must not be used after it.
+ * scratch. The runtime's state is thread-local - see barescript.h - so call this last, after the
+ * other cleanups, once the thread holds no values; a value created before it must not be used
+ * after it.
  */
 void bsValueCleanup(void);
 
@@ -356,7 +357,7 @@ uint32_t bsStringCodePoint(BSValue value, size_t index);
 /* Append the UTF-8 encoding of a code point to a buffer; returns the number of bytes written */
 size_t bsUTF8Encode(uint32_t codePoint, char *buffer);
 
-/* Decode the code point at "offset"; sets "*size" to the encoding's byte size */
+/* Decode the code point at "offset"; sets "*codeSize" to the encoding's byte size */
 uint32_t bsUTF8Decode(const char *data, size_t size, size_t offset, size_t *codeSize);
 
 /* Count a UTF-8 buffer's code points; returns SIZE_MAX if the buffer is not valid UTF-8 */

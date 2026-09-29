@@ -691,10 +691,8 @@ TEST(runtime_includes)
     bsOptionsFree(options);
 
     /* No fetch function */
-    options = bsTestOptions();
-    ASSERT_VALUE(bsTestExecuteOptions("include 'a.bare'", options), "null");
+    ASSERT_VALUE(bsTestExecute("include 'a.bare'"), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Include of \"a.bare\" failed");
-    bsOptionsFree(options);
 
     /* An include that fails to parse */
     options = bsTestFetchOptions();
@@ -728,10 +726,8 @@ TEST(runtime_system_includes)
     bsOptionsFree(options);
 
     /* A missing system include */
-    options = bsTestOptions();
-    ASSERT_VALUE(bsTestExecuteOptions("include <nope.bare>", options), "null");
+    ASSERT_VALUE(bsTestExecute("include <nope.bare>"), "null");
     ASSERT_STR_EQ(bsTestErrorText(), "test.bare:1: Include of \"nope.bare\" failed");
-    bsOptionsFree(options);
 }
 
 
@@ -935,7 +931,7 @@ TEST(runtime_coverage_cache)
     bsScriptRelease(script);
     bsOptionsFree(options);
 
-    /* A high line number grows the line-index array past its initial cap */
+    /* A high line number records under its own line key */
     options = bsTestCoverageOptions(&coverage, true);
     static const char *highModel =
         "{\"scriptName\":\"high.bare\",\"statements\":[{\"expr\":{\"name\":\"a\","

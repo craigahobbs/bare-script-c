@@ -178,7 +178,7 @@ TEST(parser_expression_functions)
     ASSERT_VALUE_STRING(bsTestParseExpr("f (1)"),
                         "{\"function\":{\"args\":[{\"number\":1}],\"name\":\"f\"}}");
 
-    /* Many arguments grow the argument array */
+    /* Many arguments */
     ASSERT_VALUE_STRING(bsTestParseExpr("f(1,2,3,4,5,6)"),
                         "{\"function\":{\"args\":[{\"number\":1},{\"number\":2},{\"number\":3},"
                         "{\"number\":4},{\"number\":5},{\"number\":6}],\"name\":\"f\"}}");
@@ -345,7 +345,7 @@ TEST(parser_function)
                         "{\"scriptName\":\"test.bare\",\"statements\":[{\"function\":{\"lastArgArray\":true,"
                         "\"lineNumber\":1,\"name\":\"f\",\"statements\":[]}}]}");
 
-    /* Many arguments grow the argument array */
+    /* Many arguments */
     ASSERT_VALUE_STRING(bsTestParse("function f(a,b,c,d,e,g,h,i,j):\nendfunction"),
                         "{\"scriptName\":\"test.bare\",\"statements\":[{\"function\":{\"args\":"
                         "[\"a\",\"b\",\"c\",\"d\",\"e\",\"g\",\"h\",\"i\",\"j\"],\"lineNumber\":1,"
@@ -467,7 +467,7 @@ TEST(parser_coverage_gaps)
     bsTestParseExprContains("{'a': 1 +}", "Syntax error");
     bsTestParseExprContains("{1 +: 2}", "Syntax error");
 
-    /* An array literal with many values grows the argument array */
+    /* An array literal with many values */
     ASSERT_VALUE_STRING(bsTestParseExprArray("[1,2,3,4,5]"),
                         "{\"function\":{\"args\":[{\"number\":1},{\"number\":2},{\"number\":3},"
                         "{\"number\":4},{\"number\":5}],\"name\":\"arrayNew\"}}");
@@ -503,7 +503,7 @@ TEST(parser_coverage_gaps)
                         "\"op\":\"+\",\"right\":{\"number\":3}}},\"lineCount\":3,\"lineNumber\":1,"
                         "\"name\":\"a\"}}]}");
 
-    /* A function definition with a malformed argument list frees its parsed arguments */
+    /* A function definition with a malformed argument list */
     bsTestParseContains("function f(a, b:", "Syntax error");
     /* A keyword followed by a colon is a label definition, as in the reference parser */
     ASSERT_VALUE_STRING(bsTestParse("function :"),
@@ -514,7 +514,7 @@ TEST(parser_coverage_gaps)
 
 TEST(parser_while_expression_copy)
 {
-    /* The while-do footer jump deep-copies the loop test expression of every expression kind */
+    /* A while loop's test of every expression kind */
     ASSERT_VALUE(bsTestExecute("i = 0\nwhile 'x':\n    i = i + 1\n    if i > 2:\n        break\n"
                                "    endif\nendwhile\nreturn i"), "3");
     ASSERT_VALUE(bsTestExecute("i = 0\nfunction test():\n    return i < 3\nendfunction\n"
@@ -603,7 +603,7 @@ TEST(parser_final_coverage)
     /* A function definition whose name is not followed by an open parenthesis */
     bsTestParseContains("function f:", "Syntax error");
 
-    /* A nested function definition with arguments frees its parsed argument names */
+    /* A nested function definition with arguments is an error */
     ASSERT_VALUE_STRING(bsTestParse("function f():\n    function g(a, b):\n    endfunction\nendfunction"),
                         "test.bare:2: Nested function definition\n    function g(a, b):\n^\n");
 }

@@ -22,8 +22,10 @@ static size_t bsTestIncludeIndex(const char *name)
 }
 
 
-/* Inflate base64-encoded gzip test data. The bundled models are
- * raw bytes, so the library has no base64 decoder; this one trusts its input. */
+/*
+ * Inflate base64-encoded gzip test data. The bundled models are raw bytes, so the library has no
+ * base64 decoder; this one trusts its input.
+ */
 static char *bsTestGzipDecode(const char *text)
 {
     size_t size;

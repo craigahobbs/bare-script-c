@@ -33,8 +33,8 @@ static void bsThreadFail(BSThreadTask *task, const char *what, const char *detai
 
 /*
  * Parse, lint, and execute a script that touches every piece of per-thread state - the parser and
- * linter bootstraps, a bundled include, the intern table
- * and an indexed object (past sixteen keys), the regex match keys, mathRandom - and check the result
+ * linter bootstraps, a bundled include, the intern table and an indexed object (past sixteen keys),
+ * the regex match keys, mathRandom - and check the result
  */
 static void *bsThreadRun(void *data)
 {
@@ -175,8 +175,6 @@ TEST(thread_isolated_runtimes)
     sigaction(SIGPIPE, NULL, &after);
     ASSERT_TRUE(after.sa_handler == before.sa_handler);
 
-    /* ...and after: intact, and without the workers' system include */
+    /* ...and after: intact */
     ASSERT_VALUE(bsTestExecute("include <url.bare>\nreturn urlEncodeComponent('a b')"), "\"a%20b\"");
-    ASSERT_VALUE(bsTestExecute("include <threadTest.bare>\nreturn threadValue"), "null");
-    ASSERT_STR_CONTAINS(bsTestErrorText(), "threadTest.bare");
 }

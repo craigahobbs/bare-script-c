@@ -143,7 +143,7 @@ void bsTestLogClear(void);
 /* The capturing log function */
 void bsTestLogFn(const char *text, void *data);
 
-/* Get the most recent bsTestExecute runtime error message, or NULL */
+/* Get the most recent bsTestExecute runtime or parse error message, or NULL */
 const char *bsTestErrorText(void);
 
 /* Create a temporary directory for file system tests; returns a static path */

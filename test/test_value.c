@@ -70,13 +70,9 @@ TEST(value_number)
 
 TEST(value_number_format_special)
 {
-    char buffer[64];
-    bsNumberFormat(NAN, buffer, sizeof(buffer));
-    ASSERT_STR_EQ(buffer, "NaN");
-    bsNumberFormat(INFINITY, buffer, sizeof(buffer));
-    ASSERT_STR_EQ(buffer, "Infinity");
-    bsNumberFormat(-INFINITY, buffer, sizeof(buffer));
-    ASSERT_STR_EQ(buffer, "-Infinity");
+    ASSERT_VALUE_STRING(bsNumberFinite(NAN), "NaN");
+    ASSERT_VALUE_STRING(bsNumberFinite(INFINITY), "Infinity");
+    ASSERT_VALUE_STRING(bsNumberFinite(-INFINITY), "-Infinity");
 }
 
 

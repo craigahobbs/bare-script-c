@@ -617,9 +617,7 @@ TEST(library_system_fetch)
     bsOptionsFree(options);
 
     /* No fetch function */
-    options = bsTestOptions();
-    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch('a')", options), "null");
-    bsOptionsFree(options);
+    ASSERT_VALUE(bsTestExecute("return systemFetch('a')"), "null");
 
     /* Debug logging of a failed fetch */
     options = bsTestOptions();
@@ -681,10 +679,8 @@ TEST(library_argument_errors)
     bsOptionsFree(options);
 
     /* Without debug mode nothing is logged */
-    options = bsTestOptions();
-    bsRelease(bsTestExecuteOptions("arrayGet([1], 5)\nregexNew('(')", options));
+    bsRelease(bsTestExecute("arrayGet([1], 5)\nregexNew('(')"));
     ASSERT_STR_EQ(bsTestLogText(), "");
-    bsOptionsFree(options);
 }
 
 
