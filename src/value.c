@@ -299,6 +299,48 @@ static size_t bsNumberEmit(char *buffer, size_t bufferSize, const char *text, si
 }
 
 
+/* The powers of ten a double holds exactly */
+static const double bsPow10[] = {
+    1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17,
+    1e18, 1e19, 1e20, 1e21, 1e22
+};
+
+
+/*
+ * The shortest round-tripping digits of a positive non-integer printed without an exponent, found
+ * without the libc round trip. With f fractional digits, digits m round-trip when m / 10^f - one
+ * correctly rounded division, as strtod of "me-f" is - gives the number back, so the first f with
+ * such an m is the shortest. While ulp * 10^f < 1, a round-tripping m is within half of that of the
+ * exact product, so at most one exists and it is within one of the computed product's nearest
+ * integer; from 1e-6 up, that bound ends the scan by 10^22. False when the digits need more
+ * precision than that, for the search to settle.
+ */
+static bool bsNumberDigitsShort(double number, char *mantissa, size_t *digitCount, int *exponent)
+{
+    if (number < 1e-6) {
+        return false;
+    }
+    double ulp = nextafter(number, INFINITY) - number;
+    for (int fraction = 1; ulp * bsPow10[fraction] < 1; fraction++) {
+        double nearest = round(number * bsPow10[fraction]);
+        for (double digits = nearest - 1; digits <= nearest + 1; digits++) {
+            if (digits / bsPow10[fraction] == number) {
+                char text[24];
+                size_t begin = sizeof(text);
+                for (uint64_t value = (uint64_t) digits; value != 0; value /= 10) {
+                    text[--begin] = (char) ('0' + value % 10);
+                }
+                *digitCount = sizeof(text) - begin;
+                memcpy(mantissa, text + begin, *digitCount);
+                *exponent = (int) *digitCount - fraction - 1;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+
 /* A non-integer, or one past the fixed range: NaN, an infinity, or the shortest round-tripping digits */
 static BS_NOINLINE size_t bsNumberFormatSlow(double number, char *buffer, size_t bufferSize)
 {
@@ -309,55 +351,53 @@ static BS_NOINLINE size_t bsNumberFormatSlow(double number, char *buffer, size_t
         return number > 0 ? bsNumberEmit(buffer, bufferSize, "Infinity", 8) :
             bsNumberEmit(buffer, bufferSize, "-Infinity", 9);
     }
-
-    /*
-     * Find the shortest round-tripping decimal representation
-     *
-     * Round-tripping is monotone in precision - if p digits round-trip then so do p + 1 - so the
-     * shortest precision is found by binary search rather than by trying each in turn.
-     */
-    char digits[40];
-    int low = 1;
-    int high = 17;
-    while (low < high) {
-        int middle = low + (high - low) / 2;
-        snprintf(digits, sizeof(digits), "%.*e", middle - 1, number);
-        if (strtod(digits, NULL) == number) {
-            high = middle;
-        } else {
-            low = middle + 1;
-        }
-    }
-    snprintf(digits, sizeof(digits), "%.*e", low - 1, number);
-
-    /* Split the "d.dddde+XX" form into its digits and exponent */
+    bool negative = number < 0;
     char mantissa[24];
     size_t digitCount = 0;
-    const char *cursor = digits;
-    bool negative = false;
-    if (*cursor == '-') {
-        negative = true;
-        cursor++;
-    }
-    for (; *cursor != '\0' && *cursor != 'e'; cursor++) {
-        if (*cursor != '.') {
-            mantissa[digitCount++] = *cursor;
+    int exponent;
+    if (!bsNumberDigitsShort(fabs(number), mantissa, &digitCount, &exponent)) {
+        /*
+         * Find the shortest round-tripping decimal representation
+         *
+         * Round-tripping is monotone in precision - if p digits round-trip then so do p + 1 - so
+         * the shortest precision is found by binary search rather than by trying each in turn.
+         */
+        char digits[40];
+        int low = 1;
+        int high = 17;
+        while (low < high) {
+            int middle = low + (high - low) / 2;
+            snprintf(digits, sizeof(digits), "%.*e", middle - 1, number);
+            if (strtod(digits, NULL) == number) {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
         }
-    }
-    int exponent = (int) strtol(cursor + 1, NULL, 10);
+        snprintf(digits, sizeof(digits), "%.*e", low - 1, number);
 
-    /*
-     * Strip trailing zeroes from the mantissa
-     *
-     * The shortest round-tripping representation cannot end in a zero - dropping it would give the
-     * same value at one less precision, which the search above would have found first - so this is
-     * defensive against a libc whose rounding disagrees.
-     */
-    /* GCOV_EXCL_START */
-    while (digitCount > 1 && mantissa[digitCount - 1] == '0') {
-        digitCount--;
+        /* Split the "d.dddde+XX" form into its digits and exponent */
+        const char *cursor = digits + negative;
+        for (; *cursor != '\0' && *cursor != 'e'; cursor++) {
+            if (*cursor != '.') {
+                mantissa[digitCount++] = *cursor;
+            }
+        }
+        exponent = (int) strtol(cursor + 1, NULL, 10);
+
+        /*
+         * Strip trailing zeroes from the mantissa
+         *
+         * The shortest round-tripping representation cannot end in a zero - dropping it would give
+         * the same value at one less precision, which the search above would have found first - so
+         * this is defensive against a libc whose rounding disagrees.
+         */
+        /* GCOV_EXCL_START */
+        while (digitCount > 1 && mantissa[digitCount - 1] == '0') {
+            digitCount--;
+        }
+        /* GCOV_EXCL_STOP */
     }
-    /* GCOV_EXCL_STOP */
 
     /* Format per the ECMAScript Number::toString algorithm - "n" is the decimal point position */
     int n = exponent + 1;

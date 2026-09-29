@@ -54,6 +54,15 @@ TEST(value_number)
     ASSERT_VALUE_STRING(bsNumber(0.000001), "0.000001");
     ASSERT_VALUE_STRING(bsNumber(1e100), "1e+100");
     ASSERT_VALUE_STRING(bsNumber(1.25e-10), "1.25e-10");
+    /* The short-digit scan's edges: its first and last precisions, and past them the round-trip search */
+    ASSERT_VALUE_STRING(bsNumber(0.1), "0.1");
+    ASSERT_VALUE_STRING(bsNumber(123.456), "123.456");
+    ASSERT_VALUE_STRING(bsNumber(0.0000025), "0.0000025");
+    ASSERT_VALUE_STRING(bsNumber(0.49999999999999994), "0.49999999999999994");
+    ASSERT_VALUE_STRING(bsNumber(1.0000000000000002), "1.0000000000000002");
+    ASSERT_VALUE_STRING(bsNumber(9007199254740.992), "9007199254740.992");
+    ASSERT_VALUE_STRING(bsNumber(4503599627370495.5), "4503599627370495.5");
+    ASSERT_VALUE_STRING(bsNumber(nextafter(1e-6, 0)), "9.999999999999997e-7");
     ASSERT_TRUE(bsValueBoolean(bsNumber(1)));
     ASSERT_FALSE(bsValueBoolean(bsNumber(0)));
 }
