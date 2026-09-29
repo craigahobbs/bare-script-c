@@ -1072,8 +1072,13 @@ static void bsMatchKeyGroupGrow(size_t count)
 /* Create a match model object - the "index", "input", and "groups" members */
 static BSValue bsRegexMatchModel(BSValue regex, BSValue string, const BSRegexMatch *match)
 {
+    /*
+     * Sized for every group, up to sixteen entries: a many-group alternation matches few of them,
+     * and a larger object is born with a heap buffer and a hash index it would not use
+     */
     bool uniqueNames = bsRegexGroupNamesUnique(regex);
-    BSValue groups = bsObjectNewCapacity(match->groupCount * (uniqueNames ? 2 : 1));
+    size_t capacity = match->groupCount * (uniqueNames ? 2 : 1);
+    BSValue groups = bsObjectNewCapacity(capacity < 16 ? capacity : 16);
     if (match->groupCount > bsMatchKeys.groupCount) {
         bsMatchKeyGroupGrow(match->groupCount);
     }
