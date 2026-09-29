@@ -706,6 +706,34 @@ static void bsStringFree(BSString *string)
 
 
 /*
+ * Copy a string's bytes. Most runs are short - a word, a field, a number's digits - so up to
+ * sixteen bytes move as two overlapping loads and stores, with no library call.
+ */
+static inline void bsCopyBytes(char *target, const char *source, size_t size)
+{
+    if (size > 16) {
+        memcpy(target, source, size);
+    } else if (size >= 8) {
+        uint64_t head, tail;
+        memcpy(&head, source, 8);
+        memcpy(&tail, source + size - 8, 8);
+        memcpy(target, &head, 8);
+        memcpy(target + size - 8, &tail, 8);
+    } else if (size >= 4) {
+        uint32_t head, tail;
+        memcpy(&head, source, 4);
+        memcpy(&tail, source + size - 4, 4);
+        memcpy(target, &head, 4);
+        memcpy(target + size - 4, &tail, 4);
+    } else if (size != 0) {
+        target[0] = source[0];
+        target[size >> 1] = source[size >> 1];
+        target[size - 1] = source[size - 1];
+    }
+}
+
+
+/*
  * The empty string and the one-byte ASCII strings are shared: a slice, a match group, or a split
  * piece of one character is the runtime's most frequent string, and each is created once per
  * thread and retained thereafter. The thread's reference keeps their count above one, so the
@@ -731,7 +759,7 @@ BSValue bsStringNewAscii(const char *text, size_t size)
         return bsStringShort(text, size);
     }
     BSString *string = bsStringAlloc(size);
-    memcpy(string->data, text, size);
+    bsCopyBytes(string->data, text, size);
     string->length = (uint32_t) size;
     return bsStringTake(string);
 }
@@ -792,7 +820,7 @@ BSValue bsStringNewSize(const char *text, size_t size)
         return bsStringShort(text, size);
     }
     BSString *string = bsStringAlloc(size);
-    memcpy(string->data, text, size);
+    bsCopyBytes(string->data, text, size);
     return bsStringFinish(string, size);
 }
 
@@ -873,8 +901,8 @@ BSValue bsStringConcat(BSValue left, BSValue right)
     BSStringBytes rightBytes = bsStringBytes(right, rightBuffer, sizeof(rightBuffer));
 
     BSString *string = bsStringAlloc(leftBytes.size + rightBytes.size);
-    memcpy(string->data, leftBytes.data, leftBytes.size);
-    memcpy(string->data + leftBytes.size, rightBytes.data, rightBytes.size);
+    bsCopyBytes(string->data, leftBytes.data, leftBytes.size);
+    bsCopyBytes(string->data + leftBytes.size, rightBytes.data, rightBytes.size);
     string->length = (uint32_t) (leftBytes.length + rightBytes.length);
 
     bsReleaseInline(leftBytes.text);
@@ -928,7 +956,7 @@ BSString *bsStringAppendValue(BSString *string, BSValue value)
             string->flags &= (uint16_t) ((1u << BS_STR_POOL_SHIFT) - 1);
         }
     }
-    memcpy(string->data + string->size, bytes.data, bytes.size);
+    bsCopyBytes(string->data + string->size, bytes.data, bytes.size);
     string->size = (uint32_t) newSize;
     string->length += (uint32_t) bytes.length;
     string->data[newSize] = '\0';
