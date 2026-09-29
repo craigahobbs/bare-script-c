@@ -226,6 +226,10 @@ TEST(runtime_functions)
         "saved = arrayGet\nr = []\ni = 0\nwhile i < 3:\n    if i == 1:\n        arrayGet = 1\n    endif\n"
         "    if i == 2:\n        arrayGet = saved\n    endif\n"
         "    arrayPush(r, arrayGet([9], 0))\n    i = i + 1\nendwhile\nreturn r"), "[9,null,9]");
+    /* A site that has verified nothing admits no value - not even the number zero, whose bits are zero */
+    ASSERT_VALUE(bsTestExecute(
+        "arrayGet = 0\nr = []\ni = 0\nwhile i < 2:\n    arrayPush(r, arrayGet([9], 0))\n    i = i + 1\n"
+        "endwhile\nreturn r"), "[null,null]");
     ASSERT_VALUE(bsTestExecute(
         "i = 0\nr = 0\nwhile i < 2:\n    if i == 1:\n        function arrayGet(a, i):\n"
         "            return 99\n        endfunction\n    endif\n"

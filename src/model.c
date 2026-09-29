@@ -792,6 +792,7 @@ static uint16_t bsEmitSite(BSEmit *e, BSValue name)
     BS_GROW(e->caches, e->cacheCount, e->cacheCap, 8);
     BSCallCache *cache = &e->caches[e->cacheCount];
     memset(cache, 0, sizeof(*cache));
+    cache->verified = BS_UNSET_BITS;
     cache->nameIndex = bsEmitName(e, name);
     return (uint16_t) e->cacheCount++;
 }

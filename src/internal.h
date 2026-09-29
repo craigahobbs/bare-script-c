@@ -418,6 +418,13 @@ struct BSInst {
 };
 
 /*
+ * The bits of the interpreter's internal "unset" marker, a function slot not yet assigned: a positive
+ * NaN no arithmetic makes - never a number, as bsNumber makes a null of NaN, and not boxed - which
+ * only a slot ever holds
+ */
+#define BS_UNSET_BITS 0x7FFFFFFFFFFFFFFFu
+
+/*
  * Per-site cache of a global name lookup - a CALL_NAME function, or a LOAD_NAME or STORE_NAME variable
  *
  * The cache points at the globals object's value slot for the name, so an assignment to the name
@@ -428,7 +435,7 @@ struct BSInst {
  */
 struct BSCallCache {
     BSValue *slot;      /* the value slot in the globals object, or NULL if the name is absent */
-    uint64_t verified;  /* the function value's bits an intrinsic call site verified as its own - zero for none */
+    uint64_t verified;  /* the function value's bits an intrinsic call site verified as its own - BS_UNSET_BITS, which no global holds, for none */
     uint64_t key;       /* the options instance and the globals object's structural generation the slot was resolved for - bsCacheKey */
     uint32_t nameIndex; /* the name's index in the chunk's names */
     uint32_t memo;      /* the entry index an object call site last found its key at */
