@@ -1312,7 +1312,8 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
 /*
  * Whether the instruction's operands are equal, in "equal" - numbers and strings decided in place:
  * two strings are equal by pointer, unequal when both are interned, and compared by content
- * otherwise
+ * otherwise. So is any pair the bits settle: values of different types - their bits differ above
+ * the payload - are never equal, and a null or boolean is equal only to its own bits.
  */
 #define BS_EQUAL_OPERANDS(equal) \
     BSValue left = bsOperandRead(regs, inst->b); \
@@ -1326,6 +1327,8 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
         const BSString *rs = bsStringOf(right); \
         equal = ls == rs || ((ls->flags & rs->flags & BS_STR_INTERNED) == 0 && ls->size == rs->size && \
                              memcmp(ls->data, rs->data, ls->size) == 0); \
+    } else if (((left.bits ^ right.bits) >> BS_VALUE_TAG_SHIFT) != 0 || !BS_IS_REF(left)) { \
+        equal = left.bits == right.bits; \
     } else { \
         equal = bsValueCompare(left, right) == 0; \
     }
