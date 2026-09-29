@@ -593,17 +593,23 @@ static bool bsIntrinsicCall(unsigned char id, const BSValue *args, size_t argCou
 }
 
 
+/* A site cache's key - the options instance's epoch above the globals object's structural generation, one compare */
+static inline uint64_t bsCacheKey(const BSOptions *options, const BSObject *globals)
+{
+    return ((uint64_t) options->cacheEpoch << 32) | globals->generation;
+}
+
+
 /* The globals object's value slot for a name site, or NULL if the name is absent */
 static inline BSValue *bsGlobalSlot(BSCallCache *cache, BSValue name, BSOptions *options)
 {
     if (!bsIsType(options->globals, BS_OBJECT)) {
         return NULL;
     }
-    BSObject *globals = bsObjectOf(options->globals);
-    if (cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
+    uint64_t key = bsCacheKey(options, bsObjectOf(options->globals));
+    if (cache->key != key) {
         cache->slot = bsObjectValuePtrString(options->globals, name);
-        cache->gen = globals->generation;
-        cache->epoch = options->cacheEpoch;
+        cache->key = key;
     }
     return cache->slot;
 }
@@ -981,7 +987,7 @@ static inline const BSInst *bsIntrinArgs(const BSCode *code, const BSInst *inst,
                                          const BSOptions *options, unsigned char id)
 {
     BSCallCache *cache = &code->caches[inst->b];
-    if (globals == NULL || cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
+    if (globals == NULL || cache->key != bsCacheKey(options, globals)) {
         return NULL;
     }
     /*
@@ -1206,7 +1212,7 @@ static inline bool bsIntrinMath(const BSCode *code, const BSInst *inst, BSValue 
                                 BSOptions *options)
 {
     const BSCallCache *cache = &code->caches[inst->b];
-    if (globals == NULL || cache->epoch != options->cacheEpoch || cache->gen != globals->generation) {
+    if (globals == NULL || cache->key != bsCacheKey(options, globals)) {
         return false;
     }
     const BSValue *hit = cache->slot;

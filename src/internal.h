@@ -429,8 +429,7 @@ struct BSInst {
 struct BSCallCache {
     BSValue *slot;      /* the value slot in the globals object, or NULL if the name is absent */
     uint64_t verified;  /* the function value's bits an intrinsic call site verified as its own - zero for none */
-    uint32_t gen;       /* the globals object's structural generation the slot was resolved at */
-    uint32_t epoch;     /* the options instance the slot was resolved for */
+    uint64_t key;       /* the options instance and the globals object's structural generation the slot was resolved for - bsCacheKey */
     uint32_t nameIndex; /* the name's index in the chunk's names */
     uint32_t memo;      /* the entry index an object call site last found its key at */
 };
