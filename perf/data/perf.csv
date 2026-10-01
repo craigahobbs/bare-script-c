@@ -1,246 +1,246 @@
 language,test,runs,timeMs
-BareScript (C),mandelbrot,11,109
-BareScript (C),schemaParse,2400,192
-BareScript (C),schemaValidate,1200,132
-BareScript (C),markdownParse,480,141
-BareScript (C),markdownElements,2400,244
-BareScript (C),qrcodeMatrix,150,131
-BareScript (C),urlEncode,38400,150
-BareScript (C),urlDecode,19200,101
-C,mandelbrot,1,1.47021
-BareScript (C),testSuite,1000,170
-BareScript (C),mandelbrot,17,159
-BareScript (C),schemaParse,2400,193
-BareScript (C),schemaValidate,1200,133
-BareScript (C),markdownParse,608,177
-BareScript (C),markdownElements,1200,122
-BareScript (C),qrcodeMatrix,150,131
-BareScript (C),urlEncode,38400,152
-BareScript (C),urlDecode,19200,101
-C,mandelbrot,1,0.788818
-BareScript (C),testSuite,1000,150
-BareScript (C),mandelbrot,17,163
-BareScript (C),schemaParse,2400,194
-BareScript (C),schemaValidate,1200,133
-BareScript (C),markdownParse,480,140
-BareScript (C),markdownElements,2400,243
-BareScript (C),qrcodeMatrix,176,154
-BareScript (C),urlEncode,38400,149
-BareScript (C),urlDecode,19200,100
+BareScript (C),mandelbrot,17,153
+BareScript (C),schemaParse,2400,177
+BareScript (C),schemaValidate,1200,114
+BareScript (C),markdownParse,600,161
+BareScript (C),markdownElements,1200,112
+BareScript (C),qrcodeMatrix,150,125
+BareScript (C),urlEncode,38400,135
+BareScript (C),urlDecode,38400,185
+C,mandelbrot,1,2.08496
+BareScript (C),testSuite,1000,230
+BareScript (C),mandelbrot,17,152
+BareScript (C),schemaParse,2400,177
+BareScript (C),schemaValidate,2400,226
+BareScript (C),markdownParse,480,130
+BareScript (C),markdownElements,1200,116
+BareScript (C),qrcodeMatrix,176,147
+BareScript (C),urlEncode,38400,135
+BareScript (C),urlDecode,38400,186
 C,mandelbrot,1,0.788086
-BareScript (C),testSuite,1000,160
-BareScript (C),mandelbrot,17,161
-BareScript (C),schemaParse,2400,193
-BareScript (C),schemaValidate,1200,134
-BareScript (C),markdownParse,480,141
-BareScript (C),markdownElements,1200,123
-BareScript (C),qrcodeMatrix,150,131
-BareScript (C),urlEncode,40800,160
-BareScript (C),urlDecode,38400,204
-C,mandelbrot,1,0.788818
-BareScript (C),testSuite,1000,160
-BareScript (C),mandelbrot,17,160
-BareScript (C),schemaParse,2400,192
-BareScript (C),schemaValidate,1200,133
-BareScript (C),markdownParse,608,174
-BareScript (C),markdownElements,1200,121
-BareScript (C),qrcodeMatrix,150,130
-BareScript (C),urlEncode,38400,146
-BareScript (C),urlDecode,38400,198
-C,mandelbrot,1,0.788818
-BareScript (C),testSuite,1000,160
-BareScript (JS),mandelbrot,1,260
-BareScript (JS),schemaParse,150,154
-BareScript (JS),schemaValidate,75,134
-BareScript (JS),markdownParse,75,132
-BareScript (JS),markdownElements,300,166
-BareScript (JS),qrcodeMatrix,17,123
-BareScript (JS),urlEncode,3750,162
-BareScript (JS),urlDecode,2400,178
-JavaScript,mandelbrot,1,1.5889999999999986
-JavaScript,schemaParse,250,17.787416
-JavaScript,schemaValidate,250,14.043708000000002
-JavaScript,markdownParse,250,98.71825000000001
-JavaScript,markdownElements,1000,28.579207999999994
-JavaScript,urlEncode,2000,4.494916999999987
-JavaScript,urlDecode,2000,9.409124999999989
-BareScript (JS),testSuite,1000,1950
-BareScript (JS),mandelbrot,1,263
-BareScript (JS),schemaParse,150,156
-BareScript (JS),schemaValidate,75,134
-BareScript (JS),markdownParse,150,264
-BareScript (JS),markdownElements,272,152
+BareScript (C),testSuite,1000,200
+BareScript (C),mandelbrot,19,172
+BareScript (C),schemaParse,2400,176
+BareScript (C),schemaValidate,1200,111
+BareScript (C),markdownParse,480,129
+BareScript (C),markdownElements,1650,153
+BareScript (C),qrcodeMatrix,150,124
+BareScript (C),urlEncode,38400,135
+BareScript (C),urlDecode,38400,185
+C,mandelbrot,1,0.791016
+BareScript (C),testSuite,1000,200
+BareScript (C),mandelbrot,17,155
+BareScript (C),schemaParse,2400,179
+BareScript (C),schemaValidate,1200,114
+BareScript (C),markdownParse,600,163
+BareScript (C),markdownElements,1650,154
+BareScript (C),qrcodeMatrix,150,126
+BareScript (C),urlEncode,38400,137
+BareScript (C),urlDecode,38400,187
+C,mandelbrot,1,0.790039
+BareScript (C),testSuite,1000,200
+BareScript (C),mandelbrot,19,173
+BareScript (C),schemaParse,2400,179
+BareScript (C),schemaValidate,1650,158
+BareScript (C),markdownParse,600,163
+BareScript (C),markdownElements,1200,113
+BareScript (C),qrcodeMatrix,176,148
+BareScript (C),urlEncode,38400,136
+BareScript (C),urlDecode,38400,189
+C,mandelbrot,1,0.787842
+BareScript (C),testSuite,1000,200
+BareScript (JS),mandelbrot,1,262
+BareScript (JS),schemaParse,150,158
+BareScript (JS),schemaValidate,75,132
+BareScript (JS),markdownParse,75,134
+BareScript (JS),markdownElements,300,170
 BareScript (JS),qrcodeMatrix,17,121
-BareScript (JS),urlEncode,3584,156
-BareScript (JS),urlDecode,1500,114
-JavaScript,mandelbrot,1,1.5472500000000018
-JavaScript,schemaParse,250,17.49875
-JavaScript,schemaValidate,250,13.951042000000001
-JavaScript,markdownParse,250,100.19733399999998
-JavaScript,markdownElements,1000,28.908416999999986
-JavaScript,urlEncode,2000,4.622833000000014
-JavaScript,urlDecode,2000,9.350833999999992
-BareScript (JS),testSuite,1000,1960
-BareScript (JS),mandelbrot,1,266
-BareScript (JS),schemaParse,150,154
-BareScript (JS),schemaValidate,75,135
-BareScript (JS),markdownParse,75,131
-BareScript (JS),markdownElements,272,152
+BareScript (JS),urlEncode,2400,102
+BareScript (JS),urlDecode,2400,178
+JavaScript,mandelbrot,1,1.5999589999999984
+JavaScript,schemaParse,250,17.510583
+JavaScript,schemaValidate,250,14.235208
+JavaScript,markdownParse,250,105.00116700000001
+JavaScript,markdownElements,1000,29.22958300000002
+JavaScript,urlEncode,2000,4.639459000000016
+JavaScript,urlDecode,2000,8.992124999999987
+BareScript (JS),testSuite,1000,2180
+BareScript (JS),mandelbrot,1,267
+BareScript (JS),schemaParse,150,153
+BareScript (JS),schemaValidate,75,131
+BareScript (JS),markdownParse,75,137
+BareScript (JS),markdownElements,300,171
 BareScript (JS),qrcodeMatrix,17,121
 BareScript (JS),urlEncode,2400,104
-BareScript (JS),urlDecode,1650,127
-JavaScript,mandelbrot,1,1.5422499999999992
-JavaScript,schemaParse,250,18.131083
-JavaScript,schemaValidate,250,14.067084000000001
-JavaScript,markdownParse,250,99.884375
-JavaScript,markdownElements,1000,28.941000000000003
-JavaScript,urlEncode,2000,4.614332999999988
-JavaScript,urlDecode,2000,9.544749999999993
-BareScript (JS),testSuite,1000,1950
-BareScript (JS),mandelbrot,1,261
-BareScript (JS),schemaParse,150,157
+BareScript (JS),urlDecode,1650,124
+JavaScript,mandelbrot,1,1.5746670000000016
+JavaScript,schemaParse,250,17.376375000000003
+JavaScript,schemaValidate,250,14.111334
+JavaScript,markdownParse,250,105.106
+JavaScript,markdownElements,1000,28.752791000000002
+JavaScript,urlEncode,2000,4.581542000000013
+JavaScript,urlDecode,2000,9.42825000000002
+BareScript (JS),testSuite,1000,2200
+BareScript (JS),mandelbrot,1,264
+BareScript (JS),schemaParse,150,155
+BareScript (JS),schemaValidate,75,135
+BareScript (JS),markdownParse,75,138
+BareScript (JS),markdownElements,300,170
+BareScript (JS),qrcodeMatrix,15,107
+BareScript (JS),urlEncode,2400,106
+BareScript (JS),urlDecode,2400,177
+JavaScript,mandelbrot,1,1.5706249999999997
+JavaScript,schemaParse,250,17.444833000000003
+JavaScript,schemaValidate,250,14.091000000000001
+JavaScript,markdownParse,250,105.68325
+JavaScript,markdownElements,1000,29.094333000000006
+JavaScript,urlEncode,2000,4.654916999999983
+JavaScript,urlDecode,2000,9.493042000000003
+BareScript (JS),testSuite,1000,2170
+BareScript (JS),mandelbrot,1,258
+BareScript (JS),schemaParse,150,153
 BareScript (JS),schemaValidate,75,134
-BareScript (JS),markdownParse,75,133
-BareScript (JS),markdownElements,272,152
+BareScript (JS),markdownParse,75,139
+BareScript (JS),markdownElements,300,171
 BareScript (JS),qrcodeMatrix,17,122
-BareScript (JS),urlEncode,3750,163
-BareScript (JS),urlDecode,2400,178
-JavaScript,mandelbrot,1,1.5417079999999999
-JavaScript,schemaParse,250,17.695375000000002
-JavaScript,schemaValidate,250,14.103958999999996
-JavaScript,markdownParse,250,99.214042
-JavaScript,markdownElements,1000,29.447832999999974
-JavaScript,urlEncode,2000,4.536375000000021
-JavaScript,urlDecode,2000,9.554333000000014
-BareScript (JS),testSuite,1000,1970
-BareScript (JS),mandelbrot,1,274
-BareScript (JS),schemaParse,150,154
-BareScript (JS),schemaValidate,75,133
-BareScript (JS),markdownParse,75,133
-BareScript (JS),markdownElements,300,166
-BareScript (JS),qrcodeMatrix,17,124
-BareScript (JS),urlEncode,3300,145
-BareScript (JS),urlDecode,1500,111
-JavaScript,mandelbrot,1,1.5544590000000014
-JavaScript,schemaParse,250,17.683833999999997
-JavaScript,schemaValidate,250,14.208708000000001
-JavaScript,markdownParse,250,99.070792
-JavaScript,markdownElements,1000,29.517957999999993
-JavaScript,urlEncode,2000,4.459625000000017
-JavaScript,urlDecode,2000,9.509250000000009
-BareScript (JS),testSuite,1000,1980
-BareScript (PyC),mandelbrot,1,113
-BareScript (PyC),schemaParse,150,167
-BareScript (PyC),schemaValidate,150,159
-BareScript (PyC),markdownParse,25,155
-BareScript (PyC),markdownElements,300,164
-BareScript (PyC),qrcodeMatrix,17,144
-BareScript (PyC),urlEncode,2400,125
-BareScript (PyC),urlDecode,1200,134
-BareScript (Py),mandelbrot,1,3534
+BareScript (JS),urlEncode,2400,106
+BareScript (JS),urlDecode,1650,126
+JavaScript,mandelbrot,1,1.5692079999999997
+JavaScript,schemaParse,250,17.385541
+JavaScript,schemaValidate,250,14.136417000000002
+JavaScript,markdownParse,250,105.21462500000001
+JavaScript,markdownElements,1000,28.808291999999994
+JavaScript,urlEncode,2000,4.398291999999998
+JavaScript,urlDecode,2000,9.134208999999998
+BareScript (JS),testSuite,1000,2200
+BareScript (JS),mandelbrot,1,262
+BareScript (JS),schemaParse,150,153
+BareScript (JS),schemaValidate,75,135
+BareScript (JS),markdownParse,75,139
+BareScript (JS),markdownElements,272,156
+BareScript (JS),qrcodeMatrix,17,121
+BareScript (JS),urlEncode,2400,104
+BareScript (JS),urlDecode,1650,125
+JavaScript,mandelbrot,1,1.5703749999999985
+JavaScript,schemaParse,250,17.6475
+JavaScript,schemaValidate,250,14.108000000000004
+JavaScript,markdownParse,250,106.03104200000001
+JavaScript,markdownElements,1000,28.894042000000013
+JavaScript,urlEncode,2000,4.615458999999987
+JavaScript,urlDecode,2000,9.581957999999986
+BareScript (JS),testSuite,1000,2210
+BareScript (PyC),mandelbrot,9,153
+BareScript (PyC),schemaParse,400,137
+BareScript (PyC),schemaValidate,608,167
+BareScript (PyC),markdownParse,30,141
+BareScript (PyC),markdownElements,608,144
+BareScript (PyC),qrcodeMatrix,50,153
+BareScript (PyC),urlEncode,9728,151
+BareScript (PyC),urlDecode,9728,139
+BareScript (Py),mandelbrot,1,3509
 BareScript (Py),schemaParse,17,151
 BareScript (Py),schemaValidate,11,156
-BareScript (Py),markdownParse,9,155
-BareScript (Py),markdownElements,38,161
-BareScript (Py),qrcodeMatrix,3,217
+BareScript (Py),markdownParse,9,165
+BareScript (Py),markdownElements,38,169
+BareScript (Py),qrcodeMatrix,3,221
 BareScript (Py),urlEncode,400,150
 BareScript (Py),urlDecode,150,100
-Python,mandelbrot,1,46.650999999999996
-Python,schemaParse,250,42.475
-Python,schemaValidate,250,52.437
-Python,urlEncode,2000,20.830000000000002
-Python,urlDecode,2000,23.751
-BareScript (PyC),testSuite,1000,8380
-BareScript (Py),testSuite,1000,12400
-BareScript (PyC),mandelbrot,1,113
-BareScript (PyC),schemaParse,150,166
-BareScript (PyC),schemaValidate,150,158
-BareScript (PyC),markdownParse,22,145
-BareScript (PyC),markdownElements,300,164
-BareScript (PyC),qrcodeMatrix,19,160
-BareScript (PyC),urlEncode,2400,124
-BareScript (PyC),urlDecode,1200,134
-BareScript (Py),mandelbrot,1,3564
-BareScript (Py),schemaParse,17,152
-BareScript (Py),schemaValidate,11,157
-BareScript (Py),markdownParse,9,155
-BareScript (Py),markdownElements,38,162
-BareScript (Py),qrcodeMatrix,3,218
-BareScript (Py),urlEncode,400,149
-BareScript (Py),urlDecode,150,100
-Python,mandelbrot,1,46.803999999999995
-Python,schemaParse,250,42.99
-Python,schemaValidate,250,51.793
-Python,urlEncode,2000,20.972
-Python,urlDecode,2000,23.532999999999998
-BareScript (PyC),testSuite,1000,8330
-BareScript (Py),testSuite,1000,12440
-BareScript (PyC),mandelbrot,1,116
-BareScript (PyC),schemaParse,150,168
-BareScript (PyC),schemaValidate,150,157
-BareScript (PyC),markdownParse,25,154
-BareScript (PyC),markdownElements,300,166
-BareScript (PyC),qrcodeMatrix,17,145
-BareScript (PyC),urlEncode,2400,126
-BareScript (PyC),urlDecode,1200,134
-BareScript (Py),mandelbrot,1,3608
-BareScript (Py),schemaParse,15,141
-BareScript (Py),schemaValidate,10,149
-BareScript (Py),markdownParse,9,163
-BareScript (Py),markdownElements,38,168
-BareScript (Py),qrcodeMatrix,2,151
-BareScript (Py),urlEncode,400,156
-BareScript (Py),urlDecode,150,103
-Python,mandelbrot,1,49.438
-Python,schemaParse,250,44.144999999999996
-Python,schemaValidate,250,53.479
-Python,urlEncode,2000,21.395
-Python,urlDecode,2000,24.264
-BareScript (PyC),testSuite,1000,8460
-BareScript (Py),testSuite,1000,12440
-BareScript (PyC),mandelbrot,1,115
-BareScript (PyC),schemaParse,150,166
-BareScript (PyC),schemaValidate,150,159
-BareScript (PyC),markdownParse,25,153
-BareScript (PyC),markdownElements,300,165
-BareScript (PyC),qrcodeMatrix,17,145
-BareScript (PyC),urlEncode,2400,125
-BareScript (PyC),urlDecode,1200,134
-BareScript (Py),mandelbrot,1,3566
-BareScript (Py),schemaParse,17,152
-BareScript (Py),schemaValidate,11,158
-BareScript (Py),markdownParse,9,156
-BareScript (Py),markdownElements,38,162
-BareScript (Py),qrcodeMatrix,3,218
-BareScript (Py),urlEncode,400,149
-BareScript (Py),urlDecode,150,100
-Python,mandelbrot,1,46.864999999999995
-Python,schemaParse,250,42.144
-Python,schemaValidate,250,51.882
-Python,urlEncode,2000,21.009
-Python,urlDecode,2000,23.484
-BareScript (PyC),testSuite,1000,8410
-BareScript (Py),testSuite,1000,12470
-BareScript (PyC),mandelbrot,1,113
-BareScript (PyC),schemaParse,150,167
-BareScript (PyC),schemaValidate,150,157
-BareScript (PyC),markdownParse,25,153
-BareScript (PyC),markdownElements,300,162
-BareScript (PyC),qrcodeMatrix,19,161
-BareScript (PyC),urlEncode,2400,125
-BareScript (PyC),urlDecode,1200,134
-BareScript (Py),mandelbrot,1,3536
-BareScript (Py),schemaParse,17,153
+Python,mandelbrot,1,46.627
+Python,schemaParse,250,42.793
+Python,schemaValidate,250,52.206
+Python,urlEncode,2000,21.217
+Python,urlDecode,2000,23.512999999999998
+BareScript (PyC),testSuite,1000,1630
+BareScript (Py),testSuite,1000,15010
+BareScript (PyC),mandelbrot,9,154
+BareScript (PyC),schemaParse,480,160
+BareScript (PyC),schemaValidate,608,166
+BareScript (PyC),markdownParse,30,145
+BareScript (PyC),markdownElements,608,145
+BareScript (PyC),qrcodeMatrix,50,152
+BareScript (PyC),urlEncode,9728,156
+BareScript (PyC),urlDecode,9728,135
+BareScript (Py),mandelbrot,1,3606
+BareScript (Py),schemaParse,17,154
 BareScript (Py),schemaValidate,11,159
-BareScript (Py),markdownParse,9,157
-BareScript (Py),markdownElements,38,163
-BareScript (Py),qrcodeMatrix,3,218
+BareScript (Py),markdownParse,8,148
+BareScript (Py),markdownElements,38,169
+BareScript (Py),qrcodeMatrix,3,223
+BareScript (Py),urlEncode,400,151
+BareScript (Py),urlDecode,150,101
+Python,mandelbrot,1,45.998
+Python,schemaParse,250,42.821999999999996
+Python,schemaValidate,250,52.452
+Python,urlEncode,2000,21.005
+Python,urlDecode,2000,23.505000000000003
+BareScript (PyC),testSuite,1000,1650
+BareScript (Py),testSuite,1000,14940
+BareScript (PyC),mandelbrot,9,154
+BareScript (PyC),schemaParse,400,136
+BareScript (PyC),schemaValidate,608,168
+BareScript (PyC),markdownParse,30,147
+BareScript (PyC),markdownElements,608,146
+BareScript (PyC),qrcodeMatrix,50,152
+BareScript (PyC),urlEncode,9728,151
+BareScript (PyC),urlDecode,9728,138
+BareScript (Py),mandelbrot,1,3509
+BareScript (Py),schemaParse,17,153
+BareScript (Py),schemaValidate,11,157
+BareScript (Py),markdownParse,9,165
+BareScript (Py),markdownElements,38,168
+BareScript (Py),qrcodeMatrix,3,221
 BareScript (Py),urlEncode,400,151
 BareScript (Py),urlDecode,150,100
-Python,mandelbrot,1,46.961999999999996
-Python,schemaParse,250,43.435
-Python,schemaValidate,250,52.061
-Python,urlEncode,2000,21.034
-Python,urlDecode,2000,23.878
-BareScript (PyC),testSuite,1000,8360
-BareScript (Py),testSuite,1000,12410
+Python,mandelbrot,1,46.800000000000004
+Python,schemaParse,250,43.028999999999996
+Python,schemaValidate,250,53.687
+Python,urlEncode,2000,20.835
+Python,urlDecode,2000,23.845000000000002
+BareScript (PyC),testSuite,1000,1620
+BareScript (Py),testSuite,1000,14960
+BareScript (PyC),mandelbrot,9,155
+BareScript (PyC),schemaParse,400,135
+BareScript (PyC),schemaValidate,608,167
+BareScript (PyC),markdownParse,30,146
+BareScript (PyC),markdownElements,608,145
+BareScript (PyC),qrcodeMatrix,50,153
+BareScript (PyC),urlEncode,9728,148
+BareScript (PyC),urlDecode,9728,135
+BareScript (Py),mandelbrot,1,3501
+BareScript (Py),schemaParse,17,151
+BareScript (Py),schemaValidate,11,155
+BareScript (Py),markdownParse,9,163
+BareScript (Py),markdownElements,38,167
+BareScript (Py),qrcodeMatrix,3,219
+BareScript (Py),urlEncode,400,150
+BareScript (Py),urlDecode,300,197
+Python,mandelbrot,1,47.050000000000004
+Python,schemaParse,250,43.223
+Python,schemaValidate,250,51.934
+Python,urlEncode,2000,21.087999999999997
+Python,urlDecode,2000,23.75
+BareScript (PyC),testSuite,1000,1670
+BareScript (Py),testSuite,1000,15020
+BareScript (PyC),mandelbrot,9,154
+BareScript (PyC),schemaParse,480,162
+BareScript (PyC),schemaValidate,608,166
+BareScript (PyC),markdownParse,30,146
+BareScript (PyC),markdownElements,608,145
+BareScript (PyC),qrcodeMatrix,50,155
+BareScript (PyC),urlEncode,9728,149
+BareScript (PyC),urlDecode,9728,134
+BareScript (Py),mandelbrot,1,3518
+BareScript (Py),schemaParse,17,152
+BareScript (Py),schemaValidate,11,158
+BareScript (Py),markdownParse,9,166
+BareScript (Py),markdownElements,30,134
+BareScript (Py),qrcodeMatrix,3,223
+BareScript (Py),urlEncode,400,151
+BareScript (Py),urlDecode,150,100
+Python,mandelbrot,1,46.236
+Python,schemaParse,250,42.776
+Python,schemaValidate,250,51.82
+Python,urlEncode,2000,20.825
+Python,urlDecode,2000,23.532
+BareScript (PyC),testSuite,1000,1670
+BareScript (Py),testSuite,1000,15040

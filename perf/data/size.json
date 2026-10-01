@@ -1,12 +1,12 @@
 {
-  "when": "2026-09-29",
+  "when": "2026-10-01",
   "machine": "Apple M3 Max",
   "emptyRss": 2.83,
   "emptyPeak": 2.06,
-  "perfRss": 5.91,
-  "suiteRss": 30.75,
-  "coverRss": 49.67,
-  "dylibBytes": 453040,
-  "textBytes": 231652,
-  "includeBytes": 132969
+  "perfRss": 5.92,
+  "suiteRss": 32.14,
+  "coverRss": 84.86,
+  "dylibBytes": 453264,
+  "textBytes": 232800,
+  "includeBytes": 140935
 }
