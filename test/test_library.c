@@ -8,6 +8,7 @@
  * also covers the expression evaluator's call dispatch.
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -565,12 +566,17 @@ TEST(library_barescript_evaluate_expression)
 }
 
 
-/* Each response describes its request and, for a batch of several, the batch size */
+/* Each response describes its request and, for a batch of several, the batch size - but an "echo"
+   request's response is its body's bytes */
 static void bsTestLibraryFetchFn(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data)
 {
     for (size_t ix = 0; ix < count; ix++) {
         const BSFetchRequest *request = &requests[ix];
         if (strcmp(request->url, "fail") == 0) {
+            continue;
+        }
+        if (strcmp(request->url, "echo") == 0) {
+            responses[ix] = bsStringNewSize(request->body, request->bodySize);
             continue;
         }
         BSStringBuilder sb;
@@ -581,6 +587,9 @@ static void bsTestLibraryFetchFn(const BSFetchRequest *requests, BSValue *respon
         }
         if (bsIsType(request->headers, BS_OBJECT)) {
             bsSBAppendFormat(&sb, " headers=%zu", bsObjectCount(request->headers));
+        }
+        if (request->binary) {
+            bsSBAppendFormat(&sb, " binary");
         }
         if (count > 1) {
             bsSBAppendFormat(&sb, " batch=%zu", count);
@@ -606,6 +615,19 @@ TEST(library_system_fetch)
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch(['fail'])", options), "[null]");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch([])", options), "[]");
 
+    /* A byte value array body, and a binary response - its bytes need not be UTF-8 */
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'body': [104, 105]})", options),
+                 "\"url=a body=hi\"");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'body': []})", options), "\"url=a body=\"");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'echo', 'body': [0, 104, 255], 'binary': true})", options),
+                 "[0,104,255]");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'echo', 'body': 'hi', 'binary': true})", options),
+                 "[104,105]");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'binary': false})", options), "\"url=a\"");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch([{'url': 'fail', 'binary': true}, {'url': 'echo', 'body': [1], "
+                                      "'binary': true}, {'url': 'echo', 'body': [104]}])", options),
+                 "[null,[1],\"h\"]");
+
     /* Invalid request models */
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch(1)", options), "null");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({})", options), "null");
@@ -613,6 +635,10 @@ TEST(library_system_fetch)
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'body': 1})", options), "null");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'headers': 1})", options), "null");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'headers': {'h': 1}})", options), "null");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'body': [256]})", options), "null");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'body': [1.5]})", options), "null");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'body': ['a']})", options), "null");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'binary': 1})", options), "null");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch([1])", options), "null");
     bsOptionsFree(options);
 
@@ -623,8 +649,20 @@ TEST(library_system_fetch)
     options = bsTestOptions();
     options->debug = true;
     options->fetchFn = bsTestLibraryFetchFn;
-    bsRelease(bsTestExecuteOptions("systemFetch('fail')", options));
+    bsRelease(bsTestExecuteOptions("systemFetch({'url': 'fail', 'binary': true})", options));
     ASSERT_STR_EQ(bsTestLogText(), "BareScript: Function \"systemFetch\" failed for resource \"fail\"\n");
+    bsOptionsFree(options);
+
+    /* A binary file round trip - any bytes are written and read back */
+    options = bsTestOptions();
+    options->fetchFn = bsFetchReadWrite;
+    char script[1024];
+    snprintf(script, sizeof(script),
+             "bytes = [0, 31, 139, 128, 255, 10]\n"
+             "written = systemFetch({'url': '%s/binary.dat', 'body': bytes, 'binary': true})\n"
+             "return [written, systemFetch({'url': '%s/binary.dat', 'binary': true})]",
+             bsTestTempDir(), bsTestTempDir());
+    ASSERT_VALUE(bsTestExecuteOptions(script, options), "[[123,125],[0,31,139,128,255,10]]");
     bsOptionsFree(options);
 
     /* A URL function rewrites the request URL */

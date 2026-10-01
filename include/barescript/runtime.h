@@ -37,14 +37,17 @@ typedef struct BSFetchRequest {
     const char *body;  /* the request body, or NULL for a GET request */
     size_t bodySize;
     BSValue headers;   /* an object of string header values, or a null value */
+    bool binary;       /* whether the script receives the response as a byte value array */
 } BSFetchRequest;
 
 /*
  * The fetch function signature
  *
  * Fetches "count" requests at once - so an implementation can fetch them concurrently - and sets
- * each successful request's response to its text, an owned string value. The responses arrive as
- * null values, so a request that fails may be left as it is. The caller releases each response.
+ * each successful request's response to its body, an owned string value of the response's bytes,
+ * which for a binary request need not be UTF-8 (systemFetch makes it a byte value array). The
+ * responses arrive as null values, so a request that fails may be left as it is. The caller
+ * releases each response.
  */
 typedef void (*BSFetchFn)(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data);
 

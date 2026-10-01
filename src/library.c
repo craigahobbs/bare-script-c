@@ -226,6 +226,44 @@ static bool bsIsIntegerTo(BSValue value, double max)
         bsNumberOf(value) <= max;
 }
 
+
+/* Whether an array is a byte value array - integers 0 to 255 */
+static bool bsIsByteArray(BSValue array)
+{
+    size_t count = bsArrayCount(array);
+    for (size_t ix = 0; ix < count; ix++) {
+        if (!bsIsIntegerTo(bsArrayGet(array, ix), 255)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
+/* A byte value array's bytes, a malloc-allocated buffer the caller frees */
+static char *bsByteArrayData(BSValue array)
+{
+    size_t count = bsArrayCount(array);
+    char *buffer = bsAlloc(count);
+    for (size_t ix = 0; ix < count; ix++) {
+        buffer[ix] = (char) (unsigned char) bsNumberOf(bsArrayGet(array, ix));
+    }
+    return buffer;
+}
+
+
+/* A byte value array of a string's bytes */
+static BSValue bsByteArrayNew(BSValue string)
+{
+    size_t size = bsStringSize(string);
+    const char *text = bsStringSpan(string);
+    BSValue result = bsArrayNewCapacity(size);
+    for (size_t ix = 0; ix < size; ix++) {
+        bsArrayPush(result, bsNumber((unsigned char) text[ix]));
+    }
+    return result;
+}
+
 BSValue bsStringSlice(BSValue string, size_t begin, size_t end)
 {
     const BSString *source = bsStringOf(string);
@@ -1376,16 +1414,11 @@ static const BSArgModel stringDecodeArgs[] = {{"bytes", BS_ARG_ARRAY, 0, 0, 0, 0
 static BSValue bsFnStringDecode(const BSValue *args, size_t argCount, BSOptions *options, void *data)
 {
     BS_ARGS(stringDecodeArgs, bsNull());
-    size_t count = bsArrayCount(values[0]);
-    char *buffer = bsAlloc(count);
-    for (size_t ix = 0; ix < count; ix++) {
-        BSValue byte = bsArrayGet(values[0], ix);
-        if (!bsIsIntegerTo(byte, 255)) {
-            free(buffer);
-            return bsNull();
-        }
-        buffer[ix] = (char) (unsigned char) bsNumberOf(byte);
+    if (!bsIsByteArray(values[0])) {
+        return bsNull();
     }
+    size_t count = bsArrayCount(values[0]);
+    char *buffer = bsByteArrayData(values[0]);
     if (bsUTF8Length(buffer, count) == SIZE_MAX) {
         free(buffer);
         return bsNull();
@@ -1396,17 +1429,7 @@ static BSValue bsFnStringDecode(const BSValue *args, size_t argCount, BSOptions 
 }
 
 
-static BSValue bsFnStringEncode(const BSValue *args, size_t argCount, BSOptions *options, void *data)
-{
-    BS_ARGS(stringArgs, bsNull());
-    size_t size = bsStringSize(values[0]);
-    const char *text = bsStringSpan(values[0]);
-    BSValue result = bsArrayNewCapacity(size);
-    for (size_t ix = 0; ix < size; ix++) {
-        bsArrayPush(result, bsNumber((unsigned char) text[ix]));
-    }
-    return result;
-}
+BS_LIBRARY_FN(bsFnStringEncode, stringArgs, bsNull(), bsByteArrayNew(values[0]))
 
 
 static const BSArgModel stringSearchArgs[] = {
@@ -1732,8 +1755,8 @@ static bool bsFetchHeaderString(BSValue key, BSValue item, void *data)
 }
 
 
-/* A fetch argument is a URL string or a request model: a url string, an optional body string, and
-   optional headers - an object of string values */
+/* A fetch argument is a URL string or a request model: a url string, an optional body string or
+   byte value array, optional headers - an object of string values - and an optional binary flag */
 static bool bsFetchValid(BSValue request)
 {
     if (!bsIsType(request, BS_OBJECT)) {
@@ -1742,8 +1765,11 @@ static bool bsFetchValid(BSValue request)
     BSValue url = bsObjectGet(request, "url");
     BSValue body = bsObjectGet(request, "body");
     BSValue headers = bsObjectGet(request, "headers");
-    if (!bsIsType(url, BS_STRING) || (!bsIsType(body, BS_NULL) && !bsIsType(body, BS_STRING)) ||
-        (!bsIsType(headers, BS_NULL) && !bsIsType(headers, BS_OBJECT))) {
+    BSValue binary = bsObjectGet(request, "binary");
+    if (!bsIsType(url, BS_STRING) ||
+        (!bsIsType(body, BS_NULL) && !bsIsType(body, BS_STRING) && !(bsIsType(body, BS_ARRAY) && bsIsByteArray(body))) ||
+        (!bsIsType(headers, BS_NULL) && !bsIsType(headers, BS_OBJECT)) ||
+        (!bsIsType(binary, BS_NULL) && !bsIsType(binary, BS_BOOLEAN))) {
         return false;
     }
     return !bsIsType(headers, BS_OBJECT) || bsObjectIter(headers, bsFetchHeaderString, NULL);
@@ -1770,43 +1796,52 @@ static BSValue bsFnSystemFetch(const BSValue *args, size_t argCount, BSOptions *
         return bsArrayNew();
     }
 
-    /* Resolve each request's URL, then fetch the requests together */
+    /* Resolve each request's URL and pack each byte value array body, then fetch the requests together */
     BSFetchRequest *requests = bsAlloc(count * sizeof(BSFetchRequest));
     BSValue *responses = bsAlloc(count * sizeof(BSValue));
     char **resolved = bsAlloc(count * sizeof(char *));
+    char **packed = bsAlloc(count * sizeof(char *));
     for (size_t ix = 0; ix < count; ix++) {
         responses[ix] = bsNull();
         BSValue item = isArray ? bsArrayGet(url, ix) : url;
         BSValue itemUrl = bsIsType(item, BS_STRING) ? item : bsObjectGet(item, "url");
         BSValue body = bsObjectGet(item, "body");
         resolved[ix] = options->urlFn != NULL ? options->urlFn(bsStringData(itemUrl), options->urlData) : NULL;
+        packed[ix] = bsIsType(body, BS_ARRAY) ? bsByteArrayData(body) : NULL;
         requests[ix] = (BSFetchRequest) {
             .url = resolved[ix] != NULL ? resolved[ix] : bsStringData(itemUrl),
-            .body = bsIsType(body, BS_STRING) ? bsStringData(body) : NULL,
-            .bodySize = bsIsType(body, BS_STRING) ? bsStringSize(body) : 0,
-            .headers = bsObjectGet(item, "headers")
+            .body = packed[ix] != NULL ? packed[ix] : bsIsType(body, BS_STRING) ? bsStringData(body) : NULL,
+            .bodySize = bsIsType(body, BS_ARRAY) ? bsArrayCount(body) : bsIsType(body, BS_STRING) ? bsStringSize(body) : 0,
+            .headers = bsObjectGet(item, "headers"),
+            .binary = bsValueBoolean(bsObjectGet(item, "binary"))
         };
     }
     if (options->fetchFn != NULL) {
         options->fetchFn(requests, responses, count, options->fetchData);
     }
 
-    /* The responses, logging each failure */
+    /* The responses - a binary request's as a byte value array - logging each failure */
     BSValue result = isArray ? bsArrayNewCapacity(count) : bsNull();
     for (size_t ix = 0; ix < count; ix++) {
-        if (bsIsType(responses[ix], BS_NULL) && options->debug) {
+        BSValue response = responses[ix];
+        if (bsIsType(response, BS_NULL) && options->debug) {
             bsLog(options, "BareScript: Function \"systemFetch\" failed for resource \"%s\"", requests[ix].url);
+        } else if (requests[ix].binary && bsIsType(response, BS_STRING)) {
+            response = bsByteArrayNew(responses[ix]);
+            bsRelease(responses[ix]);
         }
         if (isArray) {
-            bsArrayPush(result, responses[ix]);
+            bsArrayPush(result, response);
         } else {
-            result = responses[ix];
+            result = response;
         }
         free(resolved[ix]);
+        free(packed[ix]);
     }
     free(requests);
     free(responses);
     free(resolved);
+    free(packed);
     return result;
 }
 

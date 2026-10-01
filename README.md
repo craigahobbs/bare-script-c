@@ -349,14 +349,17 @@ typedef struct BSFetchRequest {
     const char *body;   /* NULL for a GET request */
     size_t bodySize;
     BSValue headers;    /* an object of string header values, or a null value */
+    bool binary;        /* whether the script receives the response as a byte value array */
 } BSFetchRequest;
 
 typedef void (*BSFetchFn)(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data);
 ```
 
 The function fetches `count` requests at once and sets each successful request's response to its
-text, an owned string value that the caller releases. The responses arrive as null values, so a
-failed request's response stays null. A `systemFetch` of an array arrives as one batch, so an
+body, an owned string value of the response's bytes that the caller releases. The responses arrive
+as null values, so a failed request's response stays null. Binary data is a byte value array: a
+request model's byte value array `body` arrives packed as bytes, and a `'binary': true` request's
+response - whose bytes need not be UTF-8 - reaches the script as a byte value array. A `systemFetch` of an array arrives as one batch, so an
 implementation can fetch the requests concurrently, and so do an include statement's includes,
 which then execute in order; a single URL arrives as a batch of one.
 

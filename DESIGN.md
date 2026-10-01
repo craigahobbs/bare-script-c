@@ -174,14 +174,17 @@ typedef struct BSFetchRequest {
     const char *body;   /* NULL for a GET request */
     size_t bodySize;
     BSValue headers;    /* an object of string header values, or a null value */
+    bool binary;        /* whether the script receives the response as a byte value array */
 } BSFetchRequest;
 
 typedef void (*BSFetchFn)(const BSFetchRequest *requests, BSValue *responses, size_t count, void *data);
 ```
 
 The function fetches `count` requests at once and sets each successful request's response to its
-text, an owned string value that the caller releases. The responses arrive as null values, so a
-failed request's response stays null. A `systemFetch` of an array arrives as one batch, so an
+body, an owned string value of the response's bytes that the caller releases. The responses arrive
+as null values, so a failed request's response stays null. Binary data is a byte value array: a
+request model's byte value array `body` arrives packed as bytes, and a `'binary': true` request's
+response - whose bytes need not be UTF-8 - reaches the script as a byte value array. A `systemFetch` of an array arrives as one batch, so an
 implementation can fetch the requests concurrently, and so do an include statement's includes,
 which then execute in order; a single URL arrives as a batch of one.
 
@@ -313,13 +316,13 @@ that every run loads keep self-contained version 1 models. Counts, lengths,
 indexes, and line numbers are LEB128 varints, a string a table index, a statement a kind byte and
 its members, an expression a tag byte and its members, with an integer a zigzag varint and any
 other number its shortest text. The models are deflated as gzip streams and embedded as
-`unsigned char` arrays. The generator's compressor is `gzip.bare`'s hash-chain matcher and bit
-writer with Huffman codes fitted to each model - a dynamic block (RFC 1951, 3.2.7), or the fixed
-code when that is smaller - which `gzip.bare` itself, writing fixed codes only, cannot produce;
-the runtime's inflater decodes fixed and dynamic blocks through one table-driven Huffman decoder
-and nothing else, since a stored block is never written. That compresses about 601 KB of include
-library source to about 127 KB - against 140 KB with the strings repeated per model, 159 KB with
-fixed codes, and 204 KB for the same models as JSON.
+`unsigned char` arrays. The generator's compressor is `gzip.bare`'s hash-chain matcher, bit
+writer, and code tables with Huffman codes fitted to each model - one dynamic block (RFC 1951,
+3.2.7), or the fixed code when that is smaller - and never a stored block, which `gzipCompress`
+may write; the runtime's inflater decodes fixed and dynamic blocks through one table-driven Huffman
+decoder and nothing else. That compresses about 670 KB of include library source to about 141 KB;
+measured when the library was 601 KB and compressed to 127 KB, the alternatives came to 140 KB with
+the strings repeated per model, 159 KB with fixed codes, and 204 KB for the same models as JSON.
 
 `src/includeSource.c` and `include/barescript/includeSource.h` are generated and checked in, so a
 fresh clone builds with no bootstrap. `make includes` regenerates them by running
@@ -629,7 +632,7 @@ aborts, platform-specific fallbacks, and the checks that guard against a corrupt
 
 | Target                    | What it runs                                                    |
 | ------------------------- | --------------------------------------------------------------- |
-| `test-include-run`        | 1407 tests, 18,015 statements, at 100% BareScript-level coverage |
+| `test-include-run`        | 1503 tests, 20,266 statements, at 100% BareScript-level coverage |
 | `test-include-markdownup` | the 22 `markdownUp.bare` tests                                   |
 | `test-include-lint`       | static analysis of all 69 library and test scripts               |
 

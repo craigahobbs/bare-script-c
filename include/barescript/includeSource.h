@@ -29,7 +29,7 @@ BS_VISIBILITY_BEGIN
 
 
 /* The number of bundled include library scripts */
-#define BS_INCLUDE_COUNT 32
+#define BS_INCLUDE_COUNT 33
 
 
 /*
@@ -122,6 +122,9 @@ const unsigned char *bsIncludeSourceSchemaTypeModel(size_t *size);
 
 /* schemaUtil.bare - the inflated binary script model and its size */
 const unsigned char *bsIncludeSourceSchemaUtil(size_t *size);
+
+/* tar.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceTar(size_t *size);
 
 /* unittest.bare - the inflated binary script model and its size */
 const unsigned char *bsIncludeSourceUnittest(size_t *size);

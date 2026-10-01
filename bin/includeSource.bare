@@ -384,7 +384,7 @@ function includeSourceTokensCost(tokens, litLengths, distLengths):
             length = mathFloor((token - 256) / 32768) + 3
             dist = (token - 256) % 32768 + 1
             lenIx = arrayGet(gzipLengthCodeOf, length)
-            distIx = gzipDistCode(dist)
+            distIx = includeSourceDistCode(dist)
             cost = cost + arrayGet(litLengths, 257 + lenIx) + arrayGet(gzipLengthExtra, lenIx) + \
                 arrayGet(distLengths, distIx) + arrayGet(gzipDistExtra, distIx)
         endif
@@ -393,23 +393,39 @@ function includeSourceTokensCost(tokens, litLengths, distLengths):
 endfunction
 
 
+# The distance code of a match distance
+function includeSourceDistCode(dist):
+    ix = 0
+    while ix < 29 && arrayGet(gzipDistBase, ix + 1) <= dist:
+        ix = ix + 1
+    endwhile
+    return ix
+endfunction
+
+
+# Write a symbol's code from a gzipHuffmanBuild table - its bit-reversed codes and their lengths
+function includeSourceHuffmanWrite(writer, table, symbol):
+    gzipWriteBits(writer, arrayGet(arrayGet(table, 3), symbol), arrayGet(arrayGet(table, 4), symbol))
+endfunction
+
+
 # Write the tokens with the literal/length and distance codes, then the end of the block
 function includeSourceWriteTokens(writer, tokens, litTable, distTable):
     for token in tokens:
         if token < 256:
-            gzipHuffmanWrite(writer, litTable, token)
+            includeSourceHuffmanWrite(writer, litTable, token)
         else:
             length = mathFloor((token - 256) / 32768) + 3
             dist = (token - 256) % 32768 + 1
             lenIx = arrayGet(gzipLengthCodeOf, length)
-            gzipHuffmanWrite(writer, litTable, 257 + lenIx)
+            includeSourceHuffmanWrite(writer, litTable, 257 + lenIx)
             gzipWriteBits(writer, length - arrayGet(gzipLengthBase, lenIx), arrayGet(gzipLengthExtra, lenIx))
-            distIx = gzipDistCode(dist)
-            gzipHuffmanWrite(writer, distTable, distIx)
+            distIx = includeSourceDistCode(dist)
+            includeSourceHuffmanWrite(writer, distTable, distIx)
             gzipWriteBits(writer, dist - arrayGet(gzipDistBase, distIx), arrayGet(gzipDistExtra, distIx))
         endif
     endfor
-    gzipHuffmanWrite(writer, litTable, 256)
+    includeSourceHuffmanWrite(writer, litTable, 256)
 endfunction
 
 
@@ -426,7 +442,7 @@ function includeSourceGzip(bytes):
             arraySet(litFreqs, token, arrayGet(litFreqs, token) + 1)
         else:
             lenIx = arrayGet(gzipLengthCodeOf, mathFloor((token - 256) / 32768) + 3)
-            distIx = gzipDistCode((token - 256) % 32768 + 1)
+            distIx = includeSourceDistCode((token - 256) % 32768 + 1)
             arraySet(litFreqs, 257 + lenIx, arrayGet(litFreqs, 257 + lenIx) + 1)
             arraySet(distFreqs, distIx, arrayGet(distFreqs, distIx) + 1)
         endif
@@ -472,7 +488,7 @@ function includeSourceGzip(bytes):
         dynamicCost = dynamicCost + arrayGet(codeLengths, symbol) + \
             if(symbol == 16, 2, if(symbol == 17, 3, if(symbol == 18, 7, 0)))
     endfor
-    fixedCost = includeSourceTokensCost(tokens, gzipStaticLitLengthsNew(), gzipStaticDistLengthsNew())
+    fixedCost = includeSourceTokensCost(tokens, gzipStaticLitLengthsNew(), arrayNewSize(32, 5))
     writer = gzipWriterNew()
     if fixedCost <= dynamicCost:
         gzipWriteBits(writer, 3, 3)
@@ -490,7 +506,7 @@ function includeSourceGzip(bytes):
         codeTable = gzipHuffmanBuild(codeLengths)
         for run in runs:
             symbol = arrayGet(run, 0)
-            gzipHuffmanWrite(writer, codeTable, symbol)
+            includeSourceHuffmanWrite(writer, codeTable, symbol)
             if symbol >= 16:
                 gzipWriteBits(writer, arrayGet(run, 1), if(symbol == 16, 2, if(symbol == 17, 3, 7)))
             endif
@@ -502,7 +518,7 @@ function includeSourceGzip(bytes):
     # The gzip header, the block, and the CRC and size trailer
     gzipBytes = [31, 139, 8, 0, 0, 0, 0, 0, 2, 255]
     arrayExtend(gzipBytes, arrayGet(writer, 0))
-    arrayExtend(gzipBytes, gzipU32Bytes(gzipCrc32Bytes(bytes)))
+    arrayExtend(gzipBytes, gzipU32Bytes(gzipCrc32(bytes)))
     arrayExtend(gzipBytes, gzipU32Bytes(arrayLength(bytes)))
     return gzipBytes
 endfunction
