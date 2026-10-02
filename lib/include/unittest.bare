@@ -97,7 +97,10 @@ function unittestDeepEqual(actual, expected, description):
     # Serialize as JSON
     actualJSON = if(systemType(actual) == 'string', actual, jsonStringify(actual, 4))
     expectedJSON = if(systemType(expected) == 'string', expected, jsonStringify(expected, 4))
-    if actualJSON == expectedJSON:
+    if actualJSON == null || expectedJSON == null:
+        unittestFailure(['Deep-equal: JSON serialization of the ' + if(actualJSON == null, 'actual', 'expected') + ' value failed'], description)
+        return
+    elif actualJSON == expectedJSON:
         return
     endif
 
@@ -175,7 +178,7 @@ endfunction
 # $function: unittestReport
 # $group: unittest.bare
 # $doc: Render the unit test report
-# $arg options: Optional (default is null). The unittest report options object. The following options are available:
+# $arg [options = null]: The unittest report options object. The following options are available:
 # $arg options: - **coverageExclude** - array of script names to exclude from coverage
 # $arg options: - **coverageMin** - verify minimum coverage percent (0 - 100)
 # $arg options: - **links** - the array of page links
