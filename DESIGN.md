@@ -632,7 +632,7 @@ aborts, platform-specific fallbacks, and the checks that guard against a corrupt
 
 | Target                    | What it runs                                                    |
 | ------------------------- | --------------------------------------------------------------- |
-| `test-include-run`        | 1503 tests, 20,266 statements, at 100% BareScript-level coverage |
+| `test-include-run`        | 1507 tests, 20,384 statements, at 100% BareScript-level coverage |
 | `test-include-markdownup` | the 22 `markdownUp.bare` tests                                   |
 | `test-include-lint`       | static analysis of all 69 library and test scripts               |
 
