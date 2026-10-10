@@ -346,7 +346,8 @@ requests and sets each one's response.
 ```c
 typedef struct BSFetchRequest {
     const char *url;
-    const char *body;   /* NULL for a GET request */
+    const char *method; /* upper-case, or NULL for the default - GET, or POST with a body */
+    const char *body;   /* NULL for none */
     size_t bodySize;
     BSValue headers;    /* an object of string header values, or a null value */
     bool binary;        /* whether the script receives the response as a byte value array */
@@ -357,7 +358,8 @@ typedef void (*BSFetchFn)(const BSFetchRequest *requests, BSValue *responses, si
 
 The function fetches `count` requests at once and sets each successful request's response to its
 body, an owned string value of the response's bytes that the caller releases. The responses arrive
-as null values, so a failed request's response stays null. Binary data is a byte value array: a
+as null values, so a failed request's response stays null. A request model's `method` arrives
+upper-cased; GET and HEAD requests have no body. Binary data is a byte value array: a
 request model's byte value array `body` arrives packed as bytes, and a `'binary': true` request's
 response - whose bytes need not be UTF-8 - reaches the script as a byte value array. A `systemFetch` of an array arrives as one batch, so an
 implementation can fetch the requests concurrently, and so do an include statement's includes,
@@ -378,7 +380,9 @@ a browser does, and multiplexes the requests to an HTTPS server that speaks HTTP
 connection. It fetches http and https URLs - the schemes a browser's fetch accepts - and no other,
 redirects included. `bsLibraryCleanup` releases the pool with the thread's other library state.
 `bsFetchHTTPAvailable` reports whether libcurl is available - compiled in, and loadable at runtime.
-Without it the file system fetch functions still work and URL fetches fail.
+Without it the file system fetch functions still work and URL fetches fail. A file system request
+is a GET request to read; `bsFetchReadWrite` also writes with a POST or PUT request with a body,
+and deletes with a DELETE request. Any other file system request fails.
 
 
 ### Threads
