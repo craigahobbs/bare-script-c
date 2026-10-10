@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "barescript/options.h"
 
@@ -340,6 +341,12 @@ void bsFetchHTTP(const BSFetchRequest *requests, BSValue *responses, size_t coun
             lib->easySetopt(easy, CURLOPT_POSTFIELDS, request->body);
             lib->easySetopt(easy, CURLOPT_POSTFIELDSIZE, (long) request->bodySize);
         }
+        /* A HEAD request reads no response body; any other method replaces GET or POST by name */
+        if (request->method != NULL && strcmp(request->method, "HEAD") == 0) {
+            lib->easySetopt(easy, CURLOPT_NOBODY, 1L);
+        } else if (request->method != NULL) {
+            lib->easySetopt(easy, CURLOPT_CUSTOMREQUEST, request->method);
+        }
         if (transfer->headers != NULL) {
             lib->easySetopt(easy, CURLOPT_HTTPHEADER, transfer->headers);
         }
@@ -356,7 +363,8 @@ void bsFetchHTTP(const BSFetchRequest *requests, BSValue *responses, size_t coun
         }
     } while (code == CURLM_OK && running != 0);
 
-    /* A transfer that completed without error and with a 200 status is its request's response */
+    /* A transfer that completed without error and with a 2xx status - a browser fetch's "ok" - is its
+       request's response */
     int queued = 0;
     for (CURLMsg *message = lib->multiInfoRead(bsCurlMulti, &queued); message != NULL;
          message = lib->multiInfoRead(bsCurlMulti, &queued)) {
@@ -365,7 +373,7 @@ void bsFetchHTTP(const BSFetchRequest *requests, BSValue *responses, size_t coun
         BSCurlTransfer *transfer = (BSCurlTransfer *) transferData;
         long responseCode = 0;
         lib->easyGetinfo(message->easy_handle, CURLINFO_RESPONSE_CODE, &responseCode);
-        if (message->data.result == CURLE_OK && responseCode == 200) {
+        if (message->data.result == CURLE_OK && responseCode >= 200 && responseCode <= 299) {
             *transfer->response = bsSBToValue(&transfer->buffer);
         }
     }
@@ -469,16 +477,27 @@ static bool bsFileWrite(const char *path, const char *body, size_t bodySize)
 
 static void bsFetchFile(const BSFetchRequest *requests, BSValue *responses, size_t count, bool write)
 {
-    /* The URL requests fetch together; the rest are file reads and, when allowed, file writes */
+    /*
+     * The URL requests fetch together; the rest are file system requests. A file read is a GET
+     * request, and when allowed, a file write is a POST or PUT request with a body and a file delete
+     * is a DELETE request. Any other request fails.
+     */
     bsFetchHTTP(requests, responses, count, NULL);
     for (size_t ix = 0; ix < count; ix++) {
         const BSFetchRequest *request = &requests[ix];
         if (bsUrlIsURL(request->url)) {
             continue;
         }
-        if (request->body == NULL) {
+        const char *method = request->method != NULL ? request->method : request->body != NULL ? "POST" : "GET";
+        bool done = false;
+        if (request->body == NULL && strcmp(method, "GET") == 0) {
             responses[ix] = bsFileRead(request->url);
-        } else if (write && bsFileWrite(request->url, request->body, request->bodySize)) {
+        } else if (write && request->body == NULL && strcmp(method, "DELETE") == 0) {
+            done = (unlink(request->url) == 0);
+        } else if (write && request->body != NULL && (strcmp(method, "POST") == 0 || strcmp(method, "PUT") == 0)) {
+            done = bsFileWrite(request->url, request->body, request->bodySize);
+        }
+        if (done) {
             responses[ix] = bsStringNew("{}");
         }
     }

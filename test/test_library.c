@@ -259,6 +259,15 @@ TEST(library_string)
     bsTestExpr("stringNew(null)", "\"null\"");
     bsTestExpr("stringNew([1, 2])", "\"[1,2]\"");
     bsTestExpr("stringEncode('ab')", "[97,98]");
+
+    /* A surrogate pair encodes as the code point it encodes, an unpaired surrogate as the replacement character */
+    bsTestExpr("stringEncode('a' + stringFromCharCode(55296) + 'b')", "[97,239,191,189,98]");
+    bsTestExpr("stringEncode(stringFromCharCode(56320, 55296))", "[239,191,189,239,191,189]");
+    bsTestExpr("stringEncode(stringFromCharCode(55357, 56832) + 'x')", "[240,159,152,128,120]");
+    bsTestExpr("stringEncode(stringFromCharCode(55357) + 'x' + stringFromCharCode(56832))", "[239,191,189,120,239,191,189]");
+    bsTestExpr("stringEncode(stringFromCharCode(55357, 55357, 56832))", "[239,191,189,240,159,152,128]");
+    bsTestExpr("stringEncode(stringFromCharCode(55357, 53248))", "[239,191,189,237,128,128]");
+    bsTestExpr("stringEncode(stringFromCharCode(53248, 55357))", "[237,128,128,239,191,189]");
     bsTestExpr("stringEncode(1)", "null");
     bsTestExpr("stringDecode([104, 105])", "\"hi\"");
     bsTestExpr("stringDecode([255])", "null");
@@ -582,6 +591,9 @@ static void bsTestLibraryFetchFn(const BSFetchRequest *requests, BSValue *respon
         BSStringBuilder sb;
         bsSBInit(&sb);
         bsSBAppendFormat(&sb, "url=%s", request->url);
+        if (request->method != NULL) {
+            bsSBAppendFormat(&sb, " method=%s", request->method);
+        }
         if (request->body != NULL) {
             bsSBAppendFormat(&sb, " body=%.*s", (int) request->bodySize, request->body);
         }
@@ -628,7 +640,21 @@ TEST(library_system_fetch)
                                       "'binary': true}, {'url': 'echo', 'body': [104]}])", options),
                  "[null,[1],\"h\"]");
 
+    /* A method is upper-cased */
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'method': 'PUT', 'body': 'b'})", options),
+                 "\"url=a method=PUT body=b\"");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'method': 'delete'})", options),
+                 "\"url=a method=DELETE\"");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'method': null, 'body': 'b'})", options),
+                 "\"url=a body=b\"");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'method': 'post', 'body': 'b'})", options),
+                 "\"url=a method=POST body=b\"");
+
     /* Invalid request models */
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'method': 7})", options), "null");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'method': 'GET', 'body': 'b'})", options), "null");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'method': 'get', 'body': 'b'})", options), "null");
+    ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 'a', 'method': 'HEAD', 'body': [1]})", options), "null");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch(1)", options), "null");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({})", options), "null");
     ASSERT_VALUE(bsTestExecuteOptions("return systemFetch({'url': 1})", options), "null");

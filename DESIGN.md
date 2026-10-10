@@ -171,7 +171,8 @@ the `nbody` port.
 ```c
 typedef struct BSFetchRequest {
     const char *url;
-    const char *body;   /* NULL for a GET request */
+    const char *method; /* upper-case, or NULL for the default - GET, or POST with a body */
+    const char *body;   /* NULL for none */
     size_t bodySize;
     BSValue headers;    /* an object of string header values, or a null value */
     bool binary;        /* whether the script receives the response as a byte value array */
@@ -182,7 +183,8 @@ typedef void (*BSFetchFn)(const BSFetchRequest *requests, BSValue *responses, si
 
 The function fetches `count` requests at once and sets each successful request's response to its
 body, an owned string value of the response's bytes that the caller releases. The responses arrive
-as null values, so a failed request's response stays null. Binary data is a byte value array: a
+as null values, so a failed request's response stays null. A request model's `method` arrives
+upper-cased; GET and HEAD requests have no body. Binary data is a byte value array: a
 request model's byte value array `body` arrives packed as bytes, and a `'binary': true` request's
 response - whose bytes need not be UTF-8 - reaches the script as a byte value array. A `systemFetch` of an array arrives as one batch, so an
 implementation can fetch the requests concurrently, and so do an include statement's includes,
@@ -203,7 +205,9 @@ a browser does, and multiplexes the requests to an HTTPS server that speaks HTTP
 connection. It fetches http and https URLs - the schemes a browser's fetch accepts - and no other,
 redirects included. `bsLibraryCleanup` releases the pool with the thread's other library state.
 `bsFetchHTTPAvailable` reports whether libcurl is available - compiled in, and loadable at runtime.
-Without it the file system fetch functions still work and URL fetches fail.
+Without it the file system fetch functions still work and URL fetches fail. A file system request
+is a GET request to read; `bsFetchReadWrite` also writes with a POST or PUT request with a body,
+and deletes with a DELETE request. Any other file system request fails.
 
 
 ## The Parser and Linter
@@ -320,7 +324,7 @@ other number its shortest text. The models are deflated as gzip streams and embe
 writer, and code tables with Huffman codes fitted to each model - one dynamic block (RFC 1951,
 3.2.7), or the fixed code when that is smaller - and never a stored block, which `gzipCompress`
 may write; the runtime's inflater decodes fixed and dynamic blocks through one table-driven Huffman
-decoder and nothing else. That compresses about 670 KB of include library source to about 141 KB;
+decoder and nothing else. That compresses about 727 KB of include library source to about 153 KB;
 measured when the library was 601 KB and compressed to 127 KB, the alternatives came to 140 KB with
 the strings repeated per model, 159 KB with fixed codes, and 204 KB for the same models as JSON.
 
@@ -632,9 +636,9 @@ aborts, platform-specific fallbacks, and the checks that guard against a corrupt
 
 | Target                    | What it runs                                                    |
 | ------------------------- | --------------------------------------------------------------- |
-| `test-include-run`        | 1507 tests, 20,384 statements, at 100% BareScript-level coverage |
+| `test-include-run`        | 1545 tests, 21,684 statements, at 100% BareScript-level coverage |
 | `test-include-markdownup` | the 22 `markdownUp.bare` tests                                   |
-| `test-include-lint`       | static analysis of all 69 library and test scripts               |
+| `test-include-lint`       | static analysis of all 75 library and test scripts               |
 
 All three produce output identical to the JavaScript implementation's, so a diff against
 `bare-script` is a conformance check on the parser, the runtime, the library, the regex engine, the

@@ -29,7 +29,7 @@ BS_VISIBILITY_BEGIN
 
 
 /* The number of bundled include library scripts */
-#define BS_INCLUDE_COUNT 33
+#define BS_INCLUDE_COUNT 36
 
 
 /*
@@ -84,6 +84,9 @@ const unsigned char *bsIncludeSourceForms(size_t *size);
 /* gzip.bare - the inflated binary script model and its size */
 const unsigned char *bsIncludeSourceGzip(size_t *size);
 
+/* hash.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceHash(size_t *size);
+
 /* markdown.bare - the inflated binary script model and its size */
 const unsigned char *bsIncludeSourceMarkdown(size_t *size);
 
@@ -134,6 +137,12 @@ const unsigned char *bsIncludeSourceUnittestMock(size_t *size);
 
 /* url.bare - the inflated binary script model and its size */
 const unsigned char *bsIncludeSourceUrl(size_t *size);
+
+/* wsgi.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceWsgi(size_t *size);
+
+/* wsgiAPIDoc.bare - the inflated binary script model and its size */
+const unsigned char *bsIncludeSourceWsgiAPIDoc(size_t *size);
 
 
 BS_VISIBILITY_END

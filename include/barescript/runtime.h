@@ -34,10 +34,11 @@ BS_VISIBILITY_BEGIN
  */
 typedef struct BSFetchRequest {
     const char *url;
-    const char *body;  /* the request body, or NULL for a GET request */
+    const char *method; /* the upper-case HTTP method, or NULL for the default - GET, or POST with a body */
+    const char *body;   /* the request body, or NULL for none */
     size_t bodySize;
-    BSValue headers;   /* an object of string header values, or a null value */
-    bool binary;       /* whether the script receives the response as a byte value array */
+    BSValue headers;    /* an object of string header values, or a null value */
+    bool binary;        /* whether the script receives the response as a byte value array */
 } BSFetchRequest;
 
 /*

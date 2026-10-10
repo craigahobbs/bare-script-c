@@ -20,7 +20,7 @@ make commit         # the pre-commit gate: test + cover + test-include + test-la
 make compile        # build build/libbarescript.{so,dylib}, build/libbarescript.a, build/bare
 make test           # C unit tests
 make cover          # C unit tests with line coverage; FAILS THE BUILD under 100%
-make test-include   # the BareScript include library suite (1507 tests, 100% coverage)
+make test-include   # the BareScript include library suite (1545 tests, 100% coverage)
 make test-language  # this project's own BareScript language tests
 make test-static    # the BareScript (C) Performance MarkdownUp app tests (100% coverage)
 make perf           # performance suite -> build/perf.csv

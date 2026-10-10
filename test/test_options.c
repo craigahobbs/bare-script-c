@@ -134,6 +134,32 @@ TEST(options_fetch_file_write)
     /* Read back what was written */
     request = (BSFetchRequest) {.url = path, .headers = bsNull()};
     ASSERT_VALUE(bsTestFetch(bsFetchReadOnly, &request), "\"written\"");
+
+    /* A PUT request writes, as does a POST request */
+    request = (BSFetchRequest) {.url = path, .method = "PUT", .body = "put", .bodySize = 3, .headers = bsNull()};
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "\"{}\"");
+    request.method = "POST";
+    request.body = "post";
+    request.bodySize = 4;
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "\"{}\"");
+    request = (BSFetchRequest) {.url = path, .method = "GET", .headers = bsNull()};
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "\"post\"");
+
+    /* Any other method fails */
+    request = (BSFetchRequest) {.url = path, .method = "PATCH", .body = "patch", .bodySize = 5, .headers = bsNull()};
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "null");
+    request = (BSFetchRequest) {.url = path, .method = "HEAD", .headers = bsNull()};
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "null");
+    request = (BSFetchRequest) {.url = path, .method = "DELETE", .body = "x", .bodySize = 1, .headers = bsNull()};
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "null");
+
+    /* A DELETE request deletes - but not from the read-only fetch function, nor a missing file */
+    request = (BSFetchRequest) {.url = path, .method = "DELETE", .headers = bsNull()};
+    ASSERT_VALUE(bsTestFetch(bsFetchReadOnly, &request), "null");
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "\"{}\"");
+    ASSERT_VALUE(bsTestFetch(bsFetchReadWrite, &request), "null");
+    request = (BSFetchRequest) {.url = path, .headers = bsNull()};
+    ASSERT_VALUE(bsTestFetch(bsFetchReadOnly, &request), "null");
 }
 
 
@@ -181,7 +207,8 @@ TEST(options_fetch_http)
 
 /*
  * Serve "count" HTTP requests from a child process on a fresh port, answering each with the status
- * (which may carry further header lines) and body. Each request arrives on a connection of its
+ * (which may carry further header lines) and body - or, for a NULL body, the request's first line
+ * and its body, if any, after a space. Each request arrives on a connection of its
  * own, closed after its response - or, with "keepAlive", all arrive on the first connection, and
  * the listener closes behind it so that a client opening another connection is refused rather than
  * left waiting. Returns the port, or zero on failure.
@@ -219,10 +246,10 @@ static int bsTestHTTPServe(pid_t *child, const char *status, const char *body, i
            than wait forever for a request that never comes */
         alarm(10);
         const char *closeHeader = keepAlive ? "" : "Connection: close\r\n";
-        size_t responseCapacity = strlen(status) + strlen(body) + strlen(closeHeader) + 64;
+        char request[4096];
+        char echo[4096];
+        size_t responseCapacity = strlen(status) + (body != NULL ? strlen(body) : sizeof(echo)) + strlen(closeHeader) + 64;
         char *response = malloc(responseCapacity);
-        int size = snprintf(response, responseCapacity, "HTTP/1.1 %s\r\nContent-Length: %zu\r\n%s\r\n%s",
-                            status, strlen(body), closeHeader, body);
         int connection = -1;
         for (int served = 0; served < count; served++) {
             if (connection < 0) {
@@ -235,10 +262,20 @@ static int bsTestHTTPServe(pid_t *child, const char *status, const char *body, i
                     listener = -1;
                 }
             }
-            char request[4096];
-            if (recv(connection, request, sizeof(request) - 1, 0) <= 0) {
+            ssize_t received = recv(connection, request, sizeof(request) - 1, 0);
+            if (received <= 0) {
                 break;
             }
+            request[received] = '\0';
+            const char *responseBody = body;
+            if (body == NULL) {
+                const char *requestBody = strstr(request, "\r\n\r\n");
+                snprintf(echo, sizeof(echo), "%.*s%s%s", (int) strcspn(request, "\r"), request,
+                         requestBody != NULL && requestBody[4] != '\0' ? " " : "", requestBody != NULL ? requestBody + 4 : "");
+                responseBody = echo;
+            }
+            int size = snprintf(response, responseCapacity, "HTTP/1.1 %s\r\nContent-Length: %zu\r\n%s\r\n%s",
+                                status, strlen(responseBody), closeHeader, responseBody);
             ssize_t written = send(connection, response, (size_t) size, 0);
             (void) written;
             if (!keepAlive) {
@@ -332,8 +369,43 @@ TEST(options_fetch_http_empty_and_error)
     /* An empty response body */
     bsTestHTTPExpect("200 OK", "", "\"\"");
 
-    /* A non-200 status is a failed fetch */
+    /* Any 2xx status is a successful fetch, and any other a failed one */
+    bsTestHTTPExpect("201 Created", "created", "\"created\"");
     bsTestHTTPExpect("404 Not Found", "missing", "null");
+    bsTestHTTPExpect("302 Found", "no location", "null");
+}
+
+
+/* Serve one HTTP response echoing the request, fetch it with a method and body, and check the echo */
+static void bsTestHTTPMethod(const char *method, const char *body, const char *expectedJSON)
+{
+    pid_t child = 0;
+    BSFetchRequest request;
+    if (!bsTestHTTPRequest(&child, &request, "200 OK", NULL)) {
+        return;
+    }
+    request.method = method;
+    request.body = body;
+    request.bodySize = body != NULL ? strlen(body) : 0;
+    BSValue response = bsTestFetch(bsFetchReadWrite, &request);
+    bsTestHTTPWait(child);
+    ASSERT_VALUE(response, expectedJSON);
+}
+
+
+TEST(options_fetch_http_method)
+{
+    /* The default method is GET, or POST with a body */
+    bsTestHTTPMethod(NULL, NULL, "\"GET /x HTTP/1.1\"");
+    bsTestHTTPMethod(NULL, "abc", "\"POST /x HTTP/1.1 abc\"");
+
+    /* A method replaces the default */
+    bsTestHTTPMethod("PUT", "abc", "\"PUT /x HTTP/1.1 abc\"");
+    bsTestHTTPMethod("DELETE", NULL, "\"DELETE /x HTTP/1.1\"");
+    bsTestHTTPMethod("GET", NULL, "\"GET /x HTTP/1.1\"");
+
+    /* A HEAD request reads no response body */
+    bsTestHTTPMethod("HEAD", NULL, "\"\"");
 }
 
 

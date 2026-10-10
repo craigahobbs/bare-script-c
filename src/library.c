@@ -1429,7 +1429,50 @@ static BSValue bsFnStringDecode(const BSValue *args, size_t argCount, BSOptions 
 }
 
 
-BS_LIBRARY_FN(bsFnStringEncode, stringArgs, bsNull(), bsByteArrayNew(values[0]))
+/*
+ * A string's UTF-8 bytes as a byte value array. A surrogate code point - only stringFromCharCode makes
+ * one - is encoded as JavaScript encodes its UTF-16 code unit: a high surrogate followed by a low one
+ * as the code point the pair encodes, any other as the replacement character.
+ */
+static BSValue bsStringEncodeValue(BSValue string)
+{
+    const char *text = bsStringData(string);
+    size_t size = bsStringSize(string);
+    BSStringBuilder sb;
+    bsSBInit(&sb);
+    size_t copied = 0;
+    for (size_t ix = 0; ix < size; ix++) {
+        /* A surrogate's three-byte form is 0xED then 0xA0-0xAF (high) or 0xB0-0xBF (low) */
+        if ((unsigned char) text[ix] != 0xED || (unsigned char) text[ix + 1] < 0xA0) {
+            continue;
+        }
+        bsSBAppend(&sb, text + copied, ix - copied);
+        if ((unsigned char) text[ix + 1] < 0xB0 && ix + 5 < size &&
+            (unsigned char) text[ix + 3] == 0xED && (unsigned char) text[ix + 4] >= 0xB0) {
+            size_t codeSize;
+            uint32_t high = bsUTF8Decode(text, size, ix, &codeSize);
+            uint32_t low = bsUTF8Decode(text, size, ix + 3, &codeSize);
+            char utf8[4];
+            bsSBAppend(&sb, utf8, bsUTF8Encode(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00), utf8));
+            ix += 3;
+        } else {
+            bsSBAppend(&sb, "\xEF\xBF\xBD", 3);
+        }
+        ix += 2;
+        copied = ix + 1;
+    }
+    if (copied == 0) {
+        bsSBFree(&sb);
+        return bsByteArrayNew(string);
+    }
+    bsSBAppend(&sb, text + copied, size - copied);
+    BSValue encoded = bsSBToValue(&sb);
+    BSValue result = bsByteArrayNew(encoded);
+    bsRelease(encoded);
+    return result;
+}
+
+BS_LIBRARY_FN(bsFnStringEncode, stringArgs, bsNull(), bsStringEncodeValue(values[0]))
 
 
 static const BSArgModel stringSearchArgs[] = {
@@ -1755,22 +1798,33 @@ static bool bsFetchHeaderString(BSValue key, BSValue item, void *data)
 }
 
 
-/* A fetch argument is a URL string or a request model: a url string, an optional body string or
-   byte value array, optional headers - an object of string values - and an optional binary flag */
+/* A fetch argument is a URL string or a request model: a url string, an optional method string, an
+   optional body string or byte value array - not for a GET or HEAD request - optional headers - an
+   object of string values - and an optional binary flag */
 static bool bsFetchValid(BSValue request)
 {
     if (!bsIsType(request, BS_OBJECT)) {
         return bsIsType(request, BS_STRING);
     }
     BSValue url = bsObjectGet(request, "url");
+    BSValue method = bsObjectGet(request, "method");
     BSValue body = bsObjectGet(request, "body");
     BSValue headers = bsObjectGet(request, "headers");
     BSValue binary = bsObjectGet(request, "binary");
     if (!bsIsType(url, BS_STRING) ||
+        (!bsIsType(method, BS_NULL) && !bsIsType(method, BS_STRING)) ||
         (!bsIsType(body, BS_NULL) && !bsIsType(body, BS_STRING) && !(bsIsType(body, BS_ARRAY) && bsIsByteArray(body))) ||
         (!bsIsType(headers, BS_NULL) && !bsIsType(headers, BS_OBJECT)) ||
         (!bsIsType(binary, BS_NULL) && !bsIsType(binary, BS_BOOLEAN))) {
         return false;
+    }
+    if (!bsIsType(body, BS_NULL) && bsIsType(method, BS_STRING)) {
+        BSValue upper = bsStringToCase(method, true);
+        bool noBody = strcmp(bsStringData(upper), "GET") == 0 || strcmp(bsStringData(upper), "HEAD") == 0;
+        bsRelease(upper);
+        if (noBody) {
+            return false;
+        }
     }
     return !bsIsType(headers, BS_OBJECT) || bsObjectIter(headers, bsFetchHeaderString, NULL);
 }
@@ -1796,20 +1850,25 @@ static BSValue bsFnSystemFetch(const BSValue *args, size_t argCount, BSOptions *
         return bsArrayNew();
     }
 
-    /* Resolve each request's URL and pack each byte value array body, then fetch the requests together */
+    /* Resolve each request's URL, upper-case each method, and pack each byte value array body, then
+       fetch the requests together */
     BSFetchRequest *requests = bsAlloc(count * sizeof(BSFetchRequest));
     BSValue *responses = bsAlloc(count * sizeof(BSValue));
+    BSValue *methods = bsAlloc(count * sizeof(BSValue));
     char **resolved = bsAlloc(count * sizeof(char *));
     char **packed = bsAlloc(count * sizeof(char *));
     for (size_t ix = 0; ix < count; ix++) {
         responses[ix] = bsNull();
         BSValue item = isArray ? bsArrayGet(url, ix) : url;
         BSValue itemUrl = bsIsType(item, BS_STRING) ? item : bsObjectGet(item, "url");
+        BSValue method = bsObjectGet(item, "method");
         BSValue body = bsObjectGet(item, "body");
         resolved[ix] = options->urlFn != NULL ? options->urlFn(bsStringData(itemUrl), options->urlData) : NULL;
+        methods[ix] = bsIsType(method, BS_STRING) ? bsStringToCase(method, true) : bsNull();
         packed[ix] = bsIsType(body, BS_ARRAY) ? bsByteArrayData(body) : NULL;
         requests[ix] = (BSFetchRequest) {
             .url = resolved[ix] != NULL ? resolved[ix] : bsStringData(itemUrl),
+            .method = bsIsType(methods[ix], BS_STRING) ? bsStringData(methods[ix]) : NULL,
             .body = packed[ix] != NULL ? packed[ix] : bsIsType(body, BS_STRING) ? bsStringData(body) : NULL,
             .bodySize = bsIsType(body, BS_ARRAY) ? bsArrayCount(body) : bsIsType(body, BS_STRING) ? bsStringSize(body) : 0,
             .headers = bsObjectGet(item, "headers"),
@@ -1835,11 +1894,13 @@ static BSValue bsFnSystemFetch(const BSValue *args, size_t argCount, BSOptions *
         } else {
             result = response;
         }
+        bsRelease(methods[ix]);
         free(resolved[ix]);
         free(packed[ix]);
     }
     free(requests);
     free(responses);
+    free(methods);
     free(resolved);
     free(packed);
     return result;
